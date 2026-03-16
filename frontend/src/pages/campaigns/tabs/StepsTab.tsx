@@ -1214,7 +1214,7 @@ function StepAssetsEditor({ config, campaignId, isEditable, onUpdateConfig }: St
   const handleToggleMode = useCallback((assetId: string) => {
     const current = assetMode[assetId] ?? 'attach'
     const next = current === 'attach' ? 'reference' : 'attach'
-    const newMode = { ...assetMode, [assetId]: next }
+    const newMode: Record<string, 'attach' | 'reference'> = { ...assetMode, [assetId]: next }
     updateAssetConfig(attachedIds, newMode)
   }, [attachedIds, assetMode, config, onUpdateConfig])
 
