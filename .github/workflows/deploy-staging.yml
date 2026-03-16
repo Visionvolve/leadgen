@@ -59,6 +59,14 @@ jobs:
           ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "mkdir -p ~/staging/dashboard"
           scp -i ~/.ssh/staging.pem -r frontend/dist/* ec2-user@3.124.110.199:~/staging/dashboard/
 
+      - name: Reload Caddy to serve updated static files
+        run: |
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "
+            cd ~/staging
+            COMPOSE_CMD=\"docker compose \$(ls ~/staging/docker-compose*.yml | sed 's/^/-f /' | tr '\n' ' ')\"
+            eval \"\$COMPOSE_CMD exec caddy caddy reload --config /etc/caddy/Caddyfile\" 2>/dev/null || true
+          "
+
       - name: Deploy to staging
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
