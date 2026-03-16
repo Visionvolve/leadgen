@@ -4,10 +4,18 @@ on:
   push:
     branches: [staging]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/michallicko/leadgen-pipeline:staging
+
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +30,23 @@ jobs:
           npm ci
           VITE_IAM_BASE_URL=https://iam-staging.visionvolve.com npm run build
 
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.api
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}
+            ghcr.io/michallicko/leadgen-pipeline:staging-${{ github.sha }}
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -29,31 +54,24 @@ jobs:
           chmod 600 ~/.ssh/staging.pem
           ssh-keyscan -H 3.124.110.199 >> ~/.ssh/known_hosts
 
-      - name: Sync source to VPS
-        run: |
-          rsync -avz --delete \
-            --exclude='node_modules' --exclude='.git' --exclude='__pycache__' --exclude='.env' --exclude='frontend/node_modules' \
-            -e "ssh -i ~/.ssh/staging.pem" \
-            ./ ec2-user@3.124.110.199:/home/ec2-user/leadgen-api/
-
       - name: Upload frontend build
         run: |
           ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "mkdir -p ~/staging/dashboard"
           scp -i ~/.ssh/staging.pem -r frontend/dist/* ec2-user@3.124.110.199:~/staging/dashboard/
 
-      - name: Deploy Caddy snippet
+      - name: Deploy to staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
         run: |
-          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "mkdir -p ~/staging/caddy/conf.d"
-          scp -i ~/.ssh/staging.pem deploy/staging.caddy ec2-user@3.124.110.199:~/staging/caddy/conf.d/leadgen.caddy
-
-      - name: Build and restart
-        run: |
-          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 << 'EOF'
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "
+            echo '${GH_TOKEN}' | docker login ghcr.io -u '${GH_ACTOR}' --password-stdin
             cd ~/staging
-            docker compose -f docker-compose.yml -f docker-compose.leadgen.yml up -d --build leadgen-api
-            docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
-            docker system prune -f --filter "until=1h"
-          EOF
+            COMPOSE_CMD=\"docker compose \$(ls ~/staging/docker-compose*.yml | sed 's/^/-f /' | tr '\n' ' ')\"
+            eval \"\$COMPOSE_CMD pull leadgen-api\"
+            eval \"\$COMPOSE_CMD up -d --no-deps leadgen-api\"
+            docker system prune -f --filter 'until=1h'
+          "
 
       - name: Health check
         run: |
