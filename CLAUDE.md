@@ -305,8 +305,9 @@ Forbidden commands:
 
 - **URL:** https://leadgen-staging.visionvolve.com
 - **Deploy:** push to `staging` branch → auto-deploys via GitHub Actions
+- **Flow:** Push to `staging` → GHA builds Docker image → pushes to GHCR (`ghcr.io/michallicko/leadgen-pipeline:staging`) → SSHs to staging VPS → pulls image and restarts container.
+- **Caddy config** is managed by the infra repo (`visionvolve-vps/staging/caddy/`). Do NOT deploy Caddy snippets from this repo.
 - **Migrations:** `gh workflow run migrate-staging` (manual dispatch)
-- **Caddy snippet:** `deploy/staging.caddy`
 - **GHA workflow:** `.github/workflows/deploy-staging.yml`
 - **VPS:** 3.124.110.199 (SSH blocked by default, use `claude --staging-access`)
 
