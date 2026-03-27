@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import display_status, display_tier
-from ..models import db, EDIT_REASONS, MessageFeedback, CampaignContact
+from ..models import db, EDIT_REASONS, MessageFeedback
 from ..services.message_generator import regenerate_message, estimate_regeneration_cost
 
 
@@ -18,6 +18,7 @@ def _get_campaign_id_for_message(message_id, tenant_id):
         {"mid": message_id, "t": tenant_id},
     ).fetchone()
     return str(row[0]) if row else None
+
 
 messages_bp = Blueprint("messages", __name__)
 
@@ -222,7 +223,11 @@ def update_message(message_id):
             message_id=message_id,
             campaign_id=campaign_id,
             action="edited",
-            edit_diff={"field": changed_field, "before": before_val, "after": after_val},
+            edit_diff={
+                "field": changed_field,
+                "before": before_val,
+                "after": after_val,
+            },
             edit_reason=fields.get("edit_reason"),
             edit_reason_text=fields.get("edit_reason_text"),
         )
@@ -230,17 +235,21 @@ def update_message(message_id):
 
     if "status" in fields:
         if fields["status"] == "approved":
-            db.session.add(MessageFeedback(
-                message_id=message_id,
-                campaign_id=campaign_id,
-                action="approved",
-            ))
+            db.session.add(
+                MessageFeedback(
+                    message_id=message_id,
+                    campaign_id=campaign_id,
+                    action="approved",
+                )
+            )
         elif fields["status"] == "rejected":
-            db.session.add(MessageFeedback(
-                message_id=message_id,
-                campaign_id=campaign_id,
-                action="rejected",
-            ))
+            db.session.add(
+                MessageFeedback(
+                    message_id=message_id,
+                    campaign_id=campaign_id,
+                    action="rejected",
+                )
+            )
 
     db.session.commit()
 
@@ -433,11 +442,13 @@ def batch_update_messages():
         action = fields["status"]
         for msg_id in ids:
             campaign_id = _get_campaign_id_for_message(msg_id, tenant_id)
-            db.session.add(MessageFeedback(
-                message_id=msg_id,
-                campaign_id=campaign_id,
-                action=action,
-            ))
+            db.session.add(
+                MessageFeedback(
+                    message_id=msg_id,
+                    campaign_id=campaign_id,
+                    action=action,
+                )
+            )
 
     db.session.commit()
 

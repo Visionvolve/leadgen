@@ -201,9 +201,7 @@ def list_contacts():
             skills_clauses = []
             for i, v in enumerate(skills_vals):
                 params[f"skill_{i}"] = v.lower()
-                skills_clauses.append(
-                    f"LOWER(sk.value::text) = :skill_{i}"
-                )
+                skills_clauses.append(f"LOWER(sk.value::text) = :skill_{i}")
             combined_skills = " OR ".join(skills_clauses)
             if skills_exclude:
                 where.append(
@@ -232,9 +230,7 @@ def list_contacts():
             interests_clauses = []
             for i, v in enumerate(interests_vals):
                 params[f"interest_{i}"] = v.lower()
-                interests_clauses.append(
-                    f"LOWER(ti.value::text) = :interest_{i}"
-                )
+                interests_clauses.append(f"LOWER(ti.value::text) = :interest_{i}")
             combined_interests = " OR ".join(interests_clauses)
             if interests_exclude:
                 where.append(

@@ -3112,9 +3112,7 @@ def _generate_campaign_name(extracted: dict, contact_count: int) -> str:
 # ── Feedback Summary ─────────────────────────────────────────
 
 
-@campaigns_bp.route(
-    "/api/campaigns/<campaign_id>/feedback-summary", methods=["GET"]
-)
+@campaigns_bp.route("/api/campaigns/<campaign_id>/feedback-summary", methods=["GET"])
 @require_auth
 def feedback_summary(campaign_id):
     """Aggregated feedback stats for a campaign."""
@@ -3124,9 +3122,7 @@ def feedback_summary(campaign_id):
 
     # Verify campaign belongs to tenant
     campaign = db.session.execute(
-        db.text(
-            "SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"
-        ),
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
         {"id": campaign_id, "t": str(tenant_id)},
     ).fetchone()
     if not campaign:
@@ -3144,7 +3140,7 @@ def feedback_summary(campaign_id):
     # Per-step approval rate
     step_stats = {}
     for f in feedbacks:
-        msg = Message.query.get(f.message_id)
+        msg = db.session.get(Message, f.message_id)
         if msg and msg.campaign_step_id:
             sid = str(msg.campaign_step_id)
             if sid not in step_stats:
@@ -3163,9 +3159,7 @@ def feedback_summary(campaign_id):
         {
             "total": len(feedbacks),
             "by_action": by_action,
-            "top_edit_reasons": sorted(
-                edit_reasons.items(), key=lambda x: -x[1]
-            ),
+            "top_edit_reasons": sorted(edit_reasons.items(), key=lambda x: -x[1]),
             "per_step": step_stats,
         }
     )
