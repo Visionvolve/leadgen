@@ -19,8 +19,8 @@ class TestAuthLogin:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
-            "access_token": "iam-access-token",
-            "refresh_token": "iam-refresh-token",
+            "accessToken": "iam-access-token",
+            "refreshToken": "iam-refresh-token",
             "user": {
                 "id": iam_user_id,
                 "email": "admin@test.com",

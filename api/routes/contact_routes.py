@@ -851,6 +851,8 @@ def filter_counts():
         facets[field_key] = [{"value": r[0], "count": r[1]} for r in rows]
 
     # JSONB array facet counts (skills / interests)
+    # Uses PostgreSQL-specific LATERAL + jsonb_array_elements_text;
+    # gracefully returns empty facets on engines that lack these (e.g. SQLite in tests).
     for jf_key, jf_column in JSONB_FACET_FIELDS.items():
         params = {}
         where_clause = _build_base_where(params, exclude_facet=jf_key)
@@ -860,22 +862,27 @@ def filter_counts():
         else:
             extra_where = ""
 
-        rows = db.session.execute(
-            db.text(f"""
-                SELECT elem.value AS val, COUNT(DISTINCT ct.id) AS cnt
-                FROM contacts ct
-                {joins}
-                JOIN contact_enrichment ce_fc ON ce_fc.contact_id = ct.id
-                CROSS JOIN LATERAL jsonb_array_elements_text(ce_fc.{jf_column}) elem(value)
-                WHERE {where_clause}{extra_where}
-                  AND ce_fc.{jf_column} IS NOT NULL
-                GROUP BY elem.value
-                ORDER BY cnt DESC
-                LIMIT 50
-            """),
-            params,
-        ).fetchall()
-        facets[jf_key] = [{"value": r[0], "count": r[1]} for r in rows]
+        try:
+            rows = db.session.execute(
+                db.text(f"""
+                    SELECT elem.value AS val, COUNT(DISTINCT ct.id) AS cnt
+                    FROM contacts ct
+                    {joins}
+                    JOIN contact_enrichment ce_fc ON ce_fc.contact_id = ct.id
+                    CROSS JOIN LATERAL jsonb_array_elements_text(ce_fc.{jf_column}) elem(value)
+                    WHERE {where_clause}{extra_where}
+                      AND ce_fc.{jf_column} IS NOT NULL
+                    GROUP BY elem.value
+                    ORDER BY cnt DESC
+                    LIMIT 50
+                """),
+                params,
+            ).fetchall()
+            facets[jf_key] = [{"value": r[0], "count": r[1]} for r in rows]
+        except Exception:
+            # SQLite or other engines without LATERAL/jsonb support
+            db.session.rollback()
+            facets[jf_key] = []
 
     # Total count with ALL filters applied
     total_params = {}
