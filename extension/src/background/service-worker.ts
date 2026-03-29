@@ -760,10 +760,13 @@ chrome.runtime.onMessage.addListener(
 
     // LinkedIn company validation
     if (msgType === 'VALIDATE_COMPANY') {
-      const data = message.data as { companyName: string; linkedinUrl: string };
+      const data = message.data as { companyName: string; linkedinUrl: string; industry?: string; headquarters?: string; website?: string };
       apiValidateCompany({
         linkedin_url: data.linkedinUrl,
         name: data.companyName,
+        industry: data.industry,
+        headquarters: data.headquarters,
+        website: data.website,
       })
         .then(sendResponse)
         .catch((err) => {

@@ -1,5 +1,6 @@
 """Browser extension API routes for lead import, activity sync, LinkedIn queue, validation, and status."""
 
+import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, g, jsonify, request
@@ -731,6 +732,31 @@ def _get_enrichment_quality(contact=None, company=None):
     return None
 
 
+def _escape_ilike(value: str) -> str:
+    """Escape special ILIKE characters to prevent wildcard injection."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _normalize_linkedin_url(url: str) -> str:
+    """Normalize a LinkedIn URL for comparison.
+
+    Strips protocol (http/https), www prefix, and trailing slashes
+    so that 'https://www.linkedin.com/in/foo/' matches 'linkedin.com/in/foo'.
+    """
+    url = url.strip()
+    # Strip protocol
+    for prefix in ("https://", "http://"):
+        if url.lower().startswith(prefix):
+            url = url[len(prefix) :]
+            break
+    # Strip www.
+    if url.lower().startswith("www."):
+        url = url[4:]
+    # Strip trailing slashes
+    url = url.rstrip("/")
+    return url.lower()
+
+
 @extension_bp.route("/api/extension/validate-contact", methods=["GET"])
 @require_auth
 def validate_contact():
@@ -759,13 +785,19 @@ def validate_contact():
 
     # Try exact LinkedIn URL match first
     if linkedin_url:
-        # Normalize URL: strip trailing slash
-        normalized_url = linkedin_url.rstrip("/")
-        contact = Contact.query.filter(
-            Contact.tenant_id == str(tenant_id),
-            db.func.lower(db.func.rtrim(Contact.linkedin_url, "/"))
-            == normalized_url.lower(),
-        ).first()
+        # Normalize URL: strip protocol, www, trailing slash
+        normalized_url = _normalize_linkedin_url(linkedin_url)
+        contact = next(
+            (
+                c
+                for c in Contact.query.filter(
+                    Contact.tenant_id == str(tenant_id),
+                    Contact.linkedin_url.isnot(None),
+                )
+                if _normalize_linkedin_url(c.linkedin_url or "") == normalized_url
+            ),
+            None,
+        )
 
     # Fall back to name + company fuzzy match
     if not contact and name:
@@ -780,14 +812,22 @@ def validate_contact():
 
         if first and last:
             query = query.filter(
-                db.func.lower(Contact.first_name).ilike(f"%{first.lower()}%"),
-                db.func.lower(Contact.last_name).ilike(f"%{last.lower()}%"),
+                db.func.lower(Contact.first_name).ilike(
+                    f"%{_escape_ilike(first.lower())}%"
+                ),
+                db.func.lower(Contact.last_name).ilike(
+                    f"%{_escape_ilike(last.lower())}%"
+                ),
             )
         elif first:
             query = query.filter(
                 db.or_(
-                    db.func.lower(Contact.first_name).ilike(f"%{first.lower()}%"),
-                    db.func.lower(Contact.last_name).ilike(f"%{first.lower()}%"),
+                    db.func.lower(Contact.first_name).ilike(
+                        f"%{_escape_ilike(first.lower())}%"
+                    ),
+                    db.func.lower(Contact.last_name).ilike(
+                        f"%{_escape_ilike(first.lower())}%"
+                    ),
                 )
             )
 
@@ -795,7 +835,9 @@ def validate_contact():
         if company_name:
             company_ids = db.session.query(Company.id).filter(
                 Company.tenant_id == str(tenant_id),
-                db.func.lower(Company.name).ilike(f"%{company_name.lower()}%"),
+                db.func.lower(Company.name).ilike(
+                    f"%{_escape_ilike(company_name.lower())}%"
+                ),
             )
             query = query.filter(Contact.company_id.in_(company_ids))
 
@@ -855,14 +897,12 @@ def validate_company():
     # Try matching by extracting slug from LinkedIn URL
     if linkedin_url and not company:
         # Extract company slug from URL, e.g., /company/acme-corp -> acme-corp
-        import re
-
         slug_match = re.search(r"/company/([^/?#]+)", linkedin_url)
         if slug_match:
             slug = slug_match.group(1).replace("-", " ")
             company = Company.query.filter(
                 Company.tenant_id == str(tenant_id),
-                db.func.lower(Company.name).ilike(f"%{slug.lower()}%"),
+                db.func.lower(Company.name).ilike(f"%{_escape_ilike(slug.lower())}%"),
             ).first()
 
     # Try exact name match
@@ -876,7 +916,7 @@ def validate_company():
     if not company and name:
         company = Company.query.filter(
             Company.tenant_id == str(tenant_id),
-            db.func.lower(Company.name).ilike(f"%{name.lower()}%"),
+            db.func.lower(Company.name).ilike(f"%{_escape_ilike(name.lower())}%"),
         ).first()
 
     if not company:

@@ -1,5 +1,7 @@
 """Tests for LinkedIn validation extension API routes."""
 
+import uuid
+
 from tests.conftest import auth_header
 
 
@@ -114,6 +116,47 @@ class TestValidateContact:
             "/api/extension/validate-contact?linkedin_url=https://www.linkedin.com/in/test"
         )
         assert resp.status_code == 401
+
+    def test_cross_tenant_isolation(self, client, db, seed_companies_contacts):
+        """Given auth for a different tenant, contacts from another tenant are not visible."""
+        from api.models import Tenant, User, UserTenantRole
+
+        # Create a second tenant + user
+        other_tenant = Tenant(name="Other Corp", slug="other-corp", is_active=True)
+        db.session.add(other_tenant)
+        db.session.flush()
+
+        other_user = User(
+            email="other@test.com",
+            password_hash=None,
+            display_name="Other User",
+            is_super_admin=False,
+            is_active=True,
+            iam_user_id=str(uuid.uuid4()),
+        )
+        db.session.add(other_user)
+        db.session.flush()
+
+        role = UserTenantRole(
+            user_id=other_user.id,
+            tenant_id=other_tenant.id,
+            role="admin",
+            granted_by=other_user.id,
+        )
+        db.session.add(role)
+        db.session.commit()
+
+        # Auth as other tenant user, search for contact that exists in test-corp
+        headers = auth_header(client, email="other@test.com")
+        headers["X-Namespace"] = "other-corp"
+        resp = client.get(
+            "/api/extension/validate-contact"
+            "?linkedin_url=https://www.linkedin.com/in/johndoe",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["match"] is False
 
 
 class TestValidateCompany:
