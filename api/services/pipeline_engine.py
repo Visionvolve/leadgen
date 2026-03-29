@@ -8,6 +8,7 @@ Supports two modes:
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import requests
@@ -591,68 +592,304 @@ def _process_entity(
 
 
 # ---------------------------------------------------------------------------
+# Safe resume: skip recently enriched entities
+# ---------------------------------------------------------------------------
+
+
+def _is_recently_enriched(entity_id, stage, hours=24):
+    """Check if entity was enriched for this stage within the last N hours.
+
+    Returns False when hours <= 0 (effectively disabling the skip).
+    """
+    if hours <= 0:
+        return False
+
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    try:
+        result = db.session.execute(
+            text("""
+                SELECT 1 FROM entity_stage_completions
+                WHERE entity_id = :eid AND stage = :stage
+                  AND status = 'completed'
+                  AND completed_at > :cutoff
+                LIMIT 1
+            """),
+            {"eid": str(entity_id), "stage": stage, "cutoff": cutoff},
+        ).fetchone()
+        return result is not None
+    except Exception:
+        return False
+
+
+def _record_completion(entity_id, stage, run_id, tenant_id):
+    """Write a completion record after successful enrichment."""
+    import uuid as _uuid
+
+    entity_type = (
+        "contact"
+        if stage in ("person", "social", "career", "contact_details")
+        else "company"
+    )
+    try:
+        # Look up tag_id from the entity
+        tag_id = None
+        if entity_type == "company":
+            row = db.session.execute(
+                text("SELECT tag_id FROM companies WHERE id = :id"),
+                {"id": str(entity_id)},
+            ).fetchone()
+            if row:
+                tag_id = row[0]
+        else:
+            row = db.session.execute(
+                text("SELECT tag_id FROM contacts WHERE id = :id"),
+                {"id": str(entity_id)},
+            ).fetchone()
+            if row:
+                tag_id = row[0]
+
+        params = {
+            "id": str(_uuid.uuid4()),
+            "tid": str(tenant_id),
+            "tag_id": str(tag_id) if tag_id else None,
+            "prid": str(run_id),
+            "eid": str(entity_id),
+            "etype": entity_type,
+            "stage": stage,
+        }
+
+        try:
+            # PostgreSQL upsert
+            db.session.execute(
+                text("""
+                    INSERT INTO entity_stage_completions
+                        (id, tenant_id, tag_id, pipeline_run_id, entity_type,
+                         entity_id, stage, status, cost_usd)
+                    VALUES (:id, :tid, :tag_id, :prid, :etype,
+                            :eid, :stage, 'completed', 0)
+                    ON CONFLICT (pipeline_run_id, entity_id, stage) DO NOTHING
+                """),
+                params,
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            # SQLite fallback: plain INSERT (ignore duplicate errors)
+            try:
+                db.session.execute(
+                    text("""
+                        INSERT INTO entity_stage_completions
+                            (id, tenant_id, tag_id, pipeline_run_id, entity_type,
+                             entity_id, stage, status, cost_usd)
+                        VALUES (:id, :tid, :tag_id, :prid, :etype,
+                                :eid, :stage, 'completed', 0)
+                    """),
+                    params,
+                )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+    except Exception as e:
+        logger.warning("Failed to record completion for %s/%s: %s", entity_id, stage, e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def _process_entity_worker(entity_id, stage, tenant_id, app):
+    """Process one entity. Rate limiting happens at the Perplexity client level."""
+    with app.app_context():
+        return _process_entity(stage, entity_id, tenant_id)
+
+
+# ---------------------------------------------------------------------------
 # Single-stage execution (existing — for individual stage buttons)
 # ---------------------------------------------------------------------------
 
 
 def run_stage(app, run_id, stage, entity_ids, tenant_id=None):
-    """Background thread: process entities one at a time (native or n8n)."""
+    """Background thread: process entities with safe resume + parallel execution."""
     with app.app_context():
+        max_workers = current_app.config.get("ENRICHMENT_MAX_WORKERS", 5)
+        skip_hours = current_app.config.get("ENRICHMENT_SKIP_RECENT_HOURS", 24)
+
         total_cost = 0.0
         failed = 0
+        skipped = 0
+        done = 0
 
         update_run(run_id, status="running")
 
-        for i, entity_id in enumerate(entity_ids):
-            if _check_stop_signal(run_id):
-                update_run(
-                    run_id, status="stopped", done=i, failed=failed, cost_usd=total_cost
-                )
-                logger.info(
-                    "Stage run %s stopped at item %d/%d", run_id, i, len(entity_ids)
-                )
-                return
+        # Phase 1: Filter out recently enriched entities (safe resume)
+        to_process = []
+        for entity_id in entity_ids:
+            if _is_recently_enriched(entity_id, stage, hours=skip_hours):
+                skipped += 1
+            else:
+                to_process.append(entity_id)
 
-            entity_name = _get_entity_name(stage, entity_id, tenant_id)
-            _update_current_item(run_id, entity_name, "processing")
+        total_entities = len(entity_ids)
+        logger.info(
+            "[%s] Processing %d entities (%d workers, skipping %d recently enriched)",
+            stage,
+            len(to_process),
+            max_workers,
+            skipped,
+        )
 
-            try:
-                result = _process_entity(stage, entity_id, tenant_id)
-                total_cost += _extract_cost(result)
-                _update_current_item(run_id, entity_name, "ok")
-                update_run(run_id, done=i + 1, cost_usd=total_cost, failed=failed)
-            except Exception as e:
-                db.session.rollback()  # Reset aborted transaction
-                failed += 1
-                _update_current_item(run_id, entity_name, "failed", error_msg=str(e))
-                logger.warning("Stage %s item %s failed: %s", stage, entity_id, e)
-                update_run(
-                    run_id,
-                    done=i + 1,
-                    failed=failed,
-                    cost_usd=total_cost,
-                    error=str(e)[:500],
-                )
+        if not to_process:
+            update_run(
+                run_id,
+                status="completed",
+                done=total_entities,
+                failed=0,
+                cost_usd=0,
+            )
+            logger.info(
+                "Stage run %s completed: all %d entities already enriched",
+                run_id,
+                skipped,
+            )
+            return
+
+        # Phase 2: Process entities in parallel
+        stage_start_time = time.time()
+
+        if max_workers <= 1:
+            # Serial fallback
+            for i, entity_id in enumerate(to_process):
+                if _check_stop_signal(run_id):
+                    update_run(
+                        run_id,
+                        status="stopped",
+                        done=skipped + done,
+                        failed=failed,
+                        cost_usd=total_cost,
+                    )
+                    logger.info(
+                        "Stage run %s stopped at item %d/%d",
+                        run_id,
+                        done,
+                        len(to_process),
+                    )
+                    return
+
+                entity_name = _get_entity_name(stage, entity_id, tenant_id)
+                _update_current_item(run_id, entity_name, "processing")
+
+                try:
+                    result = _process_entity(stage, entity_id, tenant_id)
+                    total_cost += _extract_cost(result)
+                    done += 1
+                    _record_completion(entity_id, stage, run_id, tenant_id)
+                    _update_current_item(run_id, entity_name, "ok")
+                    update_run(
+                        run_id,
+                        done=skipped + done,
+                        cost_usd=total_cost,
+                        failed=failed,
+                    )
+                except Exception as e:
+                    db.session.rollback()
+                    failed += 1
+                    _update_current_item(
+                        run_id, entity_name, "failed", error_msg=str(e)
+                    )
+                    logger.warning("Stage %s item %s failed: %s", stage, entity_id, e)
+                    update_run(
+                        run_id,
+                        done=skipped + done,
+                        failed=failed,
+                        cost_usd=total_cost,
+                        error=str(e)[:500],
+                    )
+        else:
+            # Parallel execution with ThreadPoolExecutor
+            app_obj = current_app._get_current_object()
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for entity_id in to_process:
+                    if _check_stop_signal(run_id):
+                        break
+                    future = executor.submit(
+                        _process_entity_worker,
+                        entity_id,
+                        stage,
+                        tenant_id,
+                        app_obj,
+                    )
+                    futures[future] = entity_id
+
+                for future in as_completed(futures):
+                    entity_id = futures[future]
+                    entity_name = _get_entity_name(stage, entity_id, tenant_id)
+
+                    try:
+                        result = future.result()
+                        total_cost += _extract_cost(result)
+                        done += 1
+                        _record_completion(entity_id, stage, run_id, tenant_id)
+                        _update_current_item(run_id, entity_name, "ok")
+                        update_run(
+                            run_id,
+                            done=skipped + done,
+                            cost_usd=total_cost,
+                            failed=failed,
+                        )
+                        elapsed = time.time() - stage_start_time
+                        rate = done / elapsed * 60 if elapsed > 0 else 0
+                        remaining = len(to_process) - done - failed
+                        eta = remaining / (rate / 60) if rate > 0 else 0
+                        logger.info(
+                            "[%s] %d/%d done, %d skipped, %.1f entities/min, "
+                            "ETA: %.0fs",
+                            stage,
+                            done,
+                            len(to_process),
+                            skipped,
+                            rate,
+                            eta,
+                        )
+                    except Exception as e:
+                        failed += 1
+                        _update_current_item(
+                            run_id, entity_name, "failed", error_msg=str(e)
+                        )
+                        logger.warning(
+                            "Stage %s item %s failed: %s", stage, entity_id, e
+                        )
+                        update_run(
+                            run_id,
+                            done=skipped + done,
+                            failed=failed,
+                            cost_usd=total_cost,
+                            error=str(e)[:500],
+                        )
 
         final_status = (
             "completed"
             if failed == 0
             else "failed"
-            if failed == len(entity_ids)
+            if failed == len(to_process)
             else "completed"
         )
         update_run(
             run_id,
             status=final_status,
-            done=len(entity_ids),
+            done=total_entities,
             failed=failed,
             cost_usd=total_cost,
         )
         logger.info(
-            "Stage run %s %s: %d done, %d failed, $%.4f cost",
+            "Stage run %s %s: %d done, %d skipped, %d failed, $%.4f cost",
             run_id,
             final_status,
-            len(entity_ids),
+            done,
+            skipped,
             failed,
             total_cost,
         )
@@ -712,10 +949,12 @@ def run_stage_reactive(
     - sample_size: limit total entities processed across all polls
     """
     with app.app_context():
+        skip_hours = current_app.config.get("ENRICHMENT_SKIP_RECENT_HOURS", 24)
         processed_ids = set()
         total_cost = 0.0
         done_count = 0
         failed_count = 0
+        skipped_count = 0
         sample_remaining = sample_size  # None means unlimited
 
         update_run(run_id, status="running")
@@ -765,6 +1004,16 @@ def run_stage_reactive(
 
             new_ids = [eid for eid in all_eligible if eid not in processed_ids]
 
+            # Safe resume: filter out recently enriched
+            filtered_ids = []
+            for eid in new_ids:
+                if _is_recently_enriched(eid, stage, hours=skip_hours):
+                    processed_ids.add(eid)
+                    skipped_count += 1
+                else:
+                    filtered_ids.append(eid)
+            new_ids = filtered_ids
+
             # Trim to sample limit
             if sample_remaining is not None and len(new_ids) > sample_remaining:
                 new_ids = new_ids[:sample_remaining]
@@ -797,6 +1046,7 @@ def run_stage_reactive(
                         result = _process_entity(stage, entity_id, tenant_id)
                         total_cost += _extract_cost(result)
                         done_count += 1
+                        _record_completion(entity_id, stage, run_id, tenant_id)
                         _update_current_item(run_id, entity_name, "ok")
                         update_run(
                             run_id,
@@ -841,10 +1091,11 @@ def run_stage_reactive(
                         cost_usd=total_cost,
                     )
                     logger.info(
-                        "Reactive stage %s %s: %d done, %d failed, $%.4f cost",
+                        "Reactive stage %s %s: %d done, %d skipped, %d failed, $%.4f cost",
                         stage,
                         final_status,
                         done_count,
+                        skipped_count,
                         failed_count,
                         total_cost,
                     )

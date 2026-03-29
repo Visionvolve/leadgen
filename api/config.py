@@ -25,6 +25,13 @@ class Config:
     PERPLEXITY_BASE_URL = os.environ.get(
         "PERPLEXITY_BASE_URL", "https://api.perplexity.ai"
     )
+    PERPLEXITY_MAX_RPM = int(os.environ.get("PERPLEXITY_MAX_RPM", "20"))
+
+    # Enrichment pipeline parallelism
+    ENRICHMENT_MAX_WORKERS = int(os.environ.get("ENRICHMENT_MAX_WORKERS", "20"))
+    ENRICHMENT_SKIP_RECENT_HOURS = int(
+        os.environ.get("ENRICHMENT_SKIP_RECENT_HOURS", "24")
+    )
 
     # IAM integration
     IAM_BASE_URL = os.environ.get("IAM_BASE_URL", "https://iam.visionvolve.com")
