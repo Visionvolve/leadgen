@@ -8,11 +8,9 @@
  */
 
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
 import { storeTokens, storeUser, getDefaultNamespace, type StoredUser } from '../../lib/auth'
 
 export function AuthCallbackPage() {
-  const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -54,18 +52,18 @@ export function AuthCallbackPage() {
       // Clear SSO check flag on successful authentication
       sessionStorage.removeItem('sso_checked')
 
-      // Redirect to the app
+      // Redirect to the app — use full page reload so AuthProvider re-initializes
+      // with tokens already in localStorage (SPA navigate would see stale isAuthenticated)
       const ns = user ? getDefaultNamespace(user) : null
       if (ns) {
-        navigate(user?.is_super_admin ? `/${ns}/admin` : `/${ns}/contacts`, { replace: true })
+        window.location.href = user?.is_super_admin ? `/${ns}/admin` : `/${ns}/contacts`
       } else {
-        // Reload to let AuthProvider pick up the new tokens and resolve namespace
         window.location.href = '/'
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication callback failed')
     }
-  }, [navigate])
+  }, [])
 
   if (error) {
     return (
