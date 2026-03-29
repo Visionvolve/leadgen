@@ -190,6 +190,65 @@ def list_contacts():
         where, params, "linkedin_activity", "ct.linkedin_activity_level", request
     )
 
+    # --- JSONB array filters (skills / interests from contact_enrichment) ---
+    skills_raw = request.args.get("skills", "").strip()
+    if skills_raw:
+        skills_vals = [v.strip() for v in skills_raw.split(",") if v.strip()]
+        if skills_vals:
+            skills_exclude = (
+                request.args.get("skills_exclude", "").strip().lower() == "true"
+            )
+            skills_clauses = []
+            for i, v in enumerate(skills_vals):
+                params[f"skill_{i}"] = v.lower()
+                skills_clauses.append(f"LOWER(sk.value::text) = :skill_{i}")
+            combined_skills = " OR ".join(skills_clauses)
+            if skills_exclude:
+                where.append(
+                    f"""NOT EXISTS (
+                        SELECT 1 FROM contact_enrichment ce_sk,
+                        LATERAL jsonb_array_elements_text(ce_sk.expertise_areas) sk(value)
+                        WHERE ce_sk.contact_id = ct.id AND ({combined_skills})
+                    )"""
+                )
+            else:
+                where.append(
+                    f"""EXISTS (
+                        SELECT 1 FROM contact_enrichment ce_sk,
+                        LATERAL jsonb_array_elements_text(ce_sk.expertise_areas) sk(value)
+                        WHERE ce_sk.contact_id = ct.id AND ({combined_skills})
+                    )"""
+                )
+
+    interests_raw = request.args.get("interests", "").strip()
+    if interests_raw:
+        interests_vals = [v.strip() for v in interests_raw.split(",") if v.strip()]
+        if interests_vals:
+            interests_exclude = (
+                request.args.get("interests_exclude", "").strip().lower() == "true"
+            )
+            interests_clauses = []
+            for i, v in enumerate(interests_vals):
+                params[f"interest_{i}"] = v.lower()
+                interests_clauses.append(f"LOWER(ti.value::text) = :interest_{i}")
+            combined_interests = " OR ".join(interests_clauses)
+            if interests_exclude:
+                where.append(
+                    f"""NOT EXISTS (
+                        SELECT 1 FROM contact_enrichment ce_ti,
+                        LATERAL jsonb_array_elements_text(ce_ti.technology_interests) ti(value)
+                        WHERE ce_ti.contact_id = ct.id AND ({combined_interests})
+                    )"""
+                )
+            else:
+                where.append(
+                    f"""EXISTS (
+                        SELECT 1 FROM contact_enrichment ce_ti,
+                        LATERAL jsonb_array_elements_text(ce_ti.technology_interests) ti(value)
+                        WHERE ce_ti.contact_id = ct.id AND ({combined_interests})
+                    )"""
+                )
+
     # Job titles filter (ILIKE match)
     job_titles_raw = request.args.get("job_titles", "").strip()
     if job_titles_raw:
@@ -666,6 +725,12 @@ def filter_counts():
     )
 
     # Define all facet fields with their column references
+    # JSONB array facet fields (from contact_enrichment)
+    JSONB_FACET_FIELDS = {
+        "skills": "expertise_areas",
+        "interests": "technology_interests",
+    }
+
     FACET_FIELDS = {
         "company_status": "co.status",
         "company_tier": "co.tier",
@@ -718,6 +783,37 @@ def filter_counts():
             else:
                 where.append(f"{column} IN ({placeholders})")
 
+        # Apply JSONB array filters (skills / interests) EXCEPT the one being faceted
+        for jf_key, jf_column in JSONB_FACET_FIELDS.items():
+            if jf_key == exclude_facet:
+                continue
+            jf = filters.get(jf_key, {})
+            jf_values = jf.get("values", [])[:100] if isinstance(jf, dict) else []
+            if not jf_values:
+                continue
+            jf_exclude = jf.get("exclude", False) if isinstance(jf, dict) else False
+            jf_clauses = []
+            for i, v in enumerate(jf_values):
+                params[f"{jf_key}_{i}"] = v.lower()
+                jf_clauses.append(f"LOWER(jfv.value::text) = :{jf_key}_{i}")
+            combined_jf = " OR ".join(jf_clauses)
+            if jf_exclude:
+                where.append(
+                    f"""NOT EXISTS (
+                        SELECT 1 FROM contact_enrichment ce_jf,
+                        LATERAL jsonb_array_elements_text(ce_jf.{jf_column}) jfv(value)
+                        WHERE ce_jf.contact_id = ct.id AND ({combined_jf})
+                    )"""
+                )
+            else:
+                where.append(
+                    f"""EXISTS (
+                        SELECT 1 FROM contact_enrichment ce_jf,
+                        LATERAL jsonb_array_elements_text(ce_jf.{jf_column}) jfv(value)
+                        WHERE ce_jf.contact_id = ct.id AND ({combined_jf})
+                    )"""
+                )
+
         return " AND ".join(where)
 
     joins = """
@@ -753,6 +849,40 @@ def filter_counts():
             params,
         ).fetchall()
         facets[field_key] = [{"value": r[0], "count": r[1]} for r in rows]
+
+    # JSONB array facet counts (skills / interests)
+    # Uses PostgreSQL-specific LATERAL + jsonb_array_elements_text;
+    # gracefully returns empty facets on engines that lack these (e.g. SQLite in tests).
+    for jf_key, jf_column in JSONB_FACET_FIELDS.items():
+        params = {}
+        where_clause = _build_base_where(params, exclude_facet=jf_key)
+        if exclude_campaign_id:
+            params["excl_campaign_id"] = exclude_campaign_id
+            extra_where = " AND cc.id IS NULL"
+        else:
+            extra_where = ""
+
+        try:
+            rows = db.session.execute(
+                db.text(f"""
+                    SELECT elem.value AS val, COUNT(DISTINCT ct.id) AS cnt
+                    FROM contacts ct
+                    {joins}
+                    JOIN contact_enrichment ce_fc ON ce_fc.contact_id = ct.id
+                    CROSS JOIN LATERAL jsonb_array_elements_text(ce_fc.{jf_column}) elem(value)
+                    WHERE {where_clause}{extra_where}
+                      AND ce_fc.{jf_column} IS NOT NULL
+                    GROUP BY elem.value
+                    ORDER BY cnt DESC
+                    LIMIT 50
+                """),
+                params,
+            ).fetchall()
+            facets[jf_key] = [{"value": r[0], "count": r[1]} for r in rows]
+        except Exception:
+            # SQLite or other engines without LATERAL/jsonb support
+            db.session.rollback()
+            facets[jf_key] = []
 
     # Total count with ALL filters applied
     total_params = {}

@@ -66,6 +66,7 @@ export const CONTACT_MULTI_KEYS = [
   'company_tier',
   'industry', 'company_size', 'geo_region', 'revenue_range',
   'seniority_level', 'department', 'job_titles', 'linkedin_activity',
+  'skills', 'interests',
 ] as const
 
 /** Company-specific multi-keys */

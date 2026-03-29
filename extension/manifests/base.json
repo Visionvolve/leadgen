@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "version": "1.0.0",
-  "permissions": ["activeTab", "scripting", "storage", "alarms", "tabs"],
+  "permissions": ["activeTab", "scripting", "storage", "alarms", "tabs", "sidePanel"],
   "host_permissions": [
     "https://www.linkedin.com/*"
   ],
@@ -9,8 +9,9 @@
     "service_worker": "service-worker.js",
     "type": "module"
   },
-  "action": {
-    "default_popup": "popup.html"
+  "action": {},
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {

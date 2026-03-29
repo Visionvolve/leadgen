@@ -28,7 +28,7 @@ echo "    Container: ${CONTAINER}"
 echo ""
 echo "==> Building frontend..."
 cd "${PROJECT_DIR}/frontend"
-npm run build 2>&1 | tail -3
+VITE_IAM_BASE_URL=https://iam-staging.visionvolve.com npm run build 2>&1 | tail -3
 echo "    Frontend build complete"
 
 # ---- 2. Copy API source to staging ----
@@ -79,6 +79,8 @@ services:
       - CORS_ORIGINS=https://leadgen-staging.visionvolve.com
       - ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY:-}
       - PERPLEXITY_API_KEY=\${PERPLEXITY_API_KEY:-}
+      - IAM_BASE_URL=https://iam-staging.visionvolve.com
+      - IAM_JWKS_URL=https://iam-staging.visionvolve.com/.well-known/jwks.json
     networks:
       - default
 COMPOSE

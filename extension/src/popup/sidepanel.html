@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 100%;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      color: #e8e6f0;
+      background: #0d0f14;
+    }
+    .header {
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #6e2c8b 0%, #4a1d5e 100%);
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header.staging .env-badge {
+      background: rgba(249, 115, 22, 0.4);
+    }
+    .header-logo { height: 22px; width: auto; }
+    .header h1 { font-size: 15px; font-weight: 600; flex: 1; }
+    .header .env-badge {
+      display: inline-block;
+      font-size: 10px;
+      background: rgba(255,255,255,0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      vertical-align: middle;
+    }
+    .gradient-divider {
+      height: 2px;
+      background: linear-gradient(90deg, #6e2c8b 0%, #00b8cf 100%);
+    }
+    .content { padding: 16px; }
+    .login-form { display: flex; flex-direction: column; gap: 12px; }
+    .login-form input {
+      padding: 10px 12px;
+      border: 1px solid rgba(110, 44, 139, 0.3);
+      border-radius: 8px;
+      font-size: 14px;
+      background: #1a1c24;
+      color: #e8e6f0;
+    }
+    .login-form input::placeholder { color: #9896a6; }
+    .login-form input:focus { outline: none; border-color: #6e2c8b; box-shadow: 0 0 0 2px rgba(110, 44, 139, 0.2); }
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .btn-primary { background: #6e2c8b; color: white; }
+    .btn-primary:hover { background: #7d35a0; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-sso {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 10px 16px;
+      background: #1a1c24;
+      border: 1px solid rgba(110, 44, 139, 0.3);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #e8e6f0;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn-sso:hover { background: #252730; border-color: #6e2c8b; }
+    .btn-sso:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-sso svg { flex-shrink: 0; }
+    .sso-divider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+    }
+    .sso-divider::before,
+    .sso-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(110, 44, 139, 0.2);
+    }
+    .sso-divider span {
+      font-size: 11px;
+      color: #9896a6;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .btn-secondary {
+      background: transparent;
+      color: #9896a6;
+      border: 1px solid rgba(110, 44, 139, 0.3);
+    }
+    .btn-secondary:hover { background: #1a1c24; color: #e8e6f0; }
+    .btn-sync { background: #00b8cf; color: #0d0f14; font-weight: 600; }
+    .btn-sync:hover { background: #00d0e8; }
+    .btn-load-leads {
+      width: 100%;
+      padding: 12px 16px;
+      background: #6e2c8b;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-load-leads:hover { background: #7d35a0; }
+    .btn-load-leads:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-stop { background: #ff4d6a; color: white; }
+    .btn-stop:hover { background: #ff3355; }
+    .extraction-status {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: rgba(110, 44, 139, 0.15);
+      border: 1px solid rgba(110, 44, 139, 0.2);
+      border-radius: 8px;
+      font-size: 12px;
+      color: #e8e6f0;
+    }
+    .extraction-status.error-status {
+      background: rgba(255, 77, 106, 0.1);
+      border-color: rgba(255, 77, 106, 0.3);
+      color: #ff4d6a;
+    }
+    .extraction-status.success-status {
+      background: rgba(0, 214, 143, 0.1);
+      border-color: rgba(0, 214, 143, 0.3);
+      color: #00d68f;
+    }
+    .progress-container {
+      margin-top: 10px;
+      padding: 12px;
+      background: #1a1c24;
+      border: 1px solid rgba(110, 44, 139, 0.2);
+      border-radius: 8px;
+    }
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .progress-title { font-size: 12px; font-weight: 600; color: #e8e6f0; }
+    .progress-meta { font-size: 11px; color: #9896a6; }
+    .progress-bar-track {
+      width: 100%;
+      height: 6px;
+      background: #252730;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #00b8cf, #6e2c8b);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      position: relative;
+    }
+    .progress-bar-fill.animated::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+      animation: shimmer 1.5s infinite;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .progress-detail { font-size: 11px; color: #9896a6; }
+    .progress-detail .lead-name { color: #00b8cf; }
+    .progress-stats {
+      display: flex;
+      gap: 12px;
+      margin-top: 6px;
+      font-size: 11px;
+      color: #9896a6;
+    }
+    .progress-stats span { display: flex; align-items: center; gap: 3px; }
+    .progress-stats .count { color: #00b8cf; font-weight: 600; }
+    .section-divider {
+      border: none;
+      height: 2px;
+      background: linear-gradient(90deg, #6e2c8b 0%, #00b8cf 100%);
+      margin: 16px 0 12px;
+      opacity: 0.4;
+    }
+    .section-label {
+      font-size: 11px;
+      color: #9896a6;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .error { color: #ff4d6a; font-size: 12px; margin-top: 4px; }
+    .status { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #00d68f;
+      box-shadow: 0 0 6px rgba(0, 214, 143, 0.4);
+    }
+    .status-email { color: #e8e6f0; font-size: 13px; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .stat {
+      text-align: center;
+      padding: 12px 8px;
+      background: #1a1c24;
+      border: 1px solid rgba(110, 44, 139, 0.15);
+      border-radius: 8px;
+    }
+    .stat-value { font-size: 22px; font-weight: 700; color: #00b8cf; }
+    .stat-label { font-size: 11px; color: #9896a6; margin-top: 2px; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    .actions .btn { flex: 1; }
+    .field-group { margin: 12px 0; }
+    .field-label {
+      font-size: 12px;
+      color: #9896a6;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .field-input,
+    .field-select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid rgba(110, 44, 139, 0.3);
+      border-radius: 8px;
+      font-size: 13px;
+      background: #1a1c24;
+      color: #e8e6f0;
+    }
+    .field-input:focus,
+    .field-select:focus { outline: none; border-color: #6e2c8b; }
+    .field-select option { background: #1a1c24; color: #e8e6f0; }
+    .namespace-picker select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid rgba(110, 44, 139, 0.3);
+      border-radius: 8px;
+      font-size: 14px;
+      background: #1a1c24;
+      color: #e8e6f0;
+    }
+    .tab-notice {
+      padding: 10px 12px;
+      background: rgba(255, 159, 67, 0.1);
+      border: 1px solid rgba(255, 159, 67, 0.3);
+      border-radius: 8px;
+      font-size: 12px;
+      color: #ff9f43;
+      margin-bottom: 12px;
+    }
+    .import-preview {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      background: #1a1c24;
+      border: 1px solid rgba(110, 44, 139, 0.2);
+      border-radius: 8px;
+    }
+    .preview-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 0;
+      font-size: 12px;
+    }
+    .preview-label { color: #9896a6; }
+    .preview-value { color: #e8e6f0; font-weight: 500; }
+    .preview-row-highlight .preview-value { color: #00b8cf; font-weight: 600; font-size: 13px; }
+    .preview-note {
+      padding: 6px 0 2px;
+      font-size: 11px;
+      color: #9896a6;
+      font-style: italic;
+    }
+    .linkedin-identity {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      background: rgba(0, 119, 181, 0.08);
+      border: 1px solid rgba(0, 119, 181, 0.2);
+      border-radius: 6px;
+      font-size: 12px;
+      color: #9896a6;
+    }
+    .li-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #0077b5;
+      flex-shrink: 0;
+    }
+    .hidden { display: none; }
+    #sync-status { margin-top: 8px; font-size: 12px; color: #9896a6; }
+  </style>
+</head>
+<body>
+  <div class="header" id="header">
+    <img src="./icons/logo-white.png" alt="VisionVolve" class="header-logo" />
+    <h1>Leads <span id="env-badge" class="env-badge hidden"></span></h1>
+  </div>
+  <div class="gradient-divider"></div>
+
+  <!-- Login View -->
+  <div id="login-view" class="content">
+    <form class="login-form" id="login-form">
+      <input type="email" id="email" placeholder="Email" required autocomplete="email" />
+      <input type="password" id="password" placeholder="Password" required autocomplete="current-password" />
+      <button type="submit" class="btn btn-primary" id="login-btn" style="width:100%;">Log In</button>
+      <div id="login-error" class="error hidden"></div>
+    </form>
+    <div class="sso-divider"><span>or</span></div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <button class="btn-sso" id="google-sso-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.96 10.96 0 0 0 1 12c0 1.77.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+        Sign in with Google
+      </button>
+      <button class="btn-sso" id="github-sso-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#e8e6f0"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+        Sign in with GitHub
+      </button>
+    </div>
+  </div>
+
+  <!-- Namespace Picker (shown when multiple namespaces) -->
+  <div id="namespace-view" class="content hidden">
+    <p style="margin-bottom: 8px; color: #9896a6;">Select workspace:</p>
+    <div class="namespace-picker">
+      <select id="namespace-select"></select>
+    </div>
+    <button class="btn btn-primary" id="namespace-confirm" style="margin-top: 12px; width: 100%;">
+      Continue
+    </button>
+  </div>
+
+  <!-- Connected View -->
+  <div id="connected-view" class="content hidden">
+    <div class="status">
+      <span class="status-dot"></span>
+      <span id="user-email" class="status-email"></span>
+    </div>
+
+    <div id="linkedin-identity" class="linkedin-identity hidden">
+      <span class="li-dot"></span>
+      <span id="linkedin-identity-name">--</span>
+    </div>
+
+    <div id="tab-notice" class="tab-notice hidden">
+      Navigate to LinkedIn Sales Navigator to load leads.
+    </div>
+
+    <div class="field-group" id="namespace-switcher">
+      <label class="field-label">Workspace</label>
+      <select id="namespace-switch" class="field-select"></select>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value" id="lead-count">0</div>
+        <div class="stat-label">Leads</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" id="activity-count">0</div>
+        <div class="stat-label">Activities</div>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">Import tag</label>
+      <div style="position: relative;">
+        <input type="text" id="import-tag" list="tag-suggestions" placeholder="e.g. LinkedIn Import Mar 2026" autocomplete="off" class="field-input" />
+        <datalist id="tag-suggestions"></datalist>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">Max contacts per run</label>
+      <select id="max-contacts" class="field-select">
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="250">250</option>
+        <option value="500">500</option>
+        <option value="0">All</option>
+      </select>
+    </div>
+
+    <!-- Import Preview (shown when on SN search page, no import active) -->
+    <div id="import-preview" class="import-preview hidden">
+      <div class="preview-row">
+        <span class="preview-label">Current page</span>
+        <span class="preview-value" id="preview-page">--</span>
+      </div>
+      <div class="preview-row">
+        <span class="preview-label">Contacts on page</span>
+        <span class="preview-value" id="preview-contacts-on-page">--</span>
+      </div>
+      <div class="preview-row">
+        <span class="preview-label">Total results</span>
+        <span class="preview-value" id="preview-total-results">--</span>
+      </div>
+      <div id="preview-note" class="preview-note hidden"></div>
+      <div class="preview-row preview-row-highlight">
+        <span class="preview-label">Estimated leads</span>
+        <span class="preview-value" id="preview-estimated-leads">--</span>
+      </div>
+      <div class="preview-row">
+        <span class="preview-label">Expected time</span>
+        <span class="preview-value" id="preview-expected-time">--</span>
+      </div>
+    </div>
+
+    <!-- Load Leads (primary action) -->
+    <div id="load-leads-section">
+      <button class="btn-load-leads" id="load-leads-btn">Load Leads</button>
+      <button class="btn btn-stop hidden" id="stop-extraction-btn" style="width: 100%; margin-top: 6px;">Stop Extraction</button>
+      <div id="extraction-status" class="extraction-status hidden"></div>
+      <div id="extraction-progress" class="progress-container hidden">
+        <div class="progress-header">
+          <span class="progress-title" id="progress-title">Extracting leads...</span>
+          <span class="progress-meta" id="progress-elapsed">0:00</span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill animated" id="progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="progress-detail" id="progress-detail">Starting extraction...</div>
+        <div class="progress-stats">
+          <span>Leads: <span class="count" id="progress-leads">0</span></span>
+          <span>Page: <span class="count" id="progress-page">1</span></span>
+          <span>Done: <span class="count" id="progress-pages-done">0</span> pages</span>
+        </div>
+      </div>
+    </div>
+
+    <hr class="section-divider" />
+
+    <!-- Sync Activities (secondary action) -->
+    <div class="section-label">Activities</div>
+    <div class="actions">
+      <button class="btn btn-sync" id="sync-btn">Sync Activities</button>
+      <button class="btn btn-secondary" id="logout-btn">Logout</button>
+    </div>
+    <div id="sync-status"></div>
+
+    <!-- Test Upload (staging only) -->
+    <div id="test-upload-section" class="hidden">
+      <hr class="section-divider" />
+      <div class="section-label">Debug</div>
+      <button class="btn btn-secondary" id="test-upload-btn" style="width: 100%; font-size: 12px;">Test Upload (3 mock leads)</button>
+      <div id="test-upload-status" style="margin-top: 6px; font-size: 11px; color: #9896a6;"></div>
+    </div>
+  </div>
+
+  <script type="module" src="./sidepanel.ts"></script>
+</body>
+</html>

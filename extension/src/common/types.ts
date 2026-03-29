@@ -107,6 +107,20 @@ export interface MultiPageProcess {
   pagesCompleted: number;
   startTime: number;
   endTime?: number;
+  maxContacts?: number;
+  /** Import tag passed from side panel, used as primary source of truth. */
+  tag?: string;
+  /** Cumulative count of newly created contacts across all pages. */
+  createdContacts?: number;
+  /** Cumulative count of duplicate contacts (tagged only) across all pages. */
+  skippedDuplicates?: number;
+  /** Error message if upload failed. */
+  uploadError?: string;
+}
+
+/** Import settings stored in chrome.storage.local. */
+export interface ImportSettings {
+  maxContacts: number;
 }
 
 /** Extraction result from content script. */
@@ -135,7 +149,12 @@ export type ExtensionMessage =
   | { type: 'get_multi_page_state' }
   | { type: 'check_page' }
   | { type: 'go_to_next_page' }
-  | { type: 'linkedin_page_loaded'; url: string };
+  | { type: 'linkedin_page_loaded'; url: string }
+  | { type: 'sso_login'; provider: 'google' | 'github' }
+  | { type: 'extraction_progress'; progress: ExtractionProgress }
+  | { type: 'get_page_info' }
+  | { type: 'page_info'; pageInfo: PageInfo }
+  | { type: 'linkedin_identity'; linkedin_name: string; linkedin_url: string };
 
 /** Result reported after extracting a single page in multi-page mode. */
 export interface PageExtractionResult {
@@ -154,4 +173,28 @@ export interface PageExtractionResult {
 export interface ActivitySyncSettings {
   lastSyncTime: string;
   syncEnabled: boolean;
+}
+
+/** Page info for import preview (read from Sales Navigator DOM). */
+export interface PageInfo {
+  currentPage: number;
+  totalResults: number | null;
+  totalPages: number | null;
+  contactsOnPage: number;
+}
+
+/** Per-lead extraction progress stored in chrome.storage.local. */
+export interface ExtractionProgress {
+  /** Current lead index being processed (1-based). */
+  currentLead: number;
+  /** Total leads on this page to process. */
+  totalLeadsOnPage: number;
+  /** Name of the lead currently being enriched. */
+  currentLeadName: string;
+  /** Current enrichment phase. */
+  phase: 'extracting' | 'enriching_profile' | 'enriching_company' | 'uploading' | 'done';
+  /** Company name being enriched (if in enriching_company phase). */
+  currentCompany?: string;
+  /** Timestamp of this update. */
+  updatedAt: number;
 }

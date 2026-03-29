@@ -10,15 +10,17 @@
  * Ported from ~/git/linkedin-lead-uploader/background.js
  */
 
-import { uploadLeads, uploadActivities } from '../common/api-client';
-import { getAuthState } from '../common/auth';
-import { config } from '../common/config';
+import { uploadLeads, uploadActivities, reportLinkedInIdentity } from '../common/api-client';
+import { getAuthState, storeAuthState } from '../common/auth';
+import { config, jitter } from '../common/config';
 import type {
   Lead,
   ActivityEvent,
   MultiPageProcess,
   ActivitySyncSettings,
   PageExtractionResult,
+  AuthState,
+  ImportSettings,
 } from '../common/types';
 
 // ============== LOGGING ==============
@@ -68,23 +70,43 @@ async function handleLeadUpload(
   leads: Lead[],
   source: string,
   tag: string,
-): Promise<{ success: boolean; created_contacts?: number; error?: string }> {
-  const state = await getAuthState();
-  if (!state) {
-    return { success: false, error: 'Not authenticated' };
+): Promise<{ success: boolean; created_contacts?: number; skipped_duplicates?: number; error?: string }> {
+  const maxRetries = 3;
+  let lastError = '';
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await uploadLeads(leads, source, tag);
+      log.success(
+        `Uploaded ${leads.length} leads: ${result.created_contacts} created, ${result.skipped_duplicates} skipped`,
+      );
+
+      // Accumulate upload stats in multiPageProcess for side panel display
+      const { multiPageProcess } = await chrome.storage.local.get(['multiPageProcess']);
+      const process = multiPageProcess as MultiPageProcess | undefined;
+      if (process) {
+        await chrome.storage.local.set({
+          multiPageProcess: {
+            ...process,
+            createdContacts: (process.createdContacts || 0) + result.created_contacts,
+            skippedDuplicates: (process.skippedDuplicates || 0) + result.skipped_duplicates,
+          },
+        });
+      }
+
+      return { success: true, created_contacts: result.created_contacts, skipped_duplicates: result.skipped_duplicates };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < maxRetries) {
+        const delay = 2000 * Math.pow(2, attempt - 1); // 2s, 4s, 8s
+        log.warn(`Lead upload attempt ${attempt}/${maxRetries} failed: ${lastError}. Retrying in ${delay / 1000}s...`);
+        await new Promise<void>((r) => setTimeout(r, delay));
+      }
+    }
   }
 
-  try {
-    const result = await uploadLeads(leads, source, tag);
-    log.success(
-      `Uploaded ${leads.length} leads: ${result.created_contacts} created, ${result.skipped_duplicates} skipped`,
-    );
-    return { success: true, created_contacts: result.created_contacts };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    log.error(`Lead upload failed: ${msg}`);
-    return { success: false, error: msg };
-  }
+  log.error(`Lead upload failed after ${maxRetries} attempts: ${lastError}`);
+  return { success: false, error: lastError };
 }
 
 // ============== ACTIVITY SYNC ==============
@@ -289,6 +311,7 @@ async function startMultiPageFromTab(
     totalProfileUrls: processData.totalProfileUrls || 0,
     pagesCompleted: processData.pagesCompleted || 0,
     startTime: Date.now(),
+    tag: processData.tag,
   };
 
   await chrome.storage.local.set({ multiPageProcess: state });
@@ -305,6 +328,15 @@ async function triggerExtraction(tabId: number): Promise<void> {
   const process = multiPageProcess as MultiPageProcess | undefined;
   if (!process || !process.active || process.stopped) {
     log.info('Process not active, skipping extraction trigger');
+    return;
+  }
+
+  // Pre-check: stop before extracting if max contacts already reached
+  const { import_settings: triggerSettings } = await chrome.storage.local.get('import_settings');
+  const triggerMax = (triggerSettings as ImportSettings | undefined)?.maxContacts ?? config.defaultMaxContacts;
+  if (triggerMax > 0 && process.totalLeads >= triggerMax) {
+    log.success(`Max contacts limit already reached (${process.totalLeads}/${triggerMax}), not starting extraction`);
+    await finishMultiPage(process);
     return;
   }
 
@@ -326,10 +358,10 @@ async function triggerExtraction(tabId: number): Promise<void> {
     // Wait for script to initialize
     await new Promise<void>((r) => setTimeout(r, 500));
 
-    // Tell content script to extract
+    // Tell content script to extract, passing the tag from multi-page state
     chrome.tabs.sendMessage(
       tabId,
-      { action: 'extractAndReport', isMultiPage: true },
+      { action: 'extractAndReport', isMultiPage: true, tag: process?.tag || '' },
       (response?: { success: boolean }) => {
         if (chrome.runtime.lastError) {
           log.error(
@@ -362,6 +394,13 @@ async function handlePageExtractionComplete(
     return;
   }
 
+  // Stop multi-page process if upload failed
+  if (!result.success) {
+    log.error('Upload failed for page, stopping multi-page process');
+    await finishMultiPage({ ...process, uploadError: 'Upload failed — check authentication' });
+    return;
+  }
+
   // Update stats
   const updatedData: MultiPageProcess = {
     ...process,
@@ -378,6 +417,24 @@ async function handlePageExtractionComplete(
 
   await chrome.storage.local.set({ multiPageProcess: updatedData });
 
+  // Check if max contacts limit has been reached
+  const { import_settings } = await chrome.storage.local.get('import_settings');
+  const maxContacts = (import_settings as ImportSettings | undefined)?.maxContacts ?? config.defaultMaxContacts;
+  if (maxContacts > 0 && updatedData.totalLeads >= maxContacts) {
+    log.success(`Max contacts limit reached (${updatedData.totalLeads}/${maxContacts}), stopping`);
+    await finishMultiPage(updatedData);
+    return;
+  }
+
+  // Re-check max contacts limit before starting next page (belt-and-suspenders)
+  const { import_settings: settingsRecheck } = await chrome.storage.local.get('import_settings');
+  const maxContactsRecheck = (settingsRecheck as ImportSettings | undefined)?.maxContacts ?? config.defaultMaxContacts;
+  if (maxContactsRecheck > 0 && updatedData.totalLeads >= maxContactsRecheck) {
+    log.success(`Max contacts limit reached after re-check (${updatedData.totalLeads}/${maxContactsRecheck}), stopping`);
+    await finishMultiPage(updatedData);
+    return;
+  }
+
   // Navigate to next page if available
   if (result.hasNextPage && result.nextPage) {
     const nextPageData: MultiPageProcess = {
@@ -386,10 +443,11 @@ async function handlePageExtractionComplete(
     };
     await chrome.storage.local.set({ multiPageProcess: nextPageData });
 
+    const pageDelay = jitter(config.multiPageDelay);
     log.info(
-      `Waiting ${config.multiPageDelay / 1000}s before navigating to page ${result.nextPage}...`,
+      `Waiting ${(pageDelay / 1000).toFixed(1)}s before navigating to page ${result.nextPage}...`,
     );
-    await new Promise<void>((r) => setTimeout(r, config.multiPageDelay));
+    await new Promise<void>((r) => setTimeout(r, pageDelay));
 
     // Re-check if still active after delay
     const { multiPageProcess: current } = await chrome.storage.local.get([
@@ -424,6 +482,74 @@ async function finishMultiPage(data: MultiPageProcess): Promise<void> {
   );
 }
 
+// ============== SSO AUTH ==============
+
+// Track SSO auth tab so we can detect the callback and close it
+let ssoAuthTabId: number | null = null;
+
+async function startSsoLogin(
+  provider: 'google' | 'github',
+): Promise<{ success: boolean; error?: string }> {
+  const callbackUrl = `${config.apiBase}/api/auth/iam/callback`;
+  const oauthUrl = `${config.iamBase}/oauth/${provider}?redirect=${encodeURIComponent(callbackUrl)}`;
+
+  try {
+    const tab = await chrome.tabs.create({ url: oauthUrl });
+    if (tab.id) {
+      ssoAuthTabId = tab.id;
+    }
+    return { success: true };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error(`SSO login failed: ${msg}`);
+    return { success: false, error: msg };
+  }
+}
+
+function parseSsoCallback(url: string): AuthState | null {
+  try {
+    const parsed = new URL(url);
+    const hash = parsed.hash.substring(1); // remove leading #
+    if (!hash) return null;
+
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+    const userJson = params.get('user');
+
+    if (!accessToken || !userJson) return null;
+
+    const user = JSON.parse(userJson) as {
+      id: string;
+      email: string;
+      display_name?: string;
+      name?: string;
+      owner_id: string | null;
+      roles: Record<string, string>;
+    };
+
+    const roles = user.roles || {};
+    const namespaces = Object.keys(roles);
+
+    return {
+      access_token: accessToken,
+      refresh_token: refreshToken || '',
+      namespace: namespaces.length === 1 ? namespaces[0] : '',
+      user: {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name || user.name || '',
+        owner_id: user.owner_id,
+        roles,
+      },
+      token_stored_at: Date.now(),
+    };
+  } catch (error) {
+    log.error(`Failed to parse SSO callback: ${error}`);
+    return null;
+  }
+}
+
 // ============== MESSAGE HANDLER ==============
 
 chrome.runtime.onMessage.addListener(
@@ -441,6 +567,17 @@ chrome.runtime.onMessage.addListener(
         message.source as string,
         message.tag as string,
       ).then(sendResponse);
+      return true;
+    }
+
+    // Test upload from side panel (staging debug)
+    if (msgType === 'test_upload') {
+      const testLeads: Lead[] = [
+        { name: 'Test User Alpha', company_name: 'AlphaCorp', industry: 'Construction', linkedin_url: `https://linkedin.com/in/test-${Date.now()}-1` },
+        { name: 'Test User Beta', company_name: 'BetaSoft', industry: 'Furniture and Home Furnishings Manufacturing', linkedin_url: `https://linkedin.com/in/test-${Date.now()}-2` },
+        { name: 'Test User Gamma', company_name: 'GammaTech', industry: 'software_saas', linkedin_url: `https://linkedin.com/in/test-${Date.now()}-3` },
+      ];
+      handleLeadUpload(testLeads, 'test', message.tag as string || 'test-upload').then(sendResponse);
       return true;
     }
 
@@ -500,6 +637,8 @@ chrome.runtime.onMessage.addListener(
           chrome.storage.local.set({
             multiPageProcess: { ...process, stopped: true, active: false },
           });
+          // Clear extraction lock so stale content scripts stop
+          chrome.storage.local.remove('extractionLock');
         }
       });
       sendResponse({ success: true });
@@ -511,6 +650,81 @@ chrome.runtime.onMessage.addListener(
         sendResponse(result.multiPageProcess || null);
       });
       return true;
+    }
+
+    // Start lead extraction from popup
+    if (msgType === 'start_extraction') {
+      const tabId = message.tabId as number;
+      const tag = (message.tag as string) || '';
+      const maxContacts = (message.maxContacts as number) || 0;
+
+      // Store import settings so the multi-page process respects them
+      chrome.storage.local
+        .set({
+          import_settings: { maxContacts } as ImportSettings,
+          import_tag: tag,
+        })
+        .then(() => startMultiPageFromTab(tabId, { currentPage: 1, tag }))
+        .then(() => {
+          sendResponse({ success: true });
+        });
+      return true;
+    }
+
+    // SSO login (from popup)
+    if (msgType === 'sso_login') {
+      const provider = message.provider as 'google' | 'github';
+      startSsoLogin(provider).then(sendResponse);
+      return true;
+    }
+
+    // Per-lead extraction progress from content script
+    if (msgType === 'extraction_progress') {
+      chrome.storage.local.set({ extractionProgress: message.progress });
+      sendResponse({ success: true });
+      return false;
+    }
+
+    // Page info from content script (proactive push on SN page load)
+    if (msgType === 'page_info') {
+      chrome.storage.local.set({ pageInfo: message.pageInfo });
+      sendResponse({ success: true });
+      return false;
+    }
+
+    // Page info request from side panel — relay to active tab's content script
+    if (msgType === 'get_page_info') {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs[0];
+        if (!tab?.id || !tab.url?.includes('linkedin.com/sales/')) {
+          sendResponse(null);
+          return;
+        }
+        chrome.tabs.sendMessage(tab.id, { type: 'get_page_info' }, (resp) => {
+          if (chrome.runtime.lastError) {
+            sendResponse(null);
+          } else {
+            // Also store in storage for later reads
+            if (resp) chrome.storage.local.set({ pageInfo: resp });
+            sendResponse(resp);
+          }
+        });
+      });
+      return true;
+    }
+
+    // LinkedIn identity detected by content script
+    if (msgType === 'linkedin_identity') {
+      const liName = message.linkedin_name as string;
+      const liUrl = message.linkedin_url as string;
+      log.info(`LinkedIn identity detected: ${liName} (${liUrl})`);
+      chrome.storage.local.set({ linkedinIdentity: { linkedin_name: liName, linkedin_url: liUrl } });
+      // Forward to API (fire-and-forget, don't block the content script)
+      reportLinkedInIdentity(liName, liUrl)
+        .then((resp) => log.info(`LinkedIn identity reported to API: is_new=${resp.is_new}`))
+        .catch((err) => log.warn(`Failed to report LinkedIn identity: ${err}`));
+      sendResponse({ success: true });
+      return false;
     }
 
     // LinkedIn page loaded notification
@@ -553,6 +767,33 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
+
+  // Detect SSO callback: /auth/callback#access_token=...
+  if (
+    ssoAuthTabId === tabId &&
+    tab.url &&
+    tab.url.includes('/auth/callback#')
+  ) {
+    log.info('SSO callback detected, extracting tokens...');
+    ssoAuthTabId = null;
+
+    const authState = parseSsoCallback(tab.url);
+    if (authState) {
+      await storeAuthState(authState);
+      log.success(`SSO login successful for ${authState.user.email}`);
+    } else {
+      log.error('Failed to extract auth data from SSO callback URL');
+    }
+
+    // Close the auth tab
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch {
+      // Tab may already be closed
+    }
+    return;
+  }
+
   if (!tab.url?.includes('linkedin.com')) return;
 
   // Tab-triggered activity sync (throttled)
@@ -582,10 +823,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       log.info(
         `Sales page loaded on tracked tab ${tabId}, waiting for page to stabilize...`,
       );
-      setTimeout(() => triggerExtraction(tabId), config.multiPageDelay);
+      setTimeout(() => triggerExtraction(tabId), jitter(config.multiPageDelay));
     }
   }
 });
+
+// ============== SIDE PANEL ==============
+
+// Open side panel when extension icon is clicked
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 // ============== STARTUP ==============
 

@@ -1,0 +1,92 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [staging]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/michallicko/leadgen-pipeline:staging
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          VITE_IAM_BASE_URL=https://iam-staging.visionvolve.com npm run build
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.api
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}
+            ghcr.io/michallicko/leadgen-pipeline:staging-${{ github.sha }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/staging.pem
+          chmod 600 ~/.ssh/staging.pem
+          ssh-keyscan -H 3.124.110.199 >> ~/.ssh/known_hosts
+
+      - name: Upload frontend build
+        run: |
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "mkdir -p ~/staging/dashboard"
+          scp -i ~/.ssh/staging.pem -r frontend/dist/* ec2-user@3.124.110.199:~/staging/dashboard/
+
+      - name: Reload Caddy to serve updated static files
+        run: |
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "
+            cd ~/staging
+            COMPOSE_CMD=\"docker compose \$(ls ~/staging/docker-compose*.yml | sed 's/^/-f /' | tr '\n' ' ')\"
+            eval \"\$COMPOSE_CMD exec caddy caddy reload --config /etc/caddy/Caddyfile\" 2>/dev/null || true
+          "
+
+      - name: Deploy to staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "
+            echo '${GH_TOKEN}' | docker login ghcr.io -u '${GH_ACTOR}' --password-stdin
+            cd ~/staging
+            COMPOSE_CMD=\"docker compose \$(ls ~/staging/docker-compose*.yml | sed 's/^/-f /' | tr '\n' ' ')\"
+            eval \"\$COMPOSE_CMD pull leadgen-api\"
+            eval \"\$COMPOSE_CMD up -d --no-deps leadgen-api\"
+            docker system prune -f --filter 'until=1h'
+          "
+
+      - name: Health check
+        run: |
+          sleep 15
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://leadgen-staging.visionvolve.com/api/health)
+          echo "Health check: $code"
+          if [[ ! "$code" =~ ^[23] ]]; then
+            echo "::error::Health check failed with status $code"
+            exit 1
+          fi

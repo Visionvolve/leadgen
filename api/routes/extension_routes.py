@@ -5,7 +5,16 @@ from datetime import datetime, timezone
 from flask import Blueprint, g, jsonify, request
 
 from ..auth import require_auth, resolve_tenant
-from ..models import Activity, Company, Contact, Tag, db
+from ..models import (
+    Activity,
+    Company,
+    Contact,
+    ContactTagAssignment,
+    LinkedInAccount,
+    Tag,
+    db,
+)
+from ..services.enum_mapper import map_enum_value
 
 extension_bp = Blueprint("extension", __name__)
 
@@ -41,6 +50,8 @@ def upload_leads():
             db.session.add(tag)
             db.session.flush()
 
+    contacts_to_tag = []
+
     for lead in leads:
         linkedin_url = (lead.get("linkedin_url") or "").strip()
 
@@ -51,6 +62,8 @@ def upload_leads():
             ).first()
             if existing:
                 skipped_duplicates += 1
+                # Still tag duplicates so they appear under the import tag
+                contacts_to_tag.append(existing.id)
                 continue
 
         # Find or create company
@@ -66,7 +79,7 @@ def upload_leads():
                     tenant_id=str(tenant_id),
                     name=company_name,
                     domain=lead.get("company_domain"),
-                    industry=lead.get("industry"),
+                    industry=map_enum_value("industry", lead.get("industry")),
                     company_size=lead.get("company_size"),
                     revenue_range=lead.get("revenue_range"),
                     status="new",
@@ -91,13 +104,28 @@ def upload_leads():
             linkedin_url=linkedin_url or None,
             company_id=company.id if company else None,
             owner_id=owner_id,
-            tag_id=tag.id if tag else None,
             import_source=source,
             is_stub=False,
         )
         db.session.add(contact)
         db.session.flush()
+        contacts_to_tag.append(contact.id)
         created_contacts += 1
+
+    # Assign tag via junction table (used by contacts listing queries)
+    if tag and contacts_to_tag:
+        for contact_id in contacts_to_tag:
+            exists = ContactTagAssignment.query.filter_by(
+                contact_id=str(contact_id), tag_id=str(tag.id)
+            ).first()
+            if not exists:
+                db.session.add(
+                    ContactTagAssignment(
+                        tenant_id=str(tenant_id),
+                        contact_id=str(contact_id),
+                        tag_id=str(tag.id),
+                    )
+                )
 
     db.session.commit()
 
@@ -106,6 +134,7 @@ def upload_leads():
             "created_contacts": created_contacts,
             "created_companies": created_companies,
             "skipped_duplicates": skipped_duplicates,
+            "tagged_total": len(contacts_to_tag),
         }
     )
 
@@ -187,6 +216,7 @@ def upload_activities():
             activity_detail=payload.get("message", ""),
             source="linkedin_extension",
             external_id=external_id,
+            occurred_at=timestamp or datetime.now(timezone.utc),
             timestamp=timestamp,
             payload=payload,
         )
@@ -474,5 +504,63 @@ def linkedin_queue_stats():
                 "connections_per_day": 15,
                 "messages_per_day": 40,
             },
+        }
+    )
+
+
+@extension_bp.route("/api/extension/linkedin-identity", methods=["POST"])
+@require_auth
+def report_linkedin_identity():
+    """Upsert the active LinkedIn account identity detected by the extension."""
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    linkedin_name = (data.get("linkedin_name") or "").strip()
+    linkedin_url = (data.get("linkedin_url") or "").strip()
+
+    if not linkedin_name or not linkedin_url:
+        return jsonify({"error": "linkedin_name and linkedin_url are required"}), 400
+
+    user = g.current_user
+    owner_id = user.owner_id
+
+    # Upsert: find existing by tenant + URL, or create
+    existing = LinkedInAccount.query.filter_by(
+        tenant_id=str(tenant_id), linkedin_url=linkedin_url
+    ).first()
+
+    is_new = existing is None
+
+    if existing:
+        existing.linkedin_name = linkedin_name
+        existing.last_seen_at = datetime.now(timezone.utc)
+        existing.updated_at = datetime.now(timezone.utc)
+        if owner_id:
+            existing.owner_id = owner_id
+        account = existing
+    else:
+        account = LinkedInAccount(
+            tenant_id=str(tenant_id),
+            owner_id=owner_id,
+            linkedin_name=linkedin_name,
+            linkedin_url=linkedin_url,
+            last_seen_at=datetime.now(timezone.utc),
+            is_active=True,
+        )
+        db.session.add(account)
+
+    db.session.commit()
+
+    return jsonify(
+        {
+            "id": str(account.id),
+            "linkedin_name": account.linkedin_name,
+            "linkedin_url": account.linkedin_url,
+            "is_new": is_new,
         }
     )

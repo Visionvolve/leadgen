@@ -301,6 +301,27 @@ Forbidden commands:
 - **Feature branches** deploy API-only as `/api-rev-{commit}/` — test via `?rev={commit}` query param
 - The `?rev=` param makes the dashboard route API calls to the revision's backend
 
+## Staging
+
+- **URL:** https://leadgen-staging.visionvolve.com
+- **Deploy:** push to `staging` branch → auto-deploys via GitHub Actions
+- **Flow:** Push to `staging` → GHA builds Docker image → pushes to GHCR (`ghcr.io/michallicko/leadgen-pipeline:staging`) → SSHs to staging VPS → pulls image and restarts container.
+- **Caddy config** is managed by the infra repo (`visionvolve-vps/staging/caddy/`). Do NOT deploy Caddy snippets from this repo.
+- **Migrations:** `gh workflow run migrate-staging` (manual dispatch)
+- **GHA workflow:** `.github/workflows/deploy-staging.yml`
+- **VPS:** 3.124.110.199 (SSH blocked by default, use `claude --staging-access`)
+
+### Staging Container Architecture
+
+The staging deployment uses an **nginx sidecar** for the dashboard:
+- **`dashboard-web`** (`nginx:alpine`): Serves the dashboard frontend from the `./dashboard` bind mount on port 80.
+- **GHA deploys** the frontend build to `~/staging/dashboard/` on the VPS.
+- **Caddy** proxies `/api/*` to `leadgen-api:5000` and `/*` to `dashboard-web:80`.
+
+### Caddy Rule
+
+**Caddy does ONLY routing and TLS — NEVER static file serving.** Each service serves its own content via nginx sidecar or built-in web server. Caddy snippets must contain only `reverse_proxy` directives. This applies to both staging and production.
+
 ## Infrastructure
 
 ### Production (52.58.119.191)

@@ -49,6 +49,43 @@
     .btn-primary { background: #6E2C8B; color: white; }
     .btn-primary:hover { background: #5a2474; }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-sso {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #333;
+      cursor: pointer;
+    }
+    .btn-sso:hover { background: #f5f5f5; border-color: #ccc; }
+    .btn-sso:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-sso svg { flex-shrink: 0; }
+    .sso-divider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+    }
+    .sso-divider::before,
+    .sso-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #e5e5e5;
+    }
+    .sso-divider span {
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
     .btn-secondary {
       background: transparent;
       color: #666;
@@ -57,6 +94,45 @@
     .btn-secondary:hover { background: #f5f5f5; }
     .btn-sync { background: #059669; color: white; }
     .btn-sync:hover { background: #047857; }
+    .btn-load-leads {
+      width: 100%;
+      padding: 12px 16px;
+      background: #6E2C8B;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-load-leads:hover { background: #5a2474; }
+    .btn-load-leads:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-stop { background: #dc2626; color: white; }
+    .btn-stop:hover { background: #b91c1c; }
+    .extraction-status {
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: #f3f0ff;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #4a1d6b;
+    }
+    .extraction-status.error-status {
+      background: #fef2f2;
+      color: #dc2626;
+    }
+    .section-divider {
+      border: none;
+      border-top: 1px solid #e5e5e5;
+      margin: 16px 0 12px;
+    }
+    .section-label {
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
     .error { color: #dc2626; font-size: 12px; margin-top: 4px; }
     .status { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .status-dot {
@@ -93,6 +169,17 @@
       <button type="submit" class="btn btn-primary" id="login-btn">Log In</button>
       <div id="login-error" class="error hidden"></div>
     </form>
+    <div class="sso-divider"><span>or</span></div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <button class="btn-sso" id="google-sso-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.96 10.96 0 0 0 1 12c0 1.77.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+        Sign in with Google
+      </button>
+      <button class="btn-sso" id="github-sso-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#333"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+        Sign in with GitHub
+      </button>
+    </div>
   </div>
 
   <!-- Namespace Picker (shown when multiple namespaces) -->
@@ -112,6 +199,10 @@
       <span class="status-dot"></span>
       <span id="user-email"></span>
     </div>
+    <div id="namespace-switcher" style="margin-bottom: 8px;">
+      <label style="font-size: 12px; color: #666; display: block; margin-bottom: 4px;">Workspace</label>
+      <select id="namespace-switch" style="width: 100%; padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;"></select>
+    </div>
     <div class="stats">
       <div class="stat">
         <div class="stat-value" id="lead-count">0</div>
@@ -122,8 +213,38 @@
         <div class="stat-label">Activities</div>
       </div>
     </div>
+    <div style="margin: 12px 0;">
+      <label style="font-size: 12px; color: #666; display: block; margin-bottom: 4px;">Import tag</label>
+      <div style="position: relative;">
+        <input type="text" id="import-tag" list="tag-suggestions" placeholder="e.g. LinkedIn Import Mar 2026" autocomplete="off"
+          style="width: 100%; padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;" />
+        <datalist id="tag-suggestions"></datalist>
+      </div>
+    </div>
+    <div style="margin: 12px 0;">
+      <label style="font-size: 12px; color: #666; display: block; margin-bottom: 4px;">Max contacts per run</label>
+      <select id="max-contacts" style="width: 100%; padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;">
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="250">250</option>
+        <option value="500">500</option>
+        <option value="0">All</option>
+      </select>
+    </div>
+    <!-- Load Leads (primary action) -->
+    <div id="load-leads-section">
+      <button class="btn-load-leads" id="load-leads-btn">Load Leads</button>
+      <button class="btn btn-stop hidden" id="stop-extraction-btn" style="width: 100%; margin-top: 6px;">Stop Extraction</button>
+      <div id="extraction-status" class="extraction-status hidden"></div>
+    </div>
+
+    <hr class="section-divider" />
+
+    <!-- Sync Activities (secondary action) -->
+    <div class="section-label">Activities</div>
     <div class="actions">
-      <button class="btn btn-sync" id="sync-btn">Sync Now</button>
+      <button class="btn btn-sync" id="sync-btn">Sync Activities</button>
       <button class="btn btn-secondary" id="logout-btn">Logout</button>
     </div>
     <div id="sync-status" style="margin-top: 8px; font-size: 12px; color: #666;"></div>

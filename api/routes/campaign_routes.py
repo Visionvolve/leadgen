@@ -10,8 +10,11 @@ from ..display import display_campaign_status, display_tier, display_status
 from ..models import (
     Campaign,
     CampaignContact,
+    CampaignStep,
     CampaignTemplate,
     LinkedInSendQueue,
+    Message,
+    MessageFeedback,
     StrategyDocument,
     db,
 )
@@ -1340,11 +1343,14 @@ def generation_cost_estimate(campaign_id):
     if total_contacts == 0:
         return jsonify({"error": "No contacts in campaign"}), 400
 
+    step_count = CampaignStep.query.filter_by(campaign_id=campaign_id).count()
     enabled = [s for s in template_config if s.get("enabled")]
-    if not enabled:
+    if step_count == 0 and not enabled:
         return jsonify({"error": "No enabled message steps"}), 400
 
-    estimate = estimate_generation_cost(template_config, total_contacts)
+    estimate = estimate_generation_cost(
+        template_config, total_contacts, campaign_id=campaign_id, tenant_id=tenant_id
+    )
 
     # Enrichment gap analysis — find contacts missing key stages
     gap_rows = db.session.execute(
@@ -1424,6 +1430,31 @@ def start_campaign_generation(campaign_id):
     total_contacts = row[1] or 0
     template_config = _parse_jsonb(row[2]) or []
 
+    # Auto-migrate template_config to campaign_steps if no steps exist
+    existing_steps = CampaignStep.query.filter_by(campaign_id=campaign_id).count()
+    if existing_steps == 0 and template_config:
+        tpl_steps = (
+            template_config
+            if isinstance(template_config, list)
+            else json.loads(template_config or "[]")
+        )
+        for i, ts in enumerate([s for s in tpl_steps if s.get("enabled")], 1):
+            step = CampaignStep(
+                campaign_id=campaign_id,
+                tenant_id=str(tenant_id),
+                position=i,
+                channel=ts.get("channel", "linkedin_message"),
+                day_offset=ts.get("day_offset", 0),
+                label=ts.get("label", f"Step {i}"),
+                config={
+                    k: v
+                    for k, v in ts.items()
+                    if k not in ("channel", "day_offset", "label", "step", "enabled")
+                },
+            )
+            db.session.add(step)
+        db.session.commit()
+
     # Must be in ready status to start generation
     if current_status != "ready":
         return jsonify(
@@ -1435,8 +1466,9 @@ def start_campaign_generation(campaign_id):
     if total_contacts == 0:
         return jsonify({"error": "No contacts in campaign"}), 400
 
+    step_count = CampaignStep.query.filter_by(campaign_id=campaign_id).count()
     enabled = [s for s in template_config if s.get("enabled")]
-    if not enabled:
+    if step_count == 0 and not enabled:
         return jsonify({"error": "No enabled message steps"}), 400
 
     # Handle skip_unenriched flag
@@ -3075,3 +3107,59 @@ def _generate_campaign_name(extracted: dict, contact_count: int) -> str:
         return f"{focus} — {quarter} {year}"
 
     return f"Outreach Campaign — {quarter} {year} ({contact_count} contacts)"
+
+
+# ── Feedback Summary ─────────────────────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/feedback-summary", methods=["GET"])
+@require_auth
+def feedback_summary(campaign_id):
+    """Aggregated feedback stats for a campaign."""
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify campaign belongs to tenant
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": str(tenant_id)},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    feedbacks = MessageFeedback.query.filter_by(campaign_id=campaign_id).all()
+
+    by_action = {}
+    edit_reasons = {}
+    for f in feedbacks:
+        by_action[f.action] = by_action.get(f.action, 0) + 1
+        if f.edit_reason:
+            edit_reasons[f.edit_reason] = edit_reasons.get(f.edit_reason, 0) + 1
+
+    # Per-step approval rate
+    step_stats = {}
+    for f in feedbacks:
+        msg = db.session.get(Message, f.message_id)
+        if msg and msg.campaign_step_id:
+            sid = str(msg.campaign_step_id)
+            if sid not in step_stats:
+                step_stats[sid] = {"total": 0, "approved": 0}
+            step_stats[sid]["total"] += 1
+            if f.action == "approved":
+                step_stats[sid]["approved"] += 1
+
+    for sid in step_stats:
+        s = step_stats[sid]
+        s["approval_rate"] = (
+            round(s["approved"] / s["total"] * 100) if s["total"] > 0 else 0
+        )
+
+    return jsonify(
+        {
+            "total": len(feedbacks),
+            "by_action": by_action,
+            "top_edit_reasons": sorted(edit_reasons.items(), key=lambda x: -x[1]),
+            "per_step": step_stats,
+        }
+    )

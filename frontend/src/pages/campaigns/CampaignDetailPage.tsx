@@ -14,6 +14,7 @@ import { MessageGenTab } from './tabs/MessageGenTab'
 import { MessagesTab } from './tabs/MessagesTab'
 import { OutreachTab } from './tabs/OutreachTab'
 import { SettingsTab } from './tabs/SettingsTab'
+import { StepsTab } from './tabs/StepsTab'
 import { CampaignAnalytics } from '../../components/campaign/CampaignAnalytics'
 import { useEntityStack } from '../../hooks/useEntityStack'
 import { useReviewSummary } from '../../api/queries/useMessages'
@@ -29,7 +30,7 @@ const STATUS_COLORS: Record<string, string> = {
   Archived: 'bg-[#8B92A0]/10 text-text-dim border-[#8B92A0]/20',
 }
 
-const TAB_IDS = ['contacts', 'generation', 'review', 'outreach', 'analytics', 'settings'] as const
+const TAB_IDS = ['contacts', 'steps', 'generation', 'review', 'outreach', 'analytics', 'settings'] as const
 type TabId = (typeof TAB_IDS)[number]
 
 export function CampaignDetailPage() {
@@ -147,6 +148,7 @@ export function CampaignDetailPage() {
   // Tab definitions
   const tabs: Tab[] = useMemo(() => [
     { id: 'contacts', label: 'Contacts', badge: contactCount || undefined },
+    { id: 'steps', label: 'Steps' },
     { id: 'generation', label: 'Generation' },
     { id: 'review', label: 'Messages', badge: campaign?.generated_count || undefined },
     { id: 'outreach', label: 'Outreach' },
@@ -287,6 +289,9 @@ export function CampaignDetailPage() {
             isEditable={isEditable}
             onNavigate={handleNavigate}
           />
+        )}
+        {activeTab === 'steps' && (
+          <StepsTab campaignId={campaign.id} isEditable={isEditable} />
         )}
         {activeTab === 'generation' && (
           <MessageGenTab campaign={campaign} isEditable={isEditable} />

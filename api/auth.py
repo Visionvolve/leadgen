@@ -75,7 +75,7 @@ def decode_token(token):
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                audience=current_app.config.get("IAM_AUDIENCE", "leadgen"),
+                options={"verify_aud": False},
             )
         except Exception:
             pass
@@ -106,8 +106,8 @@ def require_auth(f):
         user = None
         iam_user_id = payload.get("sub")
 
-        # Check if this looks like an IAM token (has 'aud' claim)
-        if payload.get("aud"):
+        # Check if this looks like an IAM token (has 'iss' from IAM or 'aud' claim)
+        if payload.get("iss") == "visionvolve-iam" or payload.get("aud"):
             user = User.query.filter_by(iam_user_id=iam_user_id).first()
 
         if not user:

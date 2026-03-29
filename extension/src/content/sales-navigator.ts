@@ -8,15 +8,28 @@
  * Ported from ~/git/linkedin-lead-uploader/content.js
  */
 
-import { config } from '../common/config';
+import { config, jitter } from '../common/config';
 import type {
   RawLeadRow,
   EnrichedLeadRow,
   Lead,
   PaginationInfo,
+  PageInfo,
   ExtractionResult,
   PageExtractionResult,
+  ImportSettings,
+  MultiPageProcess,
+  ExtractionProgress,
 } from '../common/types';
+
+// ============== EXTRACTION GUARD ==============
+// Each content script instance registers a unique ID on load.
+// Only the LATEST instance (highest scriptLoadTime) may run extractions.
+// This prevents stale VM instances (kept alive by Chrome) from duplicating work.
+let extractionInProgress = false;
+const scriptLoadTime = Date.now();
+// Register as the latest content script instance
+chrome.storage.local.set({ latestContentScript: scriptLoadTime });
 
 // ============== LOGGING UTILITY ==============
 const LOG_PREFIX = '[VV Sales Nav]';
@@ -43,8 +56,9 @@ async function rateLimitedFetch(url: string, options: RequestInit): Promise<Resp
     config.maxDelay,
   );
 
-  if (timeSinceLastRequest < currentDelay) {
-    await new Promise<void>((r) => setTimeout(r, currentDelay - timeSinceLastRequest));
+  const jitteredDelay = jitter(currentDelay);
+  if (timeSinceLastRequest < jitteredDelay) {
+    await new Promise<void>((r) => setTimeout(r, jitteredDelay - timeSinceLastRequest));
   }
 
   lastRequestTime = Date.now();
@@ -127,7 +141,50 @@ async function getPublicLinkedInUrl(
   };
 }
 
+// ============== PROGRESS REPORTING ==============
+
+function sendProgress(progress: ExtractionProgress): void {
+  chrome.runtime.sendMessage({ type: 'extraction_progress', progress });
+}
+
 // ============== MAIN EXTRACTION FUNCTION ==============
+
+/** Get the user-chosen import tag, or generate a default one. */
+async function getImportTag(fallback: string): Promise<string> {
+  try {
+    const { import_tag } = await chrome.storage.local.get('import_tag');
+    if (import_tag && typeof import_tag === 'string' && import_tag.trim()) {
+      return import_tag.trim();
+    }
+  } catch {
+    // storage not available
+  }
+  return fallback;
+}
+
+/** Get the max contacts limit from storage (0 = unlimited). */
+async function getMaxContactsLimit(): Promise<number> {
+  try {
+    const { import_settings } = await chrome.storage.local.get('import_settings');
+    return (import_settings as ImportSettings | undefined)?.maxContacts ?? config.defaultMaxContacts;
+  } catch {
+    return config.defaultMaxContacts;
+  }
+}
+
+/** Get how many leads have already been collected in this multi-page run. */
+async function getMultiPageLeadCount(): Promise<number> {
+  try {
+    const { multiPageProcess } = await chrome.storage.local.get('multiPageProcess');
+    const process = multiPageProcess as MultiPageProcess | undefined;
+    if (process && process.active && !process.stopped) {
+      return process.totalLeads;
+    }
+  } catch {
+    // not in multi-page mode
+  }
+  return 0;
+}
 
 async function extractLeads(): Promise<ExtractionResult> {
   log.info('Starting LinkedIn Sales Navigator extraction...');
@@ -232,6 +289,21 @@ async function extractLeads(): Promise<ExtractionResult> {
 
   log.success(`Extracted ${leads.length} leads from DOM`);
 
+  // 2b. Apply max contacts limit
+  const maxContacts = await getMaxContactsLimit();
+  if (maxContacts > 0) {
+    const alreadyCollected = await getMultiPageLeadCount();
+    const remaining = Math.max(0, maxContacts - alreadyCollected);
+    if (remaining === 0) {
+      log.info(`Max contacts limit reached (${maxContacts}), skipping extraction`);
+      return { success: true, results: [], leadCount: 0, stats: { profileUrlsFound: 0, companyDataFound: 0, duration: '0' } };
+    }
+    if (leads.length > remaining) {
+      log.info(`Trimming leads from ${leads.length} to ${remaining} (limit: ${maxContacts}, already collected: ${alreadyCollected})`);
+      leads.splice(remaining);
+    }
+  }
+
   // 3. Fetch enrichment data (company data + public profile URLs)
   log.info('Starting data enrichment (company data + public profile URLs)...');
 
@@ -247,6 +319,13 @@ async function extractLeads(): Promise<ExtractionResult> {
   let companyDataFound = 0;
 
   for (const lead of leads) {
+    // Check if extraction was stopped by the user
+    const { multiPageProcess: proc } = await chrome.storage.local.get(['multiPageProcess']);
+    if (proc && (proc.stopped || !proc.active)) {
+      log.info('Extraction stopped by user, aborting enrichment');
+      break;
+    }
+
     const row: EnrichedLeadRow = {
       name: lead.name,
       jobTitle: lead.jobTitle,
@@ -257,6 +336,15 @@ async function extractLeads(): Promise<ExtractionResult> {
       employees: '',
       website: '',
     };
+
+    // Report progress: enriching profile
+    sendProgress({
+      currentLead: processed + 1,
+      totalLeadsOnPage: leads.length,
+      currentLeadName: lead.name,
+      phase: 'enriching_profile',
+      updatedAt: Date.now(),
+    });
 
     // Fetch public LinkedIn profile URL
     try {
@@ -280,6 +368,16 @@ async function extractLeads(): Promise<ExtractionResult> {
 
     // Fetch company data
     if (lead.companyId) {
+      // Report progress: enriching company
+      sendProgress({
+        currentLead: processed + 1,
+        totalLeadsOnPage: leads.length,
+        currentLeadName: lead.name,
+        phase: 'enriching_company',
+        currentCompany: lead.company,
+        updatedAt: Date.now(),
+      });
+
       try {
         log.debug(`Fetching company data for ${lead.company}...`);
         const url = `https://www.linkedin.com/sales-api/salesApiCompanies/${lead.companyId}?decoration=%28entityUrn%2Cname%2CemployeeCountRange%2CrevenueRange%2Cindustry%2Cwebsite%29`;
@@ -323,6 +421,15 @@ async function extractLeads(): Promise<ExtractionResult> {
       log.progress(processed, leads.length, `${lead.name} - ${lead.company}`);
     }
   }
+
+  // Report progress: done enriching
+  sendProgress({
+    currentLead: leads.length,
+    totalLeadsOnPage: leads.length,
+    currentLeadName: '',
+    phase: 'done',
+    updatedAt: Date.now(),
+  });
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   log.success(`Data enrichment complete in ${duration}s`);
@@ -446,7 +553,8 @@ async function runExtraction(): Promise<ExtractionResult> {
 
     // Step 3: Send to service worker for upload
     const currentPage = new URL(window.location.href).searchParams.get('page') || '1';
-    const tag = `sn-import-p${currentPage}-${Date.now()}`;
+    const autoTag = `sn-import-p${currentPage}-${Date.now()}`;
+    const tag = await getImportTag(autoTag);
 
     log.info(`Sending ${leads.length} leads to service worker...`);
 
@@ -520,8 +628,10 @@ async function waitForPageReady(): Promise<boolean> {
   return false;
 }
 
-/** Run extraction and report results back to service worker (multi-page mode). */
-async function runExtractionAndReport(): Promise<void> {
+/** Run extraction and report results back to service worker (multi-page mode).
+ *  @param messageTag - tag passed from service worker via message channel (primary source)
+ */
+async function runExtractionAndReport(messageTag?: string): Promise<void> {
   try {
     log.info('Running extraction for multi-page process...');
 
@@ -534,26 +644,43 @@ async function runExtractionAndReport(): Promise<void> {
       return;
     }
 
+    // Check if stopped before uploading
+    const { multiPageProcess: stopCheck } = await chrome.storage.local.get(['multiPageProcess']);
+    if (stopCheck && (stopCheck.stopped || !stopCheck.active)) {
+      log.info('Extraction stopped before upload, aborting');
+      return;
+    }
+
     // Convert and send leads
     const leads = convertToLeads(extraction.results);
     const currentPage = new URL(window.location.href).searchParams.get('page') || '1';
-    const tag = `sn-import-p${currentPage}-${Date.now()}`;
+    const autoTag = `sn-import-p${currentPage}-${Date.now()}`;
+    // Prefer tag from message channel (passed by service worker), fall back to storage
+    const tag = (messageTag && messageTag.trim()) ? messageTag.trim() : await getImportTag(autoTag);
 
-    chrome.runtime.sendMessage(
-      {
-        type: 'leads_extracted',
-        leads,
-        source: 'sales_navigator',
-        tag,
-      },
-      (uploadResponse?: { success: boolean; error?: string }) => {
-        if (uploadResponse?.success) {
-          log.success(`Upload successful for page ${currentPage}`);
-        } else {
-          log.warn(`Upload failed: ${uploadResponse?.error || 'Unknown'}`);
-        }
-      },
-    );
+    // Wait for upload to complete before reporting page result
+    const uploadResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'leads_extracted',
+          leads,
+          source: 'sales_navigator',
+          tag,
+        },
+        (uploadResponse?: { success: boolean; error?: string }) => {
+          if (chrome.runtime.lastError) {
+            log.error(`Upload messaging error: ${chrome.runtime.lastError.message}`);
+            resolve({ success: false, error: chrome.runtime.lastError.message });
+          } else if (uploadResponse?.success) {
+            log.success(`Upload successful for page ${currentPage}`);
+            resolve({ success: true });
+          } else {
+            log.error(`Upload FAILED for page ${currentPage}: ${uploadResponse?.error || 'Unknown'}`);
+            resolve({ success: false, error: uploadResponse?.error || 'Unknown' });
+          }
+        },
+      );
+    });
 
     // Get pagination info and report completion
     const pagination = getPaginationInfo();
@@ -563,12 +690,16 @@ async function runExtractionAndReport(): Promise<void> {
     const tabId = multiPageProcess?.tabId as number | undefined;
 
     const result: PageExtractionResult = {
-      success: true,
-      leadCount: extraction.leadCount || 0,
+      success: uploadResult.success,
+      leadCount: uploadResult.success ? (extraction.leadCount || 0) : 0,
       stats: extraction.stats,
       hasNextPage: pagination.hasNextPage,
       nextPage: pagination.nextPage,
     };
+
+    if (!uploadResult.success) {
+      log.error(`Page ${currentPage} upload failed — reporting failure to service worker`);
+    }
 
     chrome.runtime.sendMessage({
       type: 'page_extraction_complete',
@@ -581,11 +712,55 @@ async function runExtractionAndReport(): Promise<void> {
   }
 }
 
+// ============== PAGE INFO (for import preview) ==============
+
+function getPageInfo(): PageInfo {
+  const currentPage = parseInt(
+    new URL(window.location.href).searchParams.get('page') || '1',
+    10,
+  );
+
+  // Count visible contact card rows (same selector used by extractLeads)
+  const contactsOnPage = document.querySelectorAll('tr[data-row-id]').length;
+
+  // Read total results from the SN search header (e.g. "1,234 results")
+  let totalResults: number | null = null;
+  const resultText = document.body.innerText.match(/(\d+(?:,\d+)?)\s+results?/i);
+  if (resultText) {
+    totalResults = parseInt(resultText[1].replace(/,/g, ''), 10);
+  }
+
+  // Calculate total pages from result count or pagination buttons
+  let totalPages: number | null = null;
+  if (totalResults) {
+    totalPages = Math.ceil(totalResults / 25);
+  } else {
+    // Fall back to pagination buttons
+    const paginationButtons = document.querySelectorAll(
+      '[class*="pagination"] button, [class*="artdeco-pagination"] button',
+    );
+    paginationButtons.forEach((btn) => {
+      const num = parseInt((btn.textContent || '').trim(), 10);
+      if (!isNaN(num) && (totalPages === null || num > totalPages)) {
+        totalPages = num;
+      }
+    });
+
+    // Also check for "of X pages" text
+    const paginationText = document.body.innerText.match(/of\s+(\d+)\s*pages?/i);
+    if (paginationText) {
+      totalPages = parseInt(paginationText[1], 10);
+    }
+  }
+
+  return { currentPage, totalResults, totalPages, contactsOnPage };
+}
+
 // ============== MESSAGE HANDLER ==============
 
 chrome.runtime.onMessage.addListener(
   (
-    request: { action?: string; type?: string },
+    request: { action?: string; type?: string; tag?: string },
     _sender: chrome.runtime.MessageSender,
     sendResponse: (response: unknown) => void,
   ): boolean | void => {
@@ -596,10 +771,31 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (request.action === 'extractAndReport' || request.type === 'extract_page') {
-      log.info('Starting extraction for multi-page process...');
-      runExtractionAndReport();
-      sendResponse({ success: true, message: 'Extraction started' });
-      return true;
+      // Guard 1: local variable (same VM instance)
+      if (extractionInProgress) {
+        log.warn('Extraction already in progress (local guard), ignoring');
+        sendResponse({ success: false, message: 'Extraction already in progress' });
+        return true;
+      }
+
+      // Guard 2: only the LATEST content script instance may run extractions
+      // (Chrome keeps old VM instances alive after SPA navigation)
+      chrome.storage.local.get(['latestContentScript'], (data) => {
+        const latest = data.latestContentScript as number | undefined;
+        if (latest && latest !== scriptLoadTime) {
+          log.warn(`Stale content script (${scriptLoadTime} vs latest ${latest}), ignoring`);
+          sendResponse({ success: false, message: 'Stale content script' });
+          return;
+        }
+
+        extractionInProgress = true;
+        log.info('Starting extraction for multi-page process...');
+        runExtractionAndReport(request.tag).finally(() => {
+          extractionInProgress = false;
+        });
+        sendResponse({ success: true, message: 'Extraction started' });
+      });
+      return true; // keep message channel open for async sendResponse
     }
 
     if (request.action === 'checkPage' || request.type === 'check_page') {
@@ -614,6 +810,12 @@ chrome.runtime.onMessage.addListener(
         totalPages: pagination.totalPages,
         hasNextPage: pagination.hasNextPage,
       });
+      return true;
+    }
+
+    if (request.action === 'getPageInfo' || request.type === 'get_page_info') {
+      const pageInfo = getPageInfo();
+      sendResponse(pageInfo);
       return true;
     }
 
@@ -656,5 +858,123 @@ chrome.runtime.onMessage.addListener(
   }
 })();
 
+// ============== LINKEDIN IDENTITY DETECTION ==============
+
+/**
+ * Detect the logged-in LinkedIn user from the global nav.
+ * Works on both regular LinkedIn and Sales Navigator pages.
+ */
+function detectLinkedInIdentity(): { linkedin_name: string; linkedin_url: string } | null {
+  // Sales Navigator global nav: profile link in the nav
+  // Try multiple selectors for resilience across LinkedIn UI versions
+
+  // Method 1: Global nav "Me" button area (regular LinkedIn + SN)
+  const mePhoto = document.querySelector<HTMLImageElement>('.global-nav__me-photo');
+  const meLink = document.querySelector<HTMLAnchorElement>('.global-nav__primary-link');
+
+  // Method 2: SN-specific nav profile link
+  const snProfileLink = document.querySelector<HTMLAnchorElement>(
+    'nav a[href*="/in/"], header a[href*="/in/"]',
+  );
+
+  // Method 3: Any profile link in top nav area
+  const navArea =
+    document.querySelector('.global-nav') ||
+    document.querySelector('[data-test-global-nav]') ||
+    document.querySelector('header');
+
+  let profileUrl: string | null = null;
+  let displayName: string | null = null;
+
+  // Try to find profile URL from nav links
+  if (meLink?.href?.includes('/in/')) {
+    profileUrl = meLink.href;
+  } else if (snProfileLink?.href) {
+    profileUrl = snProfileLink.href;
+  } else if (navArea) {
+    const navProfileLinks = navArea.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]');
+    for (const link of navProfileLinks) {
+      // Skip links that look like they're for other people (e.g., feed items)
+      if (link.closest('.feed') || link.closest('.search-results')) continue;
+      profileUrl = link.href;
+      break;
+    }
+  }
+
+  // Try to extract display name
+  if (mePhoto?.alt) {
+    displayName = mePhoto.alt;
+  }
+
+  // Try nav text content for name
+  if (!displayName) {
+    const meContent = document.querySelector('.global-nav__me-content');
+    if (meContent) {
+      const nameEl = meContent.querySelector('.t-16, .t-14, .t-bold');
+      if (nameEl?.textContent) {
+        displayName = nameEl.textContent.trim();
+      }
+    }
+  }
+
+  // SN-specific: look for user name in the nav
+  if (!displayName && navArea) {
+    const nameEls = navArea.querySelectorAll(
+      '.global-nav__me-content span, .nav-item__profile-member-photo',
+    );
+    for (const el of nameEls) {
+      const text = (el.textContent || '').trim();
+      if (text.length > 1 && text.length < 60 && !text.includes('Premium')) {
+        displayName = text;
+        break;
+      }
+    }
+  }
+
+  // If we still have no name but have a URL, extract from URL slug
+  if (!displayName && profileUrl) {
+    const slugMatch = profileUrl.match(/\/in\/([^/?]+)/);
+    if (slugMatch) {
+      displayName = slugMatch[1].replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+
+  if (!profileUrl || !displayName) {
+    return null;
+  }
+
+  // Normalize the profile URL (ensure it ends with /)
+  const urlMatch = profileUrl.match(/(https:\/\/www\.linkedin\.com\/in\/[^/?]+)/);
+  const normalizedUrl = urlMatch ? urlMatch[1] + '/' : profileUrl;
+
+  return {
+    linkedin_name: displayName,
+    linkedin_url: normalizedUrl,
+  };
+}
+
+// Detect identity after DOM stabilization and report to service worker
+setTimeout(() => {
+  const identity = detectLinkedInIdentity();
+  if (identity) {
+    log.info(`Detected LinkedIn identity: ${identity.linkedin_name} (${identity.linkedin_url})`);
+    chrome.storage.local.set({ linkedinIdentity: identity });
+    chrome.runtime.sendMessage({
+      type: 'linkedin_identity',
+      linkedin_name: identity.linkedin_name,
+      linkedin_url: identity.linkedin_url,
+    });
+  } else {
+    log.debug('Could not detect LinkedIn identity from nav');
+  }
+}, 2000);
+
 log.success('Sales Navigator content script loaded and ready');
 log.info(`Page URL: ${window.location.href}`);
+
+// Send page info proactively when loading on a search page
+setTimeout(() => {
+  const pageInfo = getPageInfo();
+  chrome.runtime.sendMessage({ type: 'page_info', pageInfo });
+  log.debug('Sent page_info:', pageInfo);
+}, 1500); // Wait for DOM to stabilize

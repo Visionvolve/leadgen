@@ -2,8 +2,23 @@ from flask import Blueprint, jsonify, request
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import display_status, display_tier
-from ..models import db, EDIT_REASONS
+from ..models import db, EDIT_REASONS, MessageFeedback
 from ..services.message_generator import regenerate_message, estimate_regeneration_cost
+
+
+def _get_campaign_id_for_message(message_id, tenant_id):
+    """Resolve campaign_id from message → campaign_contact → campaign."""
+    row = db.session.execute(
+        db.text("""
+            SELECT cc.campaign_id
+            FROM messages m
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE m.id = :mid AND m.tenant_id = :t
+        """),
+        {"mid": message_id, "t": tenant_id},
+    ).fetchone()
+    return str(row[0]) if row else None
+
 
 messages_bp = Blueprint("messages", __name__)
 
@@ -196,6 +211,46 @@ def update_message(message_id):
         ),
         params,
     )
+
+    # Auto-capture feedback
+    campaign_id = _get_campaign_id_for_message(message_id, tenant_id)
+
+    if body_changed or subject_changed:
+        changed_field = "body" if body_changed else "subject"
+        before_val = current_body if body_changed else current_subject
+        after_val = fields.get("body") if body_changed else fields.get("subject")
+        feedback = MessageFeedback(
+            message_id=message_id,
+            campaign_id=campaign_id,
+            action="edited",
+            edit_diff={
+                "field": changed_field,
+                "before": before_val,
+                "after": after_val,
+            },
+            edit_reason=fields.get("edit_reason"),
+            edit_reason_text=fields.get("edit_reason_text"),
+        )
+        db.session.add(feedback)
+
+    if "status" in fields:
+        if fields["status"] == "approved":
+            db.session.add(
+                MessageFeedback(
+                    message_id=message_id,
+                    campaign_id=campaign_id,
+                    action="approved",
+                )
+            )
+        elif fields["status"] == "rejected":
+            db.session.add(
+                MessageFeedback(
+                    message_id=message_id,
+                    campaign_id=campaign_id,
+                    action="rejected",
+                )
+            )
+
     db.session.commit()
 
     return jsonify({"ok": True})
@@ -235,16 +290,18 @@ def regen_message(message_id):
         return jsonify({"error": "instruction must be 200 characters or fewer"}), 400
 
     # Verify message is not currently being generated
-    msg_status = db.session.execute(
-        db.text("SELECT status FROM messages WHERE id = :id AND tenant_id = :t"),
+    msg_row = db.session.execute(
+        db.text("SELECT status, body FROM messages WHERE id = :id AND tenant_id = :t"),
         {"id": message_id, "t": tenant_id},
     ).fetchone()
-    if not msg_status:
+    if not msg_row:
         return jsonify({"error": "Message not found"}), 404
-    if msg_status[0] == "generating":
+    if msg_row[0] == "generating":
         return jsonify(
             {"error": "Cannot regenerate while message is being generated"}
         ), 409
+
+    old_body_before_regen = msg_row[1]
 
     from flask import g
 
@@ -266,6 +323,17 @@ def regen_message(message_id):
 
     if not result:
         return jsonify({"error": "Message not found"}), 404
+
+    # Record regeneration feedback
+    campaign_id = _get_campaign_id_for_message(message_id, tenant_id)
+    feedback = MessageFeedback(
+        message_id=message_id,
+        campaign_id=campaign_id,
+        action="regenerated",
+        edit_diff={"before_body": old_body_before_regen},
+    )
+    db.session.add(feedback)
+    db.session.commit()
 
     return jsonify(result)
 
@@ -368,6 +436,20 @@ def batch_update_messages():
         """),
         params,
     )
+
+    # Auto-capture feedback for batch status changes
+    if "status" in fields and fields["status"] in ("approved", "rejected"):
+        action = fields["status"]
+        for msg_id in ids:
+            campaign_id = _get_campaign_id_for_message(msg_id, tenant_id)
+            db.session.add(
+                MessageFeedback(
+                    message_id=msg_id,
+                    campaign_id=campaign_id,
+                    action=action,
+                )
+            )
+
     db.session.commit()
 
     return jsonify({"ok": True, "updated": len(ids)})

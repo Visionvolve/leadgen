@@ -1,0 +1,92 @@
+name: Run Staging Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Migration command'
+        required: true
+        default: 'status'
+        type: choice
+        options:
+          - upgrade
+          - status
+          - downgrade
+      migration_file:
+        description: 'SQL file to run (upgrade only, e.g. 032_outreach_campaign_tables.sql)'
+        required: false
+        type: string
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/staging.pem
+          chmod 600 ~/.ssh/staging.pem
+          ssh-keyscan -H 3.124.110.199 >> ~/.ssh/known_hosts
+
+      - name: Check migration status
+        if: inputs.command == 'status'
+        run: |
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 << 'REMOTE'
+            cd ~/staging
+            docker compose -f docker-compose.yml -f docker-compose.leadgen.yml exec -T leadgen-api \
+              python3 -c "
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          cur = conn.cursor()
+          cur.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name\")
+          print('=== Tables in leadgen staging database ===')
+          for row in cur.fetchall():
+              print(f'  {row[0]}')
+          cur.execute(\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\")
+          print(f'\\nTotal: {cur.fetchone()[0]} tables')
+          conn.close()
+          "
+          REMOTE
+
+      - name: Run upgrade migration
+        if: inputs.command == 'upgrade'
+        env:
+          MIGRATION_FILE: ${{ inputs.migration_file }}
+        run: |
+          if [ -z "$MIGRATION_FILE" ]; then
+            echo "::error::migration_file is required for upgrade. Specify the SQL filename from migrations/"
+            exit 1
+          fi
+          if [ ! -f "migrations/$MIGRATION_FILE" ]; then
+            echo "::error::File migrations/$MIGRATION_FILE not found"
+            echo "Available migrations:"
+            ls -1 migrations/*.sql
+            exit 1
+          fi
+          echo "Uploading and running migrations/$MIGRATION_FILE..."
+          scp -i ~/.ssh/staging.pem "migrations/$MIGRATION_FILE" ec2-user@3.124.110.199:/tmp/leadgen_migration.sql
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 << 'REMOTE'
+            cd ~/staging
+            docker cp /tmp/leadgen_migration.sql $(docker compose -f docker-compose.yml -f docker-compose.leadgen.yml ps -q leadgen-api):/tmp/migration.sql
+            docker compose -f docker-compose.yml -f docker-compose.leadgen.yml exec -T leadgen-api \
+              python3 -c "
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          conn.autocommit = True
+          cur = conn.cursor()
+          with open('/tmp/migration.sql') as f:
+              cur.execute(f.read())
+          print('Migration applied successfully.')
+          conn.close()
+          "
+          REMOTE
+
+      - name: Downgrade (not supported)
+        if: inputs.command == 'downgrade'
+        run: |
+          echo "::warning::Downgrade is not supported for raw SQL migrations."
+          echo "Write a reverse migration SQL file and run it via the 'upgrade' command."
+          exit 1

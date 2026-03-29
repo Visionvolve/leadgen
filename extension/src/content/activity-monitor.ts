@@ -7,7 +7,7 @@
  * Ported from ~/git/linkedin-lead-uploader/activity-monitor.js
  */
 
-import { config } from '../common/config';
+import { config, jitter } from '../common/config';
 import type { ActivityEvent } from '../common/types';
 
 // ============== LOGGING ==============
@@ -233,8 +233,8 @@ async function apiRequest(
 
   log.info(`API call ${apiCallCount}/${config.maxApiCallsPerSync}: ${fullUrl}`);
 
-  // Rate limiting delay
-  await sleep(config.activityApiDelay);
+  // Rate limiting delay with jitter
+  await sleep(jitter(config.activityApiDelay));
 
   const response = await fetch(fullUrl, {
     headers: {

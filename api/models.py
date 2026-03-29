@@ -1,3 +1,5 @@
+import uuid
+
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 
@@ -1071,6 +1073,9 @@ class Message(db.Model):
     campaign_contact_id = db.Column(
         UUID(as_uuid=False), db.ForeignKey("campaign_contacts.id")
     )
+    campaign_step_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("campaign_steps.id"), nullable=True
+    )
     # Version tracking + regeneration (migration 027)
     original_body = db.Column(db.Text)
     original_subject = db.Column(db.Text)
@@ -1133,6 +1138,9 @@ class Campaign(db.Model):
     target_criteria = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
     conflict_report = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
     contact_cooldown_days = db.Column(db.Integer, default=30)
+    linkedin_account_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("linkedin_accounts.id"), nullable=True
+    )
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     airtable_record_id = db.Column(db.Text)
@@ -1185,6 +1193,67 @@ class CampaignTemplate(db.Model):
     is_system = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+
+class CampaignStep(db.Model):
+    """A single step in a campaign outreach sequence."""
+
+    __tablename__ = "campaign_steps"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("uuid_generate_v4()"),
+    )
+    campaign_id = db.Column(
+        UUID(as_uuid=False),
+        db.ForeignKey("campaigns.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    position = db.Column(db.Integer, nullable=False, default=1)
+    channel = db.Column(db.String(50), nullable=False, default="linkedin_message")
+    day_offset = db.Column(db.Integer, nullable=False, default=0)
+    label = db.Column(db.String(255), nullable=False, default="")
+    config = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
+    condition = db.Column(db.String(50), nullable=False, default="always")
+    execution_status = db.Column(db.String(50), nullable=False, default="pending")
+    started_at = db.Column(db.DateTime(timezone=True))
+    completed_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+    campaign = db.relationship(
+        "Campaign",
+        backref=db.backref("steps", lazy="dynamic", order_by="CampaignStep.position"),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "campaign_id", "position", name="uq_campaign_step_position"
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "campaign_id": self.campaign_id,
+            "position": self.position,
+            "channel": self.channel,
+            "day_offset": self.day_offset,
+            "label": self.label,
+            "config": self.config or {},
+            "condition": self.condition or "always",
+            "execution_status": self.execution_status or "pending",
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat()
+            if self.completed_at
+            else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
 
 
 class CampaignOverlapLog(db.Model):
@@ -1697,4 +1766,115 @@ class LinkedInSendQueue(db.Model):
             "error": self.error,
             "retry_count": self.retry_count,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class LinkedInAccount(db.Model):
+    __tablename__ = "linkedin_accounts"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("gen_random_uuid()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    owner_id = db.Column(UUID(as_uuid=False), db.ForeignKey("owners.id"), nullable=True)
+    linkedin_name = db.Column(db.String(255), nullable=False)
+    linkedin_url = db.Column(db.String(500), nullable=False)
+    last_seen_at = db.Column(
+        db.DateTime(timezone=True), server_default=db.text("now()")
+    )
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "tenant_id", "linkedin_url", name="uq_linkedin_accounts_tenant_url"
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "owner_id": str(self.owner_id) if self.owner_id else None,
+            "linkedin_name": self.linkedin_name,
+            "linkedin_url": self.linkedin_url,
+            "last_seen_at": (
+                self.last_seen_at.isoformat() if self.last_seen_at else None
+            ),
+            "is_active": self.is_active,
+            "created_at": (self.created_at.isoformat() if self.created_at else None),
+            "updated_at": (self.updated_at.isoformat() if self.updated_at else None),
+        }
+
+
+class Asset(db.Model):
+    __tablename__ = "assets"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("gen_random_uuid()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    campaign_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("campaigns.id"), nullable=True
+    )
+    filename = db.Column(db.String(500), nullable=False)
+    content_type = db.Column(db.String(100), nullable=False)
+    storage_path = db.Column(db.String(1000), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False, default=0)
+    metadata_ = db.Column(
+        "metadata", JSONB, nullable=False, server_default=db.text("'{}'::jsonb")
+    )
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "campaign_id": str(self.campaign_id) if self.campaign_id else None,
+            "filename": self.filename,
+            "content_type": self.content_type,
+            "storage_path": self.storage_path,
+            "size_bytes": self.size_bytes,
+            "metadata": self.metadata_ or {},
+            "created_at": (self.created_at.isoformat() if self.created_at else None),
+        }
+
+
+class MessageFeedback(db.Model):
+    __tablename__ = "message_feedback"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    message_id = db.Column(
+        db.String(36),
+        db.ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    campaign_id = db.Column(db.String(36), db.ForeignKey("campaigns.id"), nullable=True)
+    action = db.Column(db.String(50), nullable=False)
+    edit_diff = db.Column(JSONB, nullable=True)
+    edit_reason = db.Column(db.String(100), nullable=True)
+    edit_reason_text = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+    message = db.relationship("Message", backref=db.backref("feedback", lazy="dynamic"))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "message_id": self.message_id,
+            "campaign_id": self.campaign_id,
+            "action": self.action,
+            "edit_diff": self.edit_diff,
+            "edit_reason": self.edit_reason,
+            "edit_reason_text": self.edit_reason_text,
+            "created_at": (self.created_at.isoformat() if self.created_at else None),
         }

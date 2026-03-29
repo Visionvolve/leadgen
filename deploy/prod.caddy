@@ -1,0 +1,28 @@
+# leadgen — enrichment dashboard + API
+# Namespace routing: /{slug}/page → /page (Caddy strips prefix, JS reads namespace from URL)
+leadgen.visionvolve.com {
+    import access_log
+    handle /api/* {
+        reverse_proxy leadgen-api:5000
+    }
+    # Serve React SPA build assets directly (before namespace stripping)
+    handle /assets/* {
+        root * /srv/dashboard
+        file_server
+    }
+    # Namespaced routes: /{slug}/page → strip slug prefix → serve from /srv/dashboard
+    @namespace path_regexp ns ^/([a-z0-9][a-z0-9_-]+)(/.+)?$
+    handle @namespace {
+        uri strip_prefix /{re.ns.1}
+        root * /srv/dashboard
+        try_files {path} {path}.html /index.html
+        file_server
+    }
+
+    # Root-level pages (login, admin, etc.) → old dashboard
+    handle {
+        root * /srv/dashboard
+        try_files {path} {path}.html /index.html
+        file_server
+    }
+}

@@ -1,0 +1,15 @@
+leadgen-staging.visionvolve.com {
+    import access_log
+    handle /api/* {
+        reverse_proxy leadgen-api:5000
+    }
+    handle /assets/* {
+        root * /srv/dashboard
+        file_server
+    }
+    handle {
+        root * /srv/dashboard
+        try_files {path} {path}.html /index.html
+        file_server
+    }
+}

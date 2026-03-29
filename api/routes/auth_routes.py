@@ -60,7 +60,7 @@ def login():
 
     iam_data = iam_resp.json()
     iam_user = iam_data.get("user", {})
-    iam_permissions = iam_user.get("permissions", [])
+    iam_permissions = iam_data.get("permissions", [])
 
     # Find or create local user
     local_user = find_or_create_local_user(
@@ -81,8 +81,8 @@ def login():
     # Pass through IAM tokens
     return jsonify(
         {
-            "access_token": iam_data.get("access_token"),
-            "refresh_token": iam_data.get("refresh_token"),
+            "access_token": iam_data.get("accessToken"),
+            "refresh_token": iam_data.get("refreshToken"),
             "user": local_user.to_dict(include_roles=True),
         }
     )

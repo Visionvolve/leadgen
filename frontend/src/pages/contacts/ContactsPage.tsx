@@ -51,6 +51,16 @@ function buildGroupOptions(
   }))
 }
 
+/** Build FilterGroup options directly from facet data (no display map — values are already human-readable) */
+function buildFacetOptions(facets?: { value: string; count: number }[]) {
+  if (!facets) return []
+  return facets.map((f) => ({
+    value: f.value,
+    label: f.value,
+    count: f.count,
+  }))
+}
+
 export function ContactsPage() {
   const { namespace } = useParams<{ namespace: string }>()
   const navigate = useNavigate()
@@ -284,6 +294,24 @@ export function ContactsPage() {
       onSelectionChange: (v: string[]) => { setMultiFilter('linkedin_activity', v); handleDeselectAll() },
       onExcludeToggle: () => { toggleExclude('linkedin_activity'); handleDeselectAll() },
       searchable: false,
+    },
+    {
+      key: 'skills',
+      label: 'Skills / Expertise',
+      options: buildFacetOptions(facets?.skills),
+      selected: getMulti('skills').values,
+      exclude: getMulti('skills').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('skills', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('skills'); handleDeselectAll() },
+    },
+    {
+      key: 'interests',
+      label: 'Interests / Technology',
+      options: buildFacetOptions(facets?.interests),
+      selected: getMulti('interests').values,
+      exclude: getMulti('interests').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('interests', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('interests'); handleDeselectAll() },
     },
   ], [facets, getMulti, setMultiFilter, toggleExclude, handleDeselectAll])
 

@@ -1,7 +1,9 @@
-import type { AuthState } from './types';
+import type { AuthState, ImportSettings } from './types';
 import { config } from './config';
 
 const STORAGE_KEY = 'auth_state';
+const IMPORT_SETTINGS_KEY = 'import_settings';
+const IMPORT_TAG_KEY = 'import_tag';
 
 /** Retrieve stored auth state from chrome.storage.local. */
 export async function getAuthState(): Promise<AuthState | null> {
@@ -124,4 +126,26 @@ export async function refreshToken(): Promise<string> {
 /** Clear auth state (logout). */
 export async function logout(): Promise<void> {
   await clearAuthState();
+}
+
+/** Retrieve import settings from chrome.storage.local. */
+export async function getImportSettings(): Promise<ImportSettings> {
+  const result = await chrome.storage.local.get(IMPORT_SETTINGS_KEY);
+  return (result[IMPORT_SETTINGS_KEY] as ImportSettings) ?? { maxContacts: config.defaultMaxContacts };
+}
+
+/** Persist import settings to chrome.storage.local. */
+export async function storeImportSettings(settings: ImportSettings): Promise<void> {
+  await chrome.storage.local.set({ [IMPORT_SETTINGS_KEY]: settings });
+}
+
+/** Retrieve the user-chosen import tag from chrome.storage.local. */
+export async function getImportTag(): Promise<string> {
+  const result = await chrome.storage.local.get(IMPORT_TAG_KEY);
+  return (result[IMPORT_TAG_KEY] as string) ?? '';
+}
+
+/** Persist the import tag to chrome.storage.local. */
+export async function storeImportTag(tag: string): Promise<void> {
+  await chrome.storage.local.set({ [IMPORT_TAG_KEY]: tag });
 }

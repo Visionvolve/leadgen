@@ -60,6 +60,11 @@ function buildContentScriptsPlugin(env: string, mode: string) {
                 ? 'https://leadgen.visionvolve.com'
                 : 'https://leadgen-staging.visionvolve.com',
             ),
+            __IAM_BASE__: JSON.stringify(
+              mode === 'production'
+                ? 'https://iam.visionvolve.com'
+                : 'https://iam-staging.visionvolve.com',
+            ),
             __EXT_ENV__: JSON.stringify(env),
           },
           logLevel: 'warn',
@@ -110,12 +115,13 @@ function mergeManifestPlugin(env: string) {
         JSON.stringify(merged, null, 2),
       );
 
-      // Copy popup HTML
-      const popupSrc = resolve(__dirname, 'src/popup/popup.html');
-      if (existsSync(popupSrc)) {
-        let popupHtml = readFileSync(popupSrc, 'utf-8');
-        popupHtml = popupHtml.replace('./popup.ts', './popup.js');
-        writeFileSync(resolve(outDir, 'popup.html'), popupHtml);
+      // Copy side panel HTML
+      const sidepanelSrc = resolve(__dirname, 'src/popup/sidepanel.html');
+      if (existsSync(sidepanelSrc)) {
+        let sidepanelHtml = readFileSync(sidepanelSrc, 'utf-8');
+        sidepanelHtml = sidepanelHtml.replace('./sidepanel.ts', './sidepanel.js');
+        sidepanelHtml = sidepanelHtml.replace('./icons/logo-white.png', './icons/logo-white.png');
+        writeFileSync(resolve(outDir, 'sidepanel.html'), sidepanelHtml);
       }
 
       // Copy icons
@@ -124,6 +130,14 @@ function mergeManifestPlugin(env: string) {
       if (existsSync(iconSrcDir)) {
         mkdirSync(iconOutDir, { recursive: true });
         cpSync(iconSrcDir, iconOutDir, { recursive: true });
+      }
+
+      // Copy logo
+      const logoSrc = resolve(__dirname, 'src/icons/logo-white.png');
+      const logoOutDir = resolve(outDir, 'icons');
+      if (existsSync(logoSrc)) {
+        mkdirSync(logoOutDir, { recursive: true });
+        cpSync(logoSrc, resolve(logoOutDir, 'logo-white.png'));
       }
     },
   };
@@ -140,12 +154,12 @@ export default defineConfig(({ mode }) => {
       minify: env === 'prod',
       rollupOptions: {
         input: {
-          // Service worker and popup use ES modules (supported in MV3)
+          // Service worker and side panel use ES modules (supported in MV3)
           'service-worker': resolve(
             __dirname,
             'src/background/service-worker.ts',
           ),
-          popup: resolve(__dirname, 'src/popup/popup.ts'),
+          sidepanel: resolve(__dirname, 'src/popup/sidepanel.ts'),
         },
         output: {
           entryFileNames: '[name].js',
@@ -158,6 +172,11 @@ export default defineConfig(({ mode }) => {
         mode === 'production'
           ? 'https://leadgen.visionvolve.com'
           : 'https://leadgen-staging.visionvolve.com',
+      ),
+      __IAM_BASE__: JSON.stringify(
+        mode === 'production'
+          ? 'https://iam.visionvolve.com'
+          : 'https://iam-staging.visionvolve.com',
       ),
       __EXT_ENV__: JSON.stringify(env),
     },

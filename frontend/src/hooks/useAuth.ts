@@ -10,6 +10,7 @@ import {
   getRefreshToken,
   isTokenExpired,
   storeTokens,
+  storeUser,
   clearTokens,
   getStoredUser,
   getUserRole,
@@ -27,6 +28,7 @@ interface AuthState {
 
 interface AuthActions {
   logout: () => void
+  login: (email: string, password: string) => Promise<void>
   hasRole: (minRole: Role) => boolean
 }
 
@@ -87,14 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    // No valid tokens — attempt silent SSO check before showing login
+    // No valid tokens — show login page (no silent SSO redirect)
     clearTokens()
-    if (!sessionStorage.getItem('sso_checked')) {
-      sessionStorage.setItem('sso_checked', '1')
-      const callbackUrl = window.location.origin + '/api/auth/iam/callback'
-      window.location.href = 'https://iam.visionvolve.com/token?redirect=' + encodeURIComponent(callbackUrl)
-      return // Don't update state — page is navigating away
-    }
     setState({ user: null, isAuthenticated: false, isLoading: false, role: 'viewer' })
   }, [])
 
@@ -129,6 +125,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval)
   }, [state.isAuthenticated])
 
+  const login = useCallback(async (email: string, password: string) => {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    const data = await resp.json()
+    if (!resp.ok) {
+      throw new Error(data.error || 'Login failed')
+    }
+    storeTokens(data.access_token, data.refresh_token)
+    if (data.user) {
+      storeUser(data.user)
+    }
+    const user = data.user ?? getStoredUser()
+    setState({
+      user,
+      isAuthenticated: !!user,
+      isLoading: false,
+      role: getUserRole(user),
+    })
+  }, [])
+
   const logout = useCallback(() => {
     // Notify IAM to revoke the refresh token (fire and forget)
     const refreshToken = getRefreshToken()
@@ -153,6 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthContextValue = {
     ...state,
+    login,
     logout,
     hasRole: hasRoleFn,
   }

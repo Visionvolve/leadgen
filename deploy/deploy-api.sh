@@ -27,25 +27,16 @@ echo "    Synced API source files"
 scp -i "$VPS_KEY" "${PROJECT_DIR}/deploy/docker-compose.api.yml" "${VPS_HOST}:${VPS_DIR}/"
 echo "    Copied docker-compose.api.yml"
 
-# 4. Build and start the API container (--no-deps prevents Caddy recreation)
+# 4. Build and start the API container
 ssh -i "$VPS_KEY" "$VPS_HOST" bash <<'REMOTE'
 cd /home/ec2-user/n8n-docker-caddy
-
-COMPOSE_FILES="-f docker-compose.yml \
-  -f docker-compose.mcp.yml \
-  -f docker-compose.airtable-mcp.yml \
-  -f docker-compose.dashboard.yml \
-  -f docker-compose.api.yml \
-  -f docker-compose.ds.yml \
-  -f docker-compose.masterdb-mcp.yml \
-  -f docker-compose.workshop.yml \
-  -f docker-compose.cases.yml \
-  -f docker-compose.backlog.yml \
-  -f docker-compose.frontend.yml"
-
-echo "    Compose files: $COMPOSE_FILES"
-docker compose $COMPOSE_FILES up -d --no-deps --build leadgen-api
+docker compose -f docker-compose.yml -f docker-compose.api.yml up -d --no-deps --build leadgen-api
 echo "    leadgen-api container started"
 REMOTE
+
+# 5. Deploy Caddy snippet
+echo "==> Deploying Caddy snippet..."
+scp -i "$VPS_KEY" "${PROJECT_DIR}/deploy/prod.caddy" "${VPS_HOST}:/home/ec2-user/n8n-docker-caddy/caddy_config/conf.d/leadgen.caddy"
+ssh -i "$VPS_KEY" "$VPS_HOST" "docker exec n8n-docker-caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile"
 
 echo "==> API deployed to https://leadgen.visionvolve.com/api/health"
