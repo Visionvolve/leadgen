@@ -1,5 +1,6 @@
-"""Browser extension API routes for lead import, activity sync, LinkedIn queue, and status."""
+"""Browser extension API routes for lead import, activity sync, LinkedIn queue, validation, and status."""
 
+import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, g, jsonify, request
@@ -8,7 +9,9 @@ from ..auth import require_auth, resolve_tenant
 from ..models import (
     Activity,
     Company,
+    CompanyEnrichmentL1,
     Contact,
+    ContactEnrichment,
     ContactTagAssignment,
     LinkedInAccount,
     Tag,
@@ -564,3 +567,377 @@ def report_linkedin_identity():
             "is_new": is_new,
         }
     )
+
+
+# --- LinkedIn Validation (used by linkedin-validator content script) ---
+
+
+def _contact_to_dict(contact, company=None):
+    """Serialize a contact for the validation response."""
+    result = {
+        "id": str(contact.id),
+        "full_name": contact.full_name,
+        "name": contact.full_name,
+        "first_name": contact.first_name,
+        "last_name": contact.last_name,
+        "job_title": contact.job_title,
+        "email": contact.email_address,
+        "linkedin_url": contact.linkedin_url,
+        "location_city": contact.location_city,
+        "location_country": contact.location_country,
+        "contact_score": contact.contact_score,
+        "icp_fit": contact.icp_fit,
+        "message_status": contact.message_status,
+        "profile_photo_url": contact.profile_photo_url,
+    }
+    if company:
+        result["company_name"] = company.name
+        result["company_id"] = str(company.id)
+    return result
+
+
+def _company_to_dict(company):
+    """Serialize a company for the validation response."""
+    return {
+        "id": str(company.id),
+        "name": company.name,
+        "domain": company.domain,
+        "industry": company.industry,
+        "status": company.status,
+        "tier": company.tier,
+        "company_size": company.company_size,
+        "hq_city": company.hq_city,
+        "hq_country": company.hq_country,
+        "summary": company.summary,
+    }
+
+
+def _detect_contact_mismatches(contact, company, linkedin_data):
+    """Compare LinkedIn-extracted data with CRM data, return list of differences."""
+    mismatches = []
+
+    li_title = (linkedin_data.get("headline") or "").strip()
+    crm_title = (contact.job_title or "").strip()
+    if li_title and crm_title and li_title.lower() != crm_title.lower():
+        mismatches.append(
+            {
+                "field": "Title",
+                "linkedin_value": li_title,
+                "crm_value": crm_title,
+            }
+        )
+
+    li_company = (linkedin_data.get("company_name") or "").strip()
+    crm_company = (company.name if company else "").strip()
+    if li_company and crm_company and li_company.lower() != crm_company.lower():
+        mismatches.append(
+            {
+                "field": "Company",
+                "linkedin_value": li_company,
+                "crm_value": crm_company,
+            }
+        )
+
+    li_location = (linkedin_data.get("location") or "").strip()
+    crm_location = " ".join(
+        filter(None, [contact.location_city, contact.location_country])
+    ).strip()
+    if li_location and crm_location and li_location.lower() != crm_location.lower():
+        mismatches.append(
+            {
+                "field": "Location",
+                "linkedin_value": li_location,
+                "crm_value": crm_location,
+            }
+        )
+
+    return mismatches
+
+
+def _detect_company_mismatches(company, linkedin_data):
+    """Compare LinkedIn company data with CRM data, return list of differences."""
+    mismatches = []
+
+    li_industry = (linkedin_data.get("industry") or "").strip()
+    crm_industry = (company.industry or "").strip()
+    if li_industry and crm_industry and li_industry.lower() != crm_industry.lower():
+        mismatches.append(
+            {
+                "field": "Industry",
+                "linkedin_value": li_industry,
+                "crm_value": crm_industry,
+            }
+        )
+
+    li_hq = (linkedin_data.get("headquarters") or "").strip()
+    crm_hq = " ".join(filter(None, [company.hq_city, company.hq_country])).strip()
+    if li_hq and crm_hq and li_hq.lower() != crm_hq.lower():
+        mismatches.append(
+            {
+                "field": "Headquarters",
+                "linkedin_value": li_hq,
+                "crm_value": crm_hq,
+            }
+        )
+
+    li_website = (linkedin_data.get("website") or "").strip().rstrip("/")
+    crm_domain = (company.domain or "").strip().rstrip("/")
+    if li_website and crm_domain:
+        # Normalize: remove protocol for comparison
+        li_clean = (
+            li_website.replace("https://", "")
+            .replace("http://", "")
+            .replace("www.", "")
+        )
+        crm_clean = (
+            crm_domain.replace("https://", "")
+            .replace("http://", "")
+            .replace("www.", "")
+        )
+        if li_clean.lower() != crm_clean.lower():
+            mismatches.append(
+                {
+                    "field": "Website",
+                    "linkedin_value": li_website,
+                    "crm_value": crm_domain,
+                }
+            )
+
+    return mismatches
+
+
+def _get_enrichment_quality(contact=None, company=None):
+    """Return enrichment quality info if available."""
+    if contact:
+        enrichment = ContactEnrichment.query.filter_by(contact_id=contact.id).first()
+        if enrichment:
+            # Use ai_champion_score or a simple heuristic based on filled fields
+            score = 0
+            if enrichment.person_summary:
+                score += 3
+            if enrichment.linkedin_profile_summary:
+                score += 2
+            if enrichment.relationship_synthesis:
+                score += 2
+            if enrichment.career_trajectory:
+                score += 2
+            if enrichment.ai_champion_score:
+                score = max(score, enrichment.ai_champion_score)
+            return {"score": min(score, 10), "has_enrichment": True}
+    if company:
+        l1 = CompanyEnrichmentL1.query.filter_by(company_id=company.id).first()
+        if l1:
+            score = l1.quality_score or 0
+            return {"score": score, "has_enrichment": True}
+    return None
+
+
+def _escape_ilike(value: str) -> str:
+    """Escape special ILIKE characters to prevent wildcard injection."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _normalize_linkedin_url(url: str) -> str:
+    """Normalize a LinkedIn URL for comparison.
+
+    Strips protocol (http/https), www prefix, and trailing slashes
+    so that 'https://www.linkedin.com/in/foo/' matches 'linkedin.com/in/foo'.
+    """
+    url = url.strip()
+    # Strip protocol
+    for prefix in ("https://", "http://"):
+        if url.lower().startswith(prefix):
+            url = url[len(prefix) :]
+            break
+    # Strip www.
+    if url.lower().startswith("www."):
+        url = url[4:]
+    # Strip trailing slashes
+    url = url.rstrip("/")
+    return url.lower()
+
+
+@extension_bp.route("/api/extension/validate-contact", methods=["GET"])
+@require_auth
+def validate_contact():
+    """Validate a LinkedIn profile against CRM contacts.
+
+    Query params:
+        linkedin_url: LinkedIn profile URL (preferred, exact match)
+        name: Full name for fuzzy matching
+        company: Company name for narrowing matches
+
+    Returns: {match: bool, contact: {...}, enrichment_quality: {...}, mismatches: [...]}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    linkedin_url = (request.args.get("linkedin_url") or "").strip()
+    name = (request.args.get("name") or "").strip()
+    company_name = (request.args.get("company") or "").strip()
+
+    if not linkedin_url and not name:
+        return jsonify({"error": "Provide linkedin_url or name"}), 400
+
+    contact = None
+    company = None
+
+    # Try exact LinkedIn URL match first
+    if linkedin_url:
+        # Normalize URL: strip protocol, www, trailing slash
+        normalized_url = _normalize_linkedin_url(linkedin_url)
+        contact = next(
+            (
+                c
+                for c in Contact.query.filter(
+                    Contact.tenant_id == str(tenant_id),
+                    Contact.linkedin_url.isnot(None),
+                )
+                if _normalize_linkedin_url(c.linkedin_url or "") == normalized_url
+            ),
+            None,
+        )
+
+    # Fall back to name + company fuzzy match
+    if not contact and name:
+        query = Contact.query.filter(
+            Contact.tenant_id == str(tenant_id),
+        )
+
+        # Split name into parts for matching
+        parts = name.split(None, 1)
+        first = parts[0] if parts else ""
+        last = parts[1] if len(parts) > 1 else ""
+
+        if first and last:
+            query = query.filter(
+                db.func.lower(Contact.first_name).ilike(
+                    f"%{_escape_ilike(first.lower())}%"
+                ),
+                db.func.lower(Contact.last_name).ilike(
+                    f"%{_escape_ilike(last.lower())}%"
+                ),
+            )
+        elif first:
+            query = query.filter(
+                db.or_(
+                    db.func.lower(Contact.first_name).ilike(
+                        f"%{_escape_ilike(first.lower())}%"
+                    ),
+                    db.func.lower(Contact.last_name).ilike(
+                        f"%{_escape_ilike(first.lower())}%"
+                    ),
+                )
+            )
+
+        # Narrow by company if provided
+        if company_name:
+            company_ids = db.session.query(Company.id).filter(
+                Company.tenant_id == str(tenant_id),
+                db.func.lower(Company.name).ilike(
+                    f"%{_escape_ilike(company_name.lower())}%"
+                ),
+            )
+            query = query.filter(Contact.company_id.in_(company_ids))
+
+        contact = query.first()
+
+    if not contact:
+        return jsonify({"match": False})
+
+    # Load the associated company
+    if contact.company_id:
+        company = db.session.get(Company, contact.company_id)
+
+    # Build linkedin_data dict for mismatch detection
+    linkedin_data = {
+        "headline": request.args.get("headline", ""),
+        "company_name": company_name,
+        "location": request.args.get("location", ""),
+    }
+
+    mismatches = _detect_contact_mismatches(contact, company, linkedin_data)
+    enrichment_quality = _get_enrichment_quality(contact=contact)
+
+    result = {
+        "match": True,
+        "contact": _contact_to_dict(contact, company),
+        "mismatches": mismatches,
+    }
+    if enrichment_quality:
+        result["enrichment_quality"] = enrichment_quality
+
+    return jsonify(result)
+
+
+@extension_bp.route("/api/extension/validate-company", methods=["GET"])
+@require_auth
+def validate_company():
+    """Validate a LinkedIn company page against CRM companies.
+
+    Query params:
+        linkedin_url: LinkedIn company page URL
+        name: Company name for fuzzy matching
+
+    Returns: {match: bool, company: {...}, enrichment_quality: {...}, mismatches: [...]}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    linkedin_url = (request.args.get("linkedin_url") or "").strip()
+    name = (request.args.get("name") or "").strip()
+
+    if not linkedin_url and not name:
+        return jsonify({"error": "Provide linkedin_url or name"}), 400
+
+    company = None
+
+    # Try matching by extracting slug from LinkedIn URL
+    if linkedin_url and not company:
+        # Extract company slug from URL, e.g., /company/acme-corp -> acme-corp
+        slug_match = re.search(r"/company/([^/?#]+)", linkedin_url)
+        if slug_match:
+            slug = slug_match.group(1).replace("-", " ")
+            company = Company.query.filter(
+                Company.tenant_id == str(tenant_id),
+                db.func.lower(Company.name).ilike(f"%{_escape_ilike(slug.lower())}%"),
+            ).first()
+
+    # Try exact name match
+    if not company and name:
+        company = Company.query.filter(
+            Company.tenant_id == str(tenant_id),
+            db.func.lower(Company.name) == name.lower(),
+        ).first()
+
+    # Try fuzzy name match
+    if not company and name:
+        company = Company.query.filter(
+            Company.tenant_id == str(tenant_id),
+            db.func.lower(Company.name).ilike(f"%{_escape_ilike(name.lower())}%"),
+        ).first()
+
+    if not company:
+        return jsonify({"match": False})
+
+    # Build linkedin_data for mismatch detection
+    linkedin_data = {
+        "industry": request.args.get("industry", ""),
+        "headquarters": request.args.get("headquarters", ""),
+        "website": request.args.get("website", ""),
+    }
+
+    mismatches = _detect_company_mismatches(company, linkedin_data)
+    enrichment_quality = _get_enrichment_quality(company=company)
+
+    result = {
+        "match": True,
+        "company": _company_to_dict(company),
+        "mismatches": mismatches,
+    }
+    if enrichment_quality:
+        result["enrichment_quality"] = enrichment_quality
+
+    return jsonify(result)

@@ -31,6 +31,10 @@ function buildContentScriptsPlugin(env: string, mode: string) {
           name: 'activity-monitor',
           entry: resolve(__dirname, 'src/content/activity-monitor.ts'),
         },
+        {
+          name: 'linkedin-validator',
+          entry: resolve(__dirname, 'src/content/linkedin-validator.ts'),
+        },
       ];
 
       for (const script of contentScripts) {
