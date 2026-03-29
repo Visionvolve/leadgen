@@ -18,6 +18,17 @@ from .perplexity_client import PerplexityClient
 from .stage_registry import get_model_for_stage
 
 try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+
+    def traceable(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
+try:
     from .llm_logger import log_llm_usage
 except ImportError:
     log_llm_usage = None
@@ -91,6 +102,7 @@ Verify all results are about THIS person at {domain}."""
 # ---------------------------------------------------------------------------
 
 
+@traceable(name="enrich_social_online", run_type="chain")
 def enrich_social(
     entity_id, tenant_id=None, previous_data=None, boost=False, user_id=None
 ):

@@ -20,6 +20,17 @@ from .enum_mapper import map_enum_value
 from .perplexity_client import PerplexityClient
 from .stage_registry import get_model_for_stage
 
+try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+
+    def traceable(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
 # Import llm_logger functions — uses existing pricing if perplexity entries
 # are present, otherwise falls back to wildcard pricing
 try:
@@ -191,6 +202,7 @@ Return this exact JSON structure (use ONLY the listed enum values — no free te
 # ---------------------------------------------------------------------------
 
 
+@traceable(name="enrich_company_profile", run_type="chain")
 def enrich_l1(company_id, tenant_id=None, previous_data=None, boost=False):
     """Run L1 enrichment for a single company.
 
