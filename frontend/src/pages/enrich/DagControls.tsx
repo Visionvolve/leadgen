@@ -93,7 +93,7 @@ export function DagControls({
             )}
             <button
               onClick={onRun}
-              disabled={enabledCount === 0 || !tagName}
+              disabled={enabledCount === 0}
               className="px-4 py-1.5 text-sm font-medium rounded-md bg-accent text-white hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? (

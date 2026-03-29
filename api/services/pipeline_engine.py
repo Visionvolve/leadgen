@@ -66,14 +66,14 @@ COORDINATOR_POLL_INTERVAL = 10  # seconds between checking all stage statuses
 ELIGIBILITY_QUERIES = {
     "l1": """
         SELECT c.id FROM companies c
-        WHERE c.tenant_id = :tenant_id AND c.tag_id = :tag_id
+        WHERE c.tenant_id = :tenant_id {tag_clause}
           AND c.status IN ('new', 'enrichment_failed')
           {owner_clause}
         ORDER BY c.name
     """,
     "l2": """
         SELECT c.id FROM companies c
-        WHERE c.tenant_id = :tenant_id AND c.tag_id = :tag_id
+        WHERE c.tenant_id = :tenant_id {tag_clause}
           AND c.status = 'triage_passed'
           {owner_clause}
           {tier_clause}
@@ -82,14 +82,14 @@ ELIGIBILITY_QUERIES = {
     "person": """
         SELECT ct.id FROM contacts ct
         JOIN companies c ON ct.company_id = c.id
-        WHERE ct.tenant_id = :tenant_id AND ct.tag_id = :tag_id
+        WHERE ct.tenant_id = :tenant_id {contact_tag_clause}
           AND c.status = 'enriched_l2' AND NOT ct.processed_enrich
           {owner_clause}
         ORDER BY ct.last_name, ct.first_name
     """,
     "signals": """
         SELECT c.id FROM companies c
-        WHERE c.tenant_id = :tenant_id AND c.tag_id = :tag_id
+        WHERE c.tenant_id = :tenant_id {tag_clause}
           AND c.status IN ('triage_passed', 'enriched_l2')
           {owner_clause}
           {tier_clause}
@@ -98,7 +98,7 @@ ELIGIBILITY_QUERIES = {
     "registry": """
         SELECT c.id FROM companies c
         LEFT JOIN company_legal_profile clp ON clp.company_id = c.id
-        WHERE c.tenant_id = :tenant_id AND c.tag_id = :tag_id
+        WHERE c.tenant_id = :tenant_id {tag_clause}
           AND clp.company_id IS NULL
           AND (
             c.hq_country IN ('CZ', 'Czech Republic', 'Czechia',
@@ -116,7 +116,7 @@ ELIGIBILITY_QUERIES = {
     """,
     "news": """
         SELECT c.id FROM companies c
-        WHERE c.tenant_id = :tenant_id AND c.tag_id = :tag_id
+        WHERE c.tenant_id = :tenant_id {tag_clause}
           AND c.status IN ('triage_passed', 'enriched_l2')
           {owner_clause}
           {tier_clause}
@@ -125,7 +125,7 @@ ELIGIBILITY_QUERIES = {
     "social": """
         SELECT ct.id FROM contacts ct
         JOIN companies c ON ct.company_id = c.id
-        WHERE ct.tenant_id = :tenant_id AND ct.tag_id = :tag_id
+        WHERE ct.tenant_id = :tenant_id {contact_tag_clause}
           AND c.status = 'enriched_l2' AND NOT ct.processed_enrich
           {owner_clause}
         ORDER BY ct.last_name, ct.first_name
@@ -133,7 +133,7 @@ ELIGIBILITY_QUERIES = {
     "career": """
         SELECT ct.id FROM contacts ct
         JOIN companies c ON ct.company_id = c.id
-        WHERE ct.tenant_id = :tenant_id AND ct.tag_id = :tag_id
+        WHERE ct.tenant_id = :tenant_id {contact_tag_clause}
           AND c.status = 'enriched_l2' AND NOT ct.processed_enrich
           {owner_clause}
         ORDER BY ct.last_name, ct.first_name
@@ -141,20 +141,28 @@ ELIGIBILITY_QUERIES = {
     "contact_details": """
         SELECT ct.id FROM contacts ct
         JOIN companies c ON ct.company_id = c.id
-        WHERE ct.tenant_id = :tenant_id AND ct.tag_id = :tag_id
+        WHERE ct.tenant_id = :tenant_id {contact_tag_clause}
           AND c.status = 'enriched_l2' AND NOT ct.processed_enrich
           {owner_clause}
         ORDER BY ct.last_name, ct.first_name
     """,
     "qc": """
         SELECT c.id FROM companies c
-        WHERE c.tenant_id = :tenant_id AND c.tag_id = :tag_id
+        WHERE c.tenant_id = :tenant_id {tag_clause}
           AND c.status = 'enriched_l2'
           {owner_clause}
           {tier_clause}
         ORDER BY c.name
     """,
 }
+
+
+def _build_tag_clauses(tag_id, params):
+    """Build tag filter clauses. When tag_id is None, no tag filter is applied."""
+    if tag_id:
+        params["tag_id"] = str(tag_id)
+        return "AND c.tag_id = :tag_id", "AND ct.tag_id = :tag_id"
+    return "", ""
 
 
 def get_eligible_ids(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
@@ -164,7 +172,8 @@ def get_eligible_ids(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
     if not template:
         return []
 
-    params = {"tenant_id": str(tenant_id), "tag_id": str(tag_id)}
+    params = {"tenant_id": str(tenant_id)}
+    tag_clause, contact_tag_clause = _build_tag_clauses(tag_id, params)
 
     owner_clause = ""
     if owner_id:
@@ -185,7 +194,10 @@ def get_eligible_ids(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
             for i, tv in enumerate(tier_vals):
                 params[f"tier_{i}"] = tv
 
-    sql = template.format(owner_clause=owner_clause, tier_clause=tier_clause)
+    sql = template.format(
+        tag_clause=tag_clause, contact_tag_clause=contact_tag_clause,
+        owner_clause=owner_clause, tier_clause=tier_clause,
+    )
     rows = db.session.execute(text(sql), params).fetchall()
     return [str(row[0]) for row in rows]
 
@@ -197,7 +209,8 @@ def count_eligible(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
     if not template:
         return 0
 
-    params = {"tenant_id": str(tenant_id), "tag_id": str(tag_id)}
+    params = {"tenant_id": str(tenant_id)}
+    tag_clause, contact_tag_clause = _build_tag_clauses(tag_id, params)
 
     owner_clause = ""
     if owner_id:
@@ -219,7 +232,10 @@ def count_eligible(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
                 params[f"tier_{i}"] = tv
 
     # Wrap as COUNT(*)
-    inner = template.format(owner_clause=owner_clause, tier_clause=tier_clause)
+    inner = template.format(
+        tag_clause=tag_clause, contact_tag_clause=contact_tag_clause,
+        owner_clause=owner_clause, tier_clause=tier_clause,
+    )
     sql = f"SELECT COUNT(*) FROM ({inner}) sub"
     row = db.session.execute(text(sql), params).fetchone()
     return row[0] if row else 0

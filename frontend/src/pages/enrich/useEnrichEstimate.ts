@@ -80,10 +80,10 @@ export function useEnrichEstimate(
     queryKey: ['enrich-estimate', filters.tag, filters.owner, filters.tier, filters.status, filters.entityIds, filters.limit, apiStages, reEnrichPayload],
     queryFn: () => {
       const body: Record<string, unknown> = {
-        tag_name: filters.tag,
         stages: apiStages,
         soft_deps: softDepsPayload,
       }
+      if (filters.tag) body.tag_name = filters.tag
       if (filters.owner) body.owner_name = filters.owner
       if (filters.tier) body.tier_filter = [filters.tier]
       if (filters.status) body.status_filter = filters.status
@@ -100,7 +100,7 @@ export function useEnrichEstimate(
         body,
       })
     },
-    enabled: !!filters.tag && apiStages.length > 0,
+    enabled: apiStages.length > 0,
     staleTime: 10_000,
     retry: 0,
   })

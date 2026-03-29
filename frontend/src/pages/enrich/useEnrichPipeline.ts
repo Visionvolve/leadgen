@@ -29,7 +29,7 @@ interface DagStatusResponse {
 }
 
 interface DagRunConfig {
-  tag_name: string
+  tag_name?: string
   owner?: string
   tier_filter?: string[]
   stages: string[]
@@ -63,11 +63,11 @@ export function useEnrichPipeline(filters: EnrichFilters) {
 
   // Poll for status
   const poll = useCallback(async () => {
-    if (!filters.tag) return
-
     try {
+      const params: Record<string, string> = {}
+      if (filters.tag) params.tag_name = filters.tag
       const data = await apiFetch<DagStatusResponse>('/pipeline/dag-status', {
-        params: { tag_name: filters.tag },
+        params,
       })
 
       if (!data.pipeline) return
@@ -102,9 +102,9 @@ export function useEnrichPipeline(filters: EnrichFilters) {
   // Start pipeline
   const start = useCallback(async (config: DagRunConfig) => {
     const body: Record<string, unknown> = {
-      tag_name: config.tag_name,
       stages: config.stages,
     }
+    if (config.tag_name) body.tag_name = config.tag_name
     if (config.owner) body.owner = config.owner
     if (config.tier_filter?.length) body.tier_filter = config.tier_filter
     if (config.soft_deps) body.soft_deps = config.soft_deps
@@ -154,12 +154,12 @@ export function useEnrichPipeline(filters: EnrichFilters) {
   // Check for existing running pipeline when tag changes.
   // State reset is handled above in the render-time comparison.
   useEffect(() => {
-    if (!filters.tag) return
-
     async function checkExisting() {
       try {
+        const params: Record<string, string> = {}
+        if (filters.tag) params.tag_name = filters.tag
         const data = await apiFetch<DagStatusResponse>('/pipeline/dag-status', {
-          params: { tag_name: filters.tag },
+          params,
         })
         if (data.pipeline?.status === 'running') {
           setPipelineRunId(data.pipeline.run_id)
