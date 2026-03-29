@@ -256,6 +256,50 @@ def _build_enrichment_section(enrichment_data: dict) -> str:
     return "\n".join(lines) if lines else ""
 
 
+def _build_product_section(
+    recommended_products: list[dict], language: str = "cs"
+) -> str:
+    """Format recommended products for the generation prompt.
+
+    Includes product name, price, and best-for description so the LLM
+    can weave a specific product recommendation into the message.
+    """
+    if not recommended_products:
+        return ""
+
+    lines = []
+    entry_products = [
+        p for p in recommended_products if p.get("recommendation_type") == "entry"
+    ]
+    upsell_products = [
+        p for p in recommended_products if p.get("recommendation_type") == "upsell"
+    ]
+
+    if entry_products:
+        lines.append("Recommended entry product(s) for this segment:")
+        for p in entry_products:
+            price_str = ""
+            if language == "de" and p.get("price_eur"):
+                price_str = f" ({p['price_eur']:,.0f} EUR/{p['price_unit']})"
+            elif p.get("price_czk"):
+                price_str = f" ({p['price_czk']:,.0f} CZK/{p['price_unit']})"
+            desc = p.get("description_cs") or p.get("best_for") or ""
+            lines.append(f"- {p['name']}{price_str}: {desc}")
+
+    if upsell_products:
+        lines.append("Upsell option(s):")
+        for p in upsell_products:
+            price_str = ""
+            if language == "de" and p.get("price_eur"):
+                price_str = f" ({p['price_eur']:,.0f} EUR/{p['price_unit']})"
+            elif p.get("price_czk"):
+                price_str = f" ({p['price_czk']:,.0f} CZK/{p['price_unit']})"
+            desc = p.get("description_cs") or p.get("best_for") or ""
+            lines.append(f"- {p['name']}{price_str}: {desc}")
+
+    return "\n".join(lines)
+
+
 def build_generation_prompt(
     *,
     channel: str,
@@ -273,6 +317,7 @@ def build_generation_prompt(
     max_length: int | None = None,
     reference_assets: list | None = None,
     feedback_signals: dict | None = None,
+    recommended_products: list | None = None,
 ) -> str:
     """Build the user prompt for generating a single message step.
 
@@ -338,6 +383,22 @@ def build_generation_prompt(
                 enrichment_section,
             ]
         )
+
+    # Product recommendations (segment-driven)
+    if recommended_products:
+        language = generation_config.get("language", "cs")
+        product_section = _build_product_section(recommended_products, language)
+        if product_section:
+            parts.extend(
+                [
+                    "",
+                    "--- RECOMMENDED PRODUCTS ---",
+                    "Mention the recommended entry product by name and price in the message. "
+                    "Keep it natural — don't list specs, just mention the product as a concrete suggestion. "
+                    "Do NOT mention upsell products — they are for internal reference only.",
+                    product_section,
+                ]
+            )
 
     # Reference assets (uploaded files with summaries)
     if reference_assets:

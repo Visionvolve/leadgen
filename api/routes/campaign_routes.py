@@ -3313,3 +3313,224 @@ def feedback_summary(campaign_id):
             "per_step": step_stats,
         }
     )
+
+
+# ── Auto-segmentation endpoints ──────────────────────────────────────
+
+
+@campaigns_bp.route("/api/companies/auto-segment", methods=["POST"])
+@require_role("editor")
+def auto_segment_companies():
+    """Run auto-segmentation on all unsegmented companies in the tenant."""
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    force = body.get("force", False)
+
+    from ..services.segmentation import auto_segment_tenant
+
+    result = auto_segment_tenant(tenant_id, force=force)
+    return jsonify(result)
+
+
+# ── Eligible contacts endpoint ───────────────────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/eligible-contacts", methods=["GET"])
+@require_auth
+def eligible_contacts(campaign_id):
+    """Return contacts eligible for a campaign based on segment matching.
+
+    Filters:
+    - Company segment matches campaign target_criteria.segment (if set)
+    - Contact not already in campaign
+    - Contact has valid email
+    - Company passed triage (status in triage_passed, enriched_l2, or above)
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Load campaign to get target segment
+    campaign = db.session.execute(
+        db.text("""
+            SELECT target_criteria FROM campaigns
+            WHERE id = :id AND tenant_id = :t
+        """),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    target_criteria = campaign[0]
+    if isinstance(target_criteria, str):
+        try:
+            target_criteria = json.loads(target_criteria)
+        except (json.JSONDecodeError, TypeError):
+            target_criteria = {}
+    target_criteria = target_criteria or {}
+
+    target_segment = target_criteria.get("segment")
+
+    # Build query
+    where = [
+        "ct.tenant_id = :t",
+        "ct.email_address IS NOT NULL",
+        "ct.email_address != ''",
+        "co.status IN ('triage_passed', 'enriched_l2', 'enrichment_l2_complete')",
+    ]
+    params = {"t": tenant_id, "cid": campaign_id}
+
+    if target_segment:
+        where.append("co.segment = :segment")
+        params["segment"] = target_segment
+
+    # Exclude contacts already in this campaign
+    where.append("""
+        ct.id NOT IN (
+            SELECT contact_id FROM campaign_contacts WHERE campaign_id = :cid
+        )
+    """)
+
+    where_clause = " AND ".join(where)
+
+    rows = db.session.execute(
+        db.text(f"""
+            SELECT ct.id, ct.first_name, ct.last_name, ct.job_title,
+                   ct.email_address, ct.contact_score, ct.icp_fit,
+                   co.id AS company_id, co.name AS company_name,
+                   co.segment, co.tier
+            FROM contacts ct
+            JOIN companies co ON ct.company_id = co.id
+            WHERE {where_clause}
+            ORDER BY ct.contact_score DESC NULLS LAST
+        """),
+        params,
+    ).fetchall()
+
+    contacts = [
+        {
+            "id": str(r[0]),
+            "first_name": r[1],
+            "last_name": r[2],
+            "job_title": r[3],
+            "email_address": r[4],
+            "contact_score": r[5],
+            "icp_fit": r[6],
+            "company_id": str(r[7]) if r[7] else None,
+            "company_name": r[8],
+            "segment": r[9],
+            "tier": r[10],
+        }
+        for r in rows
+    ]
+
+    return jsonify({"contacts": contacts, "total": len(contacts)})
+
+
+# ── Message preview + batch generation endpoints ─────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/generate-preview", methods=["POST"])
+@require_role("editor")
+def generate_message_preview(campaign_id):
+    """Generate a preview message for one contact without saving.
+
+    Body: {contact_id, step_position}
+    Returns: {subject, body, recommended_products, segment}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    contact_id = body.get("contact_id")
+    step_position = body.get("step_position")
+
+    if not contact_id or step_position is None:
+        return jsonify({"error": "contact_id and step_position required"}), 400
+
+    from ..services.message_generator import generate_preview
+
+    try:
+        result = generate_preview(
+            campaign_id=campaign_id,
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            step_position=int(step_position),
+        )
+    except Exception:
+        logger.exception("Preview generation failed")
+        return jsonify({"error": "Preview generation failed"}), 500
+
+    if not result:
+        return jsonify({"error": "Contact or campaign step not found"}), 404
+
+    return jsonify(result)
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/generate-batch", methods=["POST"])
+@require_role("editor")
+def generate_batch_messages(campaign_id):
+    """Generate messages for eligible contacts in a campaign step.
+
+    Body: {step_position, limit: 10}
+    Returns: {generated: N, total_eligible: M}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    step_position = body.get("step_position")
+    limit = min(int(body.get("limit", 10)), 50)
+
+    if step_position is None:
+        return jsonify({"error": "step_position required"}), 400
+
+    # Verify campaign exists
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    # Get campaign contacts that haven't been generated yet for this step
+    contacts = db.session.execute(
+        db.text("""
+            SELECT cc.id AS cc_id, cc.contact_id
+            FROM campaign_contacts cc
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                AND cc.status NOT IN ('excluded', 'generated', 'failed', 'generating')
+            ORDER BY cc.added_at
+            LIMIT :lim
+        """),
+        {"cid": campaign_id, "t": tenant_id, "lim": limit},
+    ).fetchall()
+
+    if not contacts:
+        return jsonify({"generated": 0, "message": "No eligible contacts"}), 200
+
+    # Use the existing start_generation which handles the full flow
+    # For batch, we start the background generation thread
+    from flask import g
+
+    user_id = str(g.current_user.id) if hasattr(g, "current_user") else None
+
+    start_generation(
+        current_app._get_current_object(),
+        campaign_id=campaign_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    return jsonify(
+        {
+            "status": "generating",
+            "total_contacts": len(contacts),
+            "message": f"Generation started for {len(contacts)} contacts",
+        }
+    ), 202

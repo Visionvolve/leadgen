@@ -1286,6 +1286,76 @@ class CampaignStep(db.Model):
         }
 
 
+class Product(db.Model):
+    __tablename__ = "products"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("uuid_generate_v4()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    name = db.Column(db.String(200), nullable=False)
+    name_en = db.Column(db.String(200))
+    category = db.Column(db.String(50))  # animation, catalogue_show, custom_program
+    performers_min = db.Column(db.SmallInteger)
+    performers_max = db.Column(db.SmallInteger)
+    duration_minutes = db.Column(db.SmallInteger)
+    price_czk = db.Column(db.Numeric(10, 2))
+    price_eur = db.Column(db.Numeric(10, 2))
+    price_unit = db.Column(db.String(20), default="per_person")
+    tech_requirements = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
+    best_for = db.Column(db.Text)
+    description = db.Column(db.Text)
+    description_cs = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "name_en": self.name_en,
+            "category": self.category,
+            "performers_min": self.performers_min,
+            "performers_max": self.performers_max,
+            "duration_minutes": self.duration_minutes,
+            "price_czk": float(self.price_czk) if self.price_czk else None,
+            "price_eur": float(self.price_eur) if self.price_eur else None,
+            "price_unit": self.price_unit,
+            "tech_requirements": self.tech_requirements,
+            "best_for": self.best_for,
+            "description": self.description,
+            "description_cs": self.description_cs,
+            "is_active": self.is_active,
+        }
+
+
+class SegmentProductRecommendation(db.Model):
+    __tablename__ = "segment_product_recommendations"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("uuid_generate_v4()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    segment = db.Column(db.String(50), nullable=False)
+    product_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("products.id"), nullable=False
+    )
+    recommendation_type = db.Column(db.String(20), default="entry")
+    priority = db.Column(db.SmallInteger, default=1)
+
+    product = db.relationship("Product", lazy="joined")
+
+    __table_args__ = (db.UniqueConstraint("tenant_id", "segment", "product_id"),)
+
+
 class CampaignOverlapLog(db.Model):
     __tablename__ = "campaign_overlap_log"
 
