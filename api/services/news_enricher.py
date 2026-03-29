@@ -98,6 +98,18 @@ def enrich_news(
     if hq_country:
         context_lines.append(f"HQ Country: {hq_country}")
 
+    # Add Czech/Slovak language search hints for companies in those countries
+    czech_countries = {"Czech Republic", "Czechia", "CZ", "Slovakia", "SK"}
+    if hq_country and any(c.lower() in hq_country.lower() for c in czech_countries):
+        context_lines.append(
+            "\nIMPORTANT: This company is based in a Czech/Slovak-speaking country. "
+            "Search in BOTH English AND Czech/Slovak. Try these search terms:\n"
+            f'- "{company_name}" novinky OR zprávy OR tisková zpráva\n'
+            f'- "{company_name}" site:czechcrunch.cz OR site:lupa.cz OR site:e15.cz\n'
+            f'- "{company_name}" firma OR společnost OR dotace OR investice\n'
+            "Also search standard English news sources."
+        )
+
     user_prompt = "\n".join(context_lines)
 
     # 3. Call Perplexity

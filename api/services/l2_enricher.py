@@ -96,7 +96,8 @@ Industry: {industry}
 Current date: {current_date}
 
 Search for: "{company_name}" combined with "{domain}"
-Verify all results are about THIS company ({domain}), not similarly-named entities."""
+Verify all results are about THIS company ({domain}), not similarly-named entities.
+{czech_hint}"""
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +148,8 @@ Size: {employees} employees
 Current date: {current_date}
 
 Search for: "{company_name}" combined with "{domain}"
-Verify all results are about THIS company ({domain})."""
+Verify all results are about THIS company ({domain}).
+{czech_hint}"""
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +203,10 @@ suggest general industry-relevant opportunities and note that further research m
   "pitch_framing": "growth_acceleration|efficiency_protection|competitive_catch_up|compliance_driven",
   "executive_brief": "3-4 sentence professional summary for a sales rep. Always lead with what \
 IS known about the company. If information is limited, note this neutrally and suggest next steps \
-like manual research or direct outreach. Never use dismissive or disqualifying language."
+like manual research or direct outreach. Never use dismissive or disqualifying language.",
+  "key_products": "Main products or services offered by the company (from research or profile). Or null",
+  "customer_segments": "Target customer segments or verticals. Or null",
+  "competitors": "Key competitors in their market. Or null"
 }"""
 
 SYNTHESIS_USER_TEMPLATE = """Generate AI opportunity analysis for {company_name} ({domain}):
@@ -471,12 +476,25 @@ def _load_company_and_l1(company_id):
 def _research_news(company, l1_data, model, user_id=None, enrichment_language=None):
     """Call Perplexity for news and business signals."""
     client = PerplexityClient()
+
+    # Czech/Slovak language search hint
+    country_val = company.get("hq_country") or company.get("geo_region") or "Unknown"
+    czech_countries = {"czech republic", "czechia", "cz", "slovakia", "sk"}
+    czech_hint = ""
+    if any(c in country_val.lower() for c in czech_countries):
+        czech_hint = (
+            f'\nAlso search in Czech/Slovak: "{company["name"]}" novinky OR zprávy '
+            f"OR tisková zpráva OR investice OR akvizice. "
+            f"Try Czech sources: czechcrunch.cz, lupa.cz, e15.cz, ekonom.cz."
+        )
+
     user_prompt = NEWS_USER_TEMPLATE.format(
         company_name=company["name"],
         domain=company["domain"],
-        country=company.get("hq_country") or company.get("geo_region") or "Unknown",
+        country=country_val,
         industry=company["industry"],
         current_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        czech_hint=czech_hint,
     )
 
     # Inject language instruction
@@ -529,13 +547,26 @@ def _research_strategic(
 ):
     """Call Perplexity for strategic signals."""
     client = PerplexityClient()
+
+    # Czech/Slovak language search hint
+    country_val = company.get("hq_country") or company.get("geo_region") or "Unknown"
+    czech_countries = {"czech republic", "czechia", "cz", "slovakia", "sk"}
+    czech_hint = ""
+    if any(c in country_val.lower() for c in czech_countries):
+        czech_hint = (
+            f'\nAlso search in Czech/Slovak: "{company["name"]}" vedení OR certifikace '
+            f"OR dotace OR technologie OR zaměstnanci. "
+            f"Try Czech business registries and directories."
+        )
+
     user_prompt = STRATEGIC_USER_TEMPLATE.format(
         company_name=company["name"],
         domain=company["domain"],
-        country=company.get("hq_country") or company.get("geo_region") or "Unknown",
+        country=country_val,
         industry=company["industry"],
         employees=company.get("employees") or "Unknown",
         current_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        czech_hint=czech_hint,
     )
 
     # Inject language instruction

@@ -48,6 +48,9 @@ Do NOT include career information about similarly-named individuals.
 4. TENURE PATTERNS: Average time at each company, job-hopper vs loyal
 5. INDUSTRY EXPERIENCE: Which industries they have worked in and for how long
 6. TOTAL EXPERIENCE: Approximate total years of professional experience
+7. EDUCATION: Degrees, universities, MBA, PhD, etc.
+8. CERTIFICATIONS: Professional certifications (PMP, AWS, Scrum, etc.)
+9. EXPERTISE AREAS: Key skills and domain expertise
 
 ## OUTPUT FORMAT
 Return ONLY a JSON object. No markdown. No code fences. Start with {.
@@ -64,6 +67,9 @@ Return ONLY a JSON object. No markdown. No code fences. Start with {.
   "total_experience_years": 15,
   "tenure_pattern": "Description of tenure patterns (e.g., avg 3-4 years per role)",
   "career_highlights": "Notable achievements, promotions, career pivots",
+  "education": "Degrees, institutions, graduation years. Or 'Unknown'",
+  "certifications": "Professional certifications. Or 'None found'",
+  "expertise_areas": ["area1", "area2", "area3"],
   "data_confidence": "high|medium|low"
 }"""
 
@@ -291,6 +297,9 @@ def _upsert_career_enrichment(contact_id, data, cost, quality=None):
         "previous_companies",
         "industry_experience",
         "total_experience_years",
+        "education",
+        "certifications",
+        "expertise_areas",
     )
 
     # Serialize JSON fields
@@ -300,6 +309,9 @@ def _upsert_career_enrichment(contact_id, data, cost, quality=None):
     industry_exp = data.get("industry_experience", [])
     if isinstance(industry_exp, list):
         industry_exp = json.dumps(industry_exp)
+    expertise = data.get("expertise_areas", [])
+    if isinstance(expertise, list):
+        expertise = json.dumps(expertise)
 
     total_years = data.get("total_experience_years")
     if total_years is not None:
@@ -308,13 +320,26 @@ def _upsert_career_enrichment(contact_id, data, cost, quality=None):
         except (ValueError, TypeError):
             total_years = None
 
+    # Build career_highlights from career_summary + tenure_pattern if highlights missing
+    career_highlights = data.get("career_highlights")
+    if not career_highlights:
+        parts = []
+        if data.get("career_summary"):
+            parts.append(data["career_summary"])
+        if data.get("tenure_pattern"):
+            parts.append(f"Tenure: {data['tenure_pattern']}")
+        career_highlights = " | ".join(parts) if parts else None
+
     params = {
         "cid": str(contact_id),
         "career_trajectory": data.get("career_trajectory", "unknown"),
-        "career_highlights": data.get("career_highlights"),
+        "career_highlights": career_highlights,
         "previous_companies": prev_companies,
         "industry_experience": industry_exp,
         "total_experience_years": total_years,
+        "education": data.get("education"),
+        "certifications": data.get("certifications"),
+        "expertise_areas": expertise,
         "enriched_at": now_str,
         "cost": cost,
     }

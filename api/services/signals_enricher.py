@@ -105,6 +105,17 @@ def enrich_signals(
     if hq_country:
         context_lines.append(f"HQ Country: {hq_country}")
 
+    # Czech/Slovak language search hints for companies in those countries
+    czech_countries = {"czech republic", "czechia", "cz", "slovakia", "sk"}
+    if hq_country and any(c in hq_country.lower() for c in czech_countries):
+        context_lines.append(
+            "\nIMPORTANT: This company is based in a Czech/Slovak-speaking country. "
+            "Search in BOTH English AND Czech/Slovak. Try these search terms:\n"
+            f'- "{company_name}" digitální transformace OR inovace OR automatizace\n'
+            f'- "{company_name}" nábor OR zaměstnanci OR AI OR strojové učení\n'
+            "Also search standard English sources."
+        )
+
     if previous_data:
         prev_lines = []
         for k, v in previous_data.items():

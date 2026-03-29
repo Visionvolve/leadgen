@@ -43,7 +43,7 @@ Do NOT return contact details for similarly-named individuals.
 
 ## RESEARCH FOCUS
 1. EMAIL: Business email address (company domain preferred)
-2. PHONE: Direct phone or mobile number
+2. PHONE: Direct phone or mobile number. Search company contact pages, LinkedIn, and business directories. Try company switchboard if direct number unavailable.
 3. LINKEDIN: Profile URL (verify it matches this person)
 4. PROFILE PHOTO: Professional headshot URL (LinkedIn or company page)
 
