@@ -276,15 +276,30 @@ def _build_enrichment_section(enrichment_data: dict) -> str:
 
 
 def _build_product_section(
-    recommended_products: list[dict], language: str = "cs"
+    recommended_products: list[dict],
+    language: str = "cs",
+    catalog_context: dict | None = None,
 ) -> str:
     """Format recommended products for the generation prompt.
 
-    Includes product name, price, and best-for description so the LLM
-    can weave a specific product recommendation into the message.
+    Includes product name, price, best-for description, and catalog selling
+    points so the LLM can weave specific product recommendations into the
+    message with accurate details from the PDF catalog.
     """
     if not recommended_products:
         return ""
+
+    # Build a lookup from catalog_context for selling_points by product name
+    catalog_lookup: dict[str, dict] = {}
+    if catalog_context:
+        for section_key in (
+            "animation_programs",
+            "catalogue_shows",
+            "music",
+        ):
+            for item in catalog_context.get(section_key, []):
+                name_cs = item.get("name_cs", "")
+                catalog_lookup[name_cs.lower()] = item
 
     lines = []
     entry_products = [
@@ -303,7 +318,14 @@ def _build_product_section(
             elif p.get("price_czk"):
                 price_str = f" ({p['price_czk']:,.0f} CZK/{p['price_unit']})"
             desc = p.get("description_cs") or p.get("best_for") or ""
-            lines.append(f"- {p['name']}{price_str}: {desc}")
+            line = f"- {p['name']}{price_str}: {desc}"
+            # Append selling points from catalog if available
+            cat_item = catalog_lookup.get(p["name"].lower(), {})
+            if cat_item.get("selling_points"):
+                line += f"\n  Selling point: {cat_item['selling_points']}"
+            if cat_item.get("price_notes"):
+                line += f"\n  Price note: {cat_item['price_notes']}"
+            lines.append(line)
 
     if upsell_products:
         lines.append("Upsell option(s):")
@@ -315,6 +337,32 @@ def _build_product_section(
                 price_str = f" ({p['price_czk']:,.0f} CZK/{p['price_unit']})"
             desc = p.get("description_cs") or p.get("best_for") or ""
             lines.append(f"- {p['name']}{price_str}: {desc}")
+
+    # Append segment-specific pitch from catalog context
+    # Match the segment with the highest overlap of entry product names
+    if catalog_context and entry_products:
+        seg_recs = catalog_context.get("segment_recommendations", {})
+        entry_product_names = {p["name"].lower() for p in entry_products}
+        best_seg = None
+        best_overlap = 0
+        for seg_key, seg_data in seg_recs.items():
+            seg_entry_names = {n.lower() for n in seg_data.get("entry", [])}
+            overlap = len(entry_product_names & seg_entry_names)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_seg = seg_data
+        if best_seg and best_overlap > 0:
+            pitch_key = "pitch_cs" if language != "en" else "pitch_en"
+            pitch = best_seg.get(pitch_key) or best_seg.get("pitch_cs", "")
+            if pitch:
+                lines.append(f"\nSegment pitch: {pitch}")
+
+    # General info from catalog
+    if catalog_context and catalog_context.get("general_info"):
+        info = catalog_context["general_info"]
+        refs = info.get("references", [])
+        if refs:
+            lines.append(f"References: {', '.join(refs)}")
 
     return "\n".join(lines)
 
@@ -337,6 +385,7 @@ def build_generation_prompt(
     reference_assets: list | None = None,
     feedback_signals: dict | None = None,
     recommended_products: list | None = None,
+    catalog_context: dict | None = None,
 ) -> str:
     """Build the user prompt for generating a single message step.
 
@@ -403,10 +452,14 @@ def build_generation_prompt(
             ]
         )
 
-    # Product recommendations (segment-driven)
+    # Product recommendations (segment-driven) with catalog context
     if recommended_products:
         language = generation_config.get("language", "cs")
-        product_section = _build_product_section(recommended_products, language)
+        # catalog_context comes from campaign generation_config or is passed directly
+        effective_catalog = catalog_context or generation_config.get("catalog_context")
+        product_section = _build_product_section(
+            recommended_products, language, effective_catalog
+        )
         if product_section:
             parts.extend(
                 [

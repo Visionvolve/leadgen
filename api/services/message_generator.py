@@ -414,6 +414,11 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
 
     total_steps = len(enabled_steps)
 
+    # Load product catalog context for enriching prompts with selling points
+    catalog_context = (
+        generation_config.get("catalog_context") or _load_catalog_context()
+    )
+
     # Load playbook strategy data and snapshot it in generation_config
     strategy_data = _load_strategy_data(tenant_id)
     if strategy_data:
@@ -534,6 +539,7 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
                     variant_group_id=vg_id,
                     feedback_signals=step_feedback,
                     recommended_products=recommended_products,
+                    catalog_context=catalog_context,
                 )
                 contact_cost += msg_cost
 
@@ -566,6 +572,7 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
                         variant_angle=angle,
                         feedback_signals=step_feedback,
                         recommended_products=recommended_products,
+                        catalog_context=catalog_context,
                     )
                     contact_cost += msg_cost
 
@@ -655,6 +662,28 @@ def _load_product_recommendations(tenant_id: str, company_id: str | None) -> lis
     from .segmentation import get_recommended_products
 
     return get_recommended_products(tenant_id, segment)
+
+
+def _load_catalog_context() -> dict | None:
+    """Load the structured product catalog from data/product_catalog_losers_2026.json.
+
+    Returns the parsed JSON dict, or None if the file doesn't exist.
+    The catalog provides selling points, price notes, segment pitches,
+    and reference clients for enriching message generation prompts.
+    """
+    import json
+    import os
+
+    catalog_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "data",
+        "product_catalog_losers_2026.json",
+    )
+    try:
+        with open(catalog_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 def _load_enrichment_context(contact_id: str, company_id: str) -> tuple[dict, dict]:
@@ -765,6 +794,7 @@ def _generate_single_message(
     variant_angle: dict | None = None,
     feedback_signals: dict | None = None,
     recommended_products: list | None = None,
+    catalog_context: dict | None = None,
 ) -> Decimal:
     """Generate a single message for one contact x one step.
 
@@ -776,6 +806,7 @@ def _generate_single_message(
         variant_group_id: UUID linking variants of the same step/contact.
         variant_angle: Optional angle dict with 'key', 'label', 'instruction'.
         feedback_signals: Optional learning signals from previous feedback.
+        catalog_context: Optional product catalog data for selling points.
     """
     # Build per-message instruction from variant angle
     angle_instruction = variant_angle["instruction"] if variant_angle else None
@@ -815,6 +846,7 @@ def _generate_single_message(
         reference_assets=reference_assets or None,
         feedback_signals=feedback_signals,
         recommended_products=recommended_products,
+        catalog_context=catalog_context,
     )
 
     start_time = time.time()
@@ -1287,6 +1319,9 @@ def generate_preview(
     company_data, enrichment_data = _load_enrichment_context(contact_id, company_id)
     recommended_products = _load_product_recommendations(tenant_id, company_id)
     strategy_data = _load_strategy_data(tenant_id)
+    catalog_context = (
+        generation_config.get("catalog_context") or _load_catalog_context()
+    )
 
     # Get company segment
     segment = None
@@ -1309,6 +1344,7 @@ def generate_preview(
         total_steps=total_steps,
         strategy_data=strategy_data,
         recommended_products=recommended_products,
+        catalog_context=catalog_context,
     )
 
     import anthropic
