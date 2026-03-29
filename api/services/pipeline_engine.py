@@ -195,8 +195,10 @@ def get_eligible_ids(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
                 params[f"tier_{i}"] = tv
 
     sql = template.format(
-        tag_clause=tag_clause, contact_tag_clause=contact_tag_clause,
-        owner_clause=owner_clause, tier_clause=tier_clause,
+        tag_clause=tag_clause,
+        contact_tag_clause=contact_tag_clause,
+        owner_clause=owner_clause,
+        tier_clause=tier_clause,
     )
     rows = db.session.execute(text(sql), params).fetchall()
     return [str(row[0]) for row in rows]
@@ -233,8 +235,10 @@ def count_eligible(tenant_id, tag_id, stage, owner_id=None, tier_filter=None):
 
     # Wrap as COUNT(*)
     inner = template.format(
-        tag_clause=tag_clause, contact_tag_clause=contact_tag_clause,
-        owner_clause=owner_clause, tier_clause=tier_clause,
+        tag_clause=tag_clause,
+        contact_tag_clause=contact_tag_clause,
+        owner_clause=owner_clause,
+        tier_clause=tier_clause,
     )
     sql = f"SELECT COUNT(*) FROM ({inner}) sub"
     row = db.session.execute(text(sql), params).fetchone()
