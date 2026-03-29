@@ -82,6 +82,17 @@ def delete_asset(storage_path: str) -> bool:
         return False
 
 
+def download_asset_bytes(storage_path: str) -> bytes:
+    """Download asset content from S3. Returns raw bytes.
+
+    Raises ClientError if the object does not exist or cannot be read.
+    """
+    bucket = _get_bucket()
+    s3 = _get_s3_client()
+    response = s3.get_object(Bucket=bucket, Key=storage_path)
+    return response["Body"].read()
+
+
 def validate_upload(content_type: str, size_bytes: int) -> str | None:
     """Validate file upload. Returns error message or None if valid."""
     if content_type not in ALLOWED_CONTENT_TYPES:

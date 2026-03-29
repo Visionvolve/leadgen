@@ -46,3 +46,6 @@ transcript_*
 # Git worktrees for parallel feature work
 .worktrees/
 .claude/worktrees/
+
+# Uploaded files (PDF attachments etc.)
+uploads/
