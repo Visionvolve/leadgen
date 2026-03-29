@@ -143,12 +143,42 @@ def enrich_contact_details(
         logger.error("Contact details research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Update contacts table (only blank fields)
+    # 2. Compute quality score for contact_details block
+    from .quality_scoring import assess_block_quality, parse_confidence
+
+    details_data = {
+        "email": research_data.get("email_address") or contact_data.get("email"),
+        "phone": research_data.get("phone_number") or contact_data.get("phone"),
+        "linkedin_url": research_data.get("linkedin_url")
+        or contact_data.get("linkedin_url"),
+        "profile_data_confidence": research_data.get("confidence"),
+    }
+    block_flags = []
+    if details_data.get("email") and not contact_data.get("email_verified"):
+        block_flags.append("email_unverified")
+
+    quality = assess_block_quality(
+        data=details_data,
+        block_code="contact_details",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Update contacts table (only blank fields)
     _update_contact_details(entity_id, contact_data, research_data)
+
+    # 4. Update block_quality on contact_enrichment
+    from .quality_scoring import update_block_quality
+
+    update_block_quality(db.session, entity_id, "contact_details", quality)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------

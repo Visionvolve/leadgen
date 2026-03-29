@@ -141,17 +141,44 @@ def enrich_social(
         logger.error("Social research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Upsert to contact_enrichment
-    _upsert_social_enrichment(entity_id, research_data, total_cost)
+    # 2. Compute quality score for social block
+    from .quality_scoring import assess_block_quality, parse_confidence
 
-    # 3. Update linkedin_url on contacts table if found
+    social_data = {
+        "linkedin_profile_summary": research_data.get("linkedin_profile_summary"),
+        "twitter_handle": research_data.get("twitter_handle"),
+        "github_username": research_data.get("github_username"),
+        "speaking_engagements": research_data.get("speaking_engagements"),
+        "publications": research_data.get("publications"),
+        "public_presence_level": research_data.get("public_presence_level"),
+        "thought_leadership": research_data.get("thought_leadership"),
+    }
+    block_flags = []
+    if not research_data.get("linkedin_profile_summary"):
+        block_flags.append("no_linkedin")
+
+    quality = assess_block_quality(
+        data=social_data,
+        block_code="social",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Upsert to contact_enrichment
+    _upsert_social_enrichment(entity_id, research_data, total_cost, quality)
+
+    # 4. Update linkedin_url on contacts table if found
     linkedin_url = research_data.get("linkedin_url")
     if linkedin_url and linkedin_url != "null":
         _update_contact_linkedin(entity_id, linkedin_url)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +279,7 @@ def _research_social(contact_data, model, user_id=None, enrichment_language=None
 # ---------------------------------------------------------------------------
 
 
-def _upsert_social_enrichment(contact_id, data, cost):
+def _upsert_social_enrichment(contact_id, data, cost, quality=None):
     """Upsert social enrichment fields into contact_enrichment table."""
     now_str = datetime.now(timezone.utc).isoformat()
 
@@ -300,6 +327,12 @@ def _upsert_social_enrichment(contact_id, data, cost):
             """),
             params,
         )
+
+    # Update block_quality JSONB with social block score
+    if quality:
+        from .quality_scoring import update_block_quality
+
+        update_block_quality(db.session, contact_id, "social", quality)
 
 
 def _update_contact_linkedin(contact_id, linkedin_url):
