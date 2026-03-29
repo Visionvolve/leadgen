@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -24,7 +25,7 @@ from .llm_logger import log_llm_usage, compute_cost
 logger = logging.getLogger(__name__)
 
 # Generation model config
-GENERATION_MODEL = "claude-haiku-3-5-20241022"
+GENERATION_MODEL = "claude-3-haiku-20240307"
 GENERATION_PROVIDER = "anthropic"
 
 # Estimated tokens per message (for cost estimation)
@@ -831,14 +832,13 @@ def _generate_single_message(
 
     duration_ms = int((time.time() - start_time) * 1000)
 
-    # Parse response
+    # Parse response — sanitize control characters that break JSON parsing
     raw_text = response.content[0].text
+    raw_text = re.sub(r"[\x00-\x1f\x7f]", " ", raw_text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
         # Try to extract JSON from response
-        import re
-
         match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
         if match:
             parsed = json.loads(match.group())
@@ -1108,13 +1108,12 @@ def regenerate_message(
 
     duration_ms = int((time.time() - start_time) * 1000)
 
-    # Parse response
+    # Parse response — sanitize control characters that break JSON parsing
     raw_text = response.content[0].text
+    raw_text = re.sub(r"[\x00-\x1f\x7f]", " ", raw_text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
-        import re
-
         match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
         if match:
             parsed = json.loads(match.group())
@@ -1323,11 +1322,10 @@ def generate_preview(
     )
 
     raw_text = response.content[0].text
+    raw_text = re.sub(r"[\x00-\x1f\x7f]", " ", raw_text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
-        import re
-
         match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
         if match:
             parsed = json.loads(match.group())
