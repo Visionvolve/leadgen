@@ -10,7 +10,9 @@ import logging
 import threading
 import time
 import uuid as _uuid_mod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from flask import current_app
 from sqlalchemy import text
 
 from ..models import db
@@ -671,7 +673,7 @@ def run_dag_stage(
     Like run_stage_reactive but uses completion-record-based eligibility
     and records completions after each entity.
     """
-    from .pipeline_engine import _process_entity, _extract_cost
+    from .pipeline_engine import _process_entity, _extract_cost, _api_semaphore
 
     stage_def = get_stage(stage_code)
     if not stage_def:
@@ -680,7 +682,17 @@ def run_dag_stage(
 
     entity_type = stage_def["entity_type"]
 
+    def _process_entity_in_thread(entity_id, prev_data, app_obj):
+        """Process one entity with rate limiting in its own app context."""
+        with app_obj.app_context():
+            with _api_semaphore:
+                return _process_entity(
+                    stage_code, entity_id, tenant_id, previous_data=prev_data
+                )
+
     with app.app_context():
+        max_workers = current_app.config.get("ENRICHMENT_MAX_WORKERS", 5)
+
         # Auto-skip entities that don't match country gate
         auto_skip_country_gated(stage_code, pipeline_run_id, tenant_id, tag_id)
 
@@ -692,10 +704,11 @@ def run_dag_stage(
 
         _update_stage_run(run_id, status="running")
         logger.info(
-            "DAG stage %s started (run %s, pipeline %s)",
+            "DAG stage %s started (run %s, pipeline %s, %d workers)",
             stage_code,
             run_id,
             pipeline_run_id,
+            max_workers,
         )
 
         while True:
@@ -752,96 +765,199 @@ def run_dag_stage(
                 new_total = done_count + failed_count + len(new_ids)
                 _update_stage_run(run_id, total=new_total)
 
-                for entity_id in new_ids:
-                    if _check_stop_signal(run_id):
-                        _update_stage_run(
-                            run_id,
-                            status="stopped",
-                            done=done_count,
-                            failed=failed_count,
-                            cost_usd=total_cost,
-                        )
-                        return
+                if max_workers <= 1:
+                    # Serial processing (original path)
+                    for entity_id in new_ids:
+                        if _check_stop_signal(run_id):
+                            _update_stage_run(
+                                run_id,
+                                status="stopped",
+                                done=done_count,
+                                failed=failed_count,
+                                cost_usd=total_cost,
+                            )
+                            return
 
-                    processed_ids.add(entity_id)
-                    entity_name = _get_entity_name(stage_code, entity_id, tenant_id)
-                    _update_current_item(run_id, entity_name, "processing")
+                        processed_ids.add(entity_id)
+                        entity_name = _get_entity_name(stage_code, entity_id, tenant_id)
+                        _update_current_item(run_id, entity_name, "processing")
 
-                    try:
-                        # Fetch previous data for re-enrichment
-                        prev_data = None
-                        if re_enrich_horizons and stage_code in re_enrich_horizons:
-                            prev_data = _fetch_previous_data(
-                                entity_type, entity_id, stage_code
+                        try:
+                            prev_data = None
+                            if re_enrich_horizons and stage_code in re_enrich_horizons:
+                                prev_data = _fetch_previous_data(
+                                    entity_type, entity_id, stage_code
+                                )
+
+                            result = _process_entity(
+                                stage_code,
+                                entity_id,
+                                tenant_id,
+                                previous_data=prev_data,
+                            )
+                            cost = _extract_cost(result)
+                            total_cost += cost
+
+                            if isinstance(result, dict) and "gate_passed" in result:
+                                completion_status = (
+                                    "completed"
+                                    if result["gate_passed"]
+                                    else "disqualified"
+                                )
+                            else:
+                                completion_status = "completed"
+
+                            done_count += 1
+                            record_completion(
+                                tenant_id,
+                                tag_id,
+                                pipeline_run_id,
+                                entity_type,
+                                entity_id,
+                                stage_code,
+                                status=completion_status,
+                                cost_usd=cost,
+                            )
+                            _update_current_item(run_id, entity_name, "ok")
+                            _update_stage_run(
+                                run_id,
+                                done=done_count,
+                                cost_usd=total_cost,
+                                failed=failed_count,
+                            )
+                        except Exception as e:
+                            db.session.rollback()
+                            failed_count += 1
+                            record_completion(
+                                tenant_id,
+                                tag_id,
+                                pipeline_run_id,
+                                entity_type,
+                                entity_id,
+                                stage_code,
+                                status="failed",
+                                error=str(e),
+                            )
+                            _update_current_item(run_id, entity_name, "failed")
+                            logger.warning(
+                                "DAG stage %s item %s failed: %s",
+                                stage_code,
+                                entity_id,
+                                e,
+                            )
+                            _update_stage_run(
+                                run_id,
+                                done=done_count,
+                                failed=failed_count,
+                                cost_usd=total_cost,
+                                error=str(e)[:500],
                             )
 
-                        result = _process_entity(
-                            stage_code, entity_id, tenant_id, previous_data=prev_data
-                        )
-                        cost = _extract_cost(result)
-                        total_cost += cost
+                        if sample_remaining is not None:
+                            sample_remaining -= 1
+                            if sample_remaining <= 0:
+                                break
+                else:
+                    # Parallel processing with ThreadPoolExecutor
+                    app_obj = current_app._get_current_object()
+                    batch_ids = list(new_ids)  # snapshot
 
-                        # Handle gate results (triage, review, etc.)
-                        if isinstance(result, dict) and "gate_passed" in result:
-                            completion_status = (
-                                "completed" if result["gate_passed"] else "disqualified"
+                    # Prepare previous data before submitting to threads
+                    prev_data_map = {}
+                    if re_enrich_horizons and stage_code in re_enrich_horizons:
+                        for eid in batch_ids:
+                            prev_data_map[eid] = _fetch_previous_data(
+                                entity_type, eid, stage_code
                             )
-                        else:
-                            completion_status = "completed"
 
-                        done_count += 1
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = {}
+                        for entity_id in batch_ids:
+                            if _check_stop_signal(run_id):
+                                break
+                            processed_ids.add(entity_id)
+                            prev_data = prev_data_map.get(entity_id)
+                            future = executor.submit(
+                                _process_entity_in_thread, entity_id, prev_data, app_obj
+                            )
+                            futures[future] = entity_id
 
-                        # Record completion
-                        record_completion(
-                            tenant_id,
-                            tag_id,
-                            pipeline_run_id,
-                            entity_type,
-                            entity_id,
-                            stage_code,
-                            status=completion_status,
-                            cost_usd=cost,
-                        )
+                        for future in as_completed(futures):
+                            entity_id = futures[future]
+                            entity_name = _get_entity_name(
+                                stage_code, entity_id, tenant_id
+                            )
 
-                        _update_current_item(run_id, entity_name, "ok")
-                        _update_stage_run(
-                            run_id,
-                            done=done_count,
-                            cost_usd=total_cost,
-                            failed=failed_count,
-                        )
-                    except Exception as e:
-                        db.session.rollback()
-                        failed_count += 1
+                            try:
+                                result = future.result()
+                                cost = _extract_cost(result)
+                                total_cost += cost
 
-                        # Record failure
-                        record_completion(
-                            tenant_id,
-                            tag_id,
-                            pipeline_run_id,
-                            entity_type,
-                            entity_id,
-                            stage_code,
-                            status="failed",
-                            error=str(e),
-                        )
+                                if isinstance(result, dict) and "gate_passed" in result:
+                                    completion_status = (
+                                        "completed"
+                                        if result["gate_passed"]
+                                        else "disqualified"
+                                    )
+                                else:
+                                    completion_status = "completed"
 
-                        _update_current_item(run_id, entity_name, "failed")
-                        logger.warning(
-                            "DAG stage %s item %s failed: %s", stage_code, entity_id, e
-                        )
-                        _update_stage_run(
-                            run_id,
-                            done=done_count,
-                            failed=failed_count,
-                            cost_usd=total_cost,
-                            error=str(e)[:500],
-                        )
+                                done_count += 1
+                                record_completion(
+                                    tenant_id,
+                                    tag_id,
+                                    pipeline_run_id,
+                                    entity_type,
+                                    entity_id,
+                                    stage_code,
+                                    status=completion_status,
+                                    cost_usd=cost,
+                                )
+                                _update_current_item(run_id, entity_name, "ok")
+                                _update_stage_run(
+                                    run_id,
+                                    done=done_count,
+                                    cost_usd=total_cost,
+                                    failed=failed_count,
+                                )
+                                logger.info(
+                                    "[%s] Enriched %s (%d/%d)",
+                                    stage_code,
+                                    entity_name,
+                                    done_count,
+                                    len(batch_ids),
+                                )
+                            except Exception as e:
+                                failed_count += 1
+                                record_completion(
+                                    tenant_id,
+                                    tag_id,
+                                    pipeline_run_id,
+                                    entity_type,
+                                    entity_id,
+                                    stage_code,
+                                    status="failed",
+                                    error=str(e),
+                                )
+                                _update_current_item(run_id, entity_name, "failed")
+                                logger.warning(
+                                    "DAG stage %s item %s failed: %s",
+                                    stage_code,
+                                    entity_id,
+                                    e,
+                                )
+                                _update_stage_run(
+                                    run_id,
+                                    done=done_count,
+                                    failed=failed_count,
+                                    cost_usd=total_cost,
+                                    error=str(e)[:500],
+                                )
 
-                    if sample_remaining is not None:
-                        sample_remaining -= 1
-                        if sample_remaining <= 0:
-                            break
+                            if sample_remaining is not None:
+                                sample_remaining -= 1
+                                if sample_remaining <= 0:
+                                    break
             else:
                 # No new items — check termination
                 preds_done = _predecessors_terminal(predecessor_run_ids)
