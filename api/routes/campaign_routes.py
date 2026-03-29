@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+from datetime import datetime
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
 
@@ -299,7 +300,7 @@ def get_campaign(campaign_id):
                 c.generation_started_at, c.generation_completed_at,
                 c.created_at, c.updated_at,
                 o.name AS owner_name, o.id AS owner_id,
-                c.sender_config
+                c.sender_config, c.language
             FROM campaigns c
             LEFT JOIN owners o ON c.owner_id = o.id
             WHERE c.id = :id AND c.tenant_id = :t
@@ -341,6 +342,7 @@ def get_campaign(campaign_id):
             "owner_name": row[13],
             "owner_id": str(row[14]) if row[14] else None,
             "sender_config": _parse_jsonb(row[15]) or {},
+            "language": row[16] or "cs",
             "contact_status_counts": status_counts,
         }
     )
@@ -1108,11 +1110,12 @@ def add_campaign_contacts(campaign_id):
             db.text("""
                 UPDATE campaigns
                 SET total_contacts = (
-                    SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = :cid
+                    SELECT COUNT(*) FROM campaign_contacts
+                    WHERE campaign_id = :cid AND tenant_id = :t
                 )
-                WHERE id = :cid
+                WHERE id = :cid AND tenant_id = :t
             """),
-            {"cid": campaign_id},
+            {"cid": campaign_id, "t": tenant_id},
         )
 
     db.session.commit()
@@ -1164,6 +1167,7 @@ def bulk_add_contacts_by_segment(campaign_id):
     # Build query to find contacts via company segment
     where = [
         "ct.tenant_id = :t",
+        "co.tenant_id = :t",
         "(ct.is_disqualified = false OR ct.is_disqualified IS NULL)",
         "co.segment = :segment",
     ]
@@ -1185,9 +1189,17 @@ def bulk_add_contacts_by_segment(campaign_id):
     collab_since = filters.get("collaboration_since")
     collab_before = filters.get("collaboration_before")
     if collab_since:
+        try:
+            datetime.fromisoformat(collab_since)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid collaboration_since datetime"}), 400
         where.append("ct.last_collaboration_at >= :collab_since")
         params["collab_since"] = collab_since
     if collab_before:
+        try:
+            datetime.fromisoformat(collab_before)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid collaboration_before datetime"}), 400
         where.append(
             "(ct.last_collaboration_at < :collab_before"
             " OR ct.last_collaboration_at IS NULL)"
@@ -1240,11 +1252,12 @@ def bulk_add_contacts_by_segment(campaign_id):
             db.text("""
                 UPDATE campaigns
                 SET total_contacts = (
-                    SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = :cid
+                    SELECT COUNT(*) FROM campaign_contacts
+                    WHERE campaign_id = :cid AND tenant_id = :t
                 )
-                WHERE id = :cid
+                WHERE id = :cid AND tenant_id = :t
             """),
-            {"cid": campaign_id},
+            {"cid": campaign_id, "t": tenant_id},
         )
 
     db.session.commit()
@@ -1298,11 +1311,12 @@ def remove_campaign_contacts(campaign_id):
         db.text("""
             UPDATE campaigns
             SET total_contacts = (
-                SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = :cid
+                SELECT COUNT(*) FROM campaign_contacts
+                WHERE campaign_id = :cid AND tenant_id = :t
             )
-            WHERE id = :cid
+            WHERE id = :cid AND tenant_id = :t
         """),
-        {"cid": campaign_id},
+        {"cid": campaign_id, "t": tenant_id},
     )
     db.session.commit()
 
@@ -1650,8 +1664,10 @@ def start_campaign_generation(campaign_id):
         # Update total_contacts
         total_contacts = len(enriched_contact_ids)
         db.session.execute(
-            db.text("UPDATE campaigns SET total_contacts = :tc WHERE id = :id"),
-            {"tc": total_contacts, "id": campaign_id},
+            db.text(
+                "UPDATE campaigns SET total_contacts = :tc WHERE id = :id AND tenant_id = :t"
+            ),
+            {"tc": total_contacts, "id": campaign_id, "t": tenant_id},
         )
 
     # Transition to generating

@@ -651,46 +651,50 @@ def seed_campaigns():
         created = 0
         skipped = 0
         for cdef in CAMPAIGNS:
-            # Check if campaign already exists by name
-            existing = Campaign.query.filter_by(
-                tenant_id=tenant.id, name=cdef["name"]
-            ).first()
-            if existing:
-                print(f"  SKIP: {cdef['name']} (already exists, id={existing.id})")
-                skipped += 1
-                continue
+            try:
+                # Check if campaign already exists by name
+                existing = Campaign.query.filter_by(
+                    tenant_id=tenant.id, name=cdef["name"]
+                ).first()
+                if existing:
+                    print(f"  SKIP: {cdef['name']} (already exists, id={existing.id})")
+                    skipped += 1
+                    continue
 
-            campaign = Campaign(
-                tenant_id=tenant.id,
-                name=cdef["name"],
-                description=cdef["description"],
-                language=cdef["language"],
-                channel=cdef["channel"],
-                status=cdef["status"],
-                generation_config=json.dumps(cdef["generation_config"]),
-                target_criteria=json.dumps(cdef["target_criteria"]),
-            )
-            db.session.add(campaign)
-            db.session.flush()  # get campaign.id
-
-            for sdef in cdef["steps"]:
-                step = CampaignStep(
-                    campaign_id=campaign.id,
+                campaign = Campaign(
                     tenant_id=tenant.id,
-                    position=sdef["position"],
-                    day_offset=sdef["day_offset"],
-                    channel=sdef["channel"],
-                    label=sdef["label"],
-                    condition=sdef["condition"],
-                    config=json.dumps(sdef["config"]),
+                    name=cdef["name"],
+                    description=cdef["description"],
+                    language=cdef["language"],
+                    channel=cdef["channel"],
+                    status=cdef["status"],
+                    generation_config=json.dumps(cdef["generation_config"]),
+                    target_criteria=json.dumps(cdef["target_criteria"]),
                 )
-                db.session.add(step)
+                db.session.add(campaign)
+                db.session.flush()  # get campaign.id
 
-            print(
-                f"  CREATE: {cdef['name']} "
-                f"({len(cdef['steps'])} steps, lang={cdef['language']})"
-            )
-            created += 1
+                for sdef in cdef["steps"]:
+                    step = CampaignStep(
+                        campaign_id=campaign.id,
+                        tenant_id=tenant.id,
+                        position=sdef["position"],
+                        day_offset=sdef["day_offset"],
+                        channel=sdef["channel"],
+                        label=sdef["label"],
+                        condition=sdef["condition"],
+                        config=json.dumps(sdef["config"]),
+                    )
+                    db.session.add(step)
+
+                print(
+                    f"  CREATE: {cdef['name']} "
+                    f"({len(cdef['steps'])} steps, lang={cdef['language']})"
+                )
+                created += 1
+            except Exception as exc:
+                db.session.rollback()
+                print(f"  ERROR: {cdef['name']} — {exc}")
 
         db.session.commit()
         print(f"\nDone: {created} created, {skipped} skipped.")

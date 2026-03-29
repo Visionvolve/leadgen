@@ -21,6 +21,8 @@ class TestCampaignLanguageField:
 
         resp = client.get(f"/api/campaigns/{campaign_id}", headers=headers)
         assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["language"] == "cs"
 
     def test_campaign_create_with_language(self, client, seed_companies_contacts):
         """Campaign can be created with explicit language."""
@@ -253,6 +255,35 @@ class TestBulkContactAddBySegment:
             json={"segment": "obec"},
         )
         assert resp.status_code == 404
+
+    def test_bulk_add_ready_campaign(self, client, db, seed_companies_contacts):
+        """Bulk add to a 'ready' campaign should succeed."""
+        self._setup_segment_data(db, seed_companies_contacts)
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+
+        resp = client.post(
+            "/api/campaigns", headers=headers, json={"name": "Ready Camp"}
+        )
+        campaign_id = resp.get_json()["id"]
+
+        # Set status to 'ready'
+        from api.models import db as _db
+
+        _db.session.execute(
+            _db.text("UPDATE campaigns SET status = 'ready' WHERE id = :id"),
+            {"id": campaign_id},
+        )
+        _db.session.commit()
+
+        resp = client.post(
+            f"/api/campaigns/{campaign_id}/contacts/bulk",
+            headers=headers,
+            json={"segment": "obec"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["added"] == 2
 
     def test_bulk_add_non_draft_campaign(self, client, db, seed_companies_contacts):
         """Bulk add to non-draft campaign returns 400."""
