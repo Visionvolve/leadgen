@@ -10,7 +10,15 @@
  * Ported from ~/git/linkedin-lead-uploader/background.js
  */
 
-import { uploadLeads, uploadActivities, reportLinkedInIdentity } from '../common/api-client';
+import {
+  uploadLeads,
+  uploadActivities,
+  reportLinkedInIdentity,
+  validateContact,
+  validateCompany as apiValidateCompany,
+  updateContact as apiUpdateContact,
+  updateCompanyRecord,
+} from '../common/api-client';
 import { getAuthState, storeAuthState } from '../common/auth';
 import { config, jitter } from '../common/config';
 import type {
@@ -731,6 +739,81 @@ chrome.runtime.onMessage.addListener(
     if (msgType === 'linkedin_page_loaded') {
       log.debug(`LinkedIn page loaded: ${message.url}`);
       sendResponse({ success: true });
+      return true;
+    }
+
+    // LinkedIn profile validation
+    if (msgType === 'VALIDATE_PROFILE') {
+      const data = message.data as { fullName: string; headline: string; companyName: string; linkedinUrl: string };
+      validateContact({
+        linkedin_url: data.linkedinUrl,
+        name: data.fullName,
+        company: data.companyName,
+      })
+        .then(sendResponse)
+        .catch((err) => {
+          log.error(`Profile validation failed: ${err}`);
+          sendResponse({ match: false, error: String(err) });
+        });
+      return true;
+    }
+
+    // LinkedIn company validation
+    if (msgType === 'VALIDATE_COMPANY') {
+      const data = message.data as { companyName: string; linkedinUrl: string };
+      apiValidateCompany({
+        linkedin_url: data.linkedinUrl,
+        name: data.companyName,
+      })
+        .then(sendResponse)
+        .catch((err) => {
+          log.error(`Company validation failed: ${err}`);
+          sendResponse({ match: false, error: String(err) });
+        });
+      return true;
+    }
+
+    // Update contact in CRM
+    if (msgType === 'UPDATE_CONTACT') {
+      const contactId = message.contactId as string;
+      const fields = message.fields as Record<string, unknown>;
+      apiUpdateContact(contactId, fields)
+        .then(sendResponse)
+        .catch((err) => {
+          log.error(`Contact update failed: ${err}`);
+          sendResponse({ ok: false, error: String(err) });
+        });
+      return true;
+    }
+
+    // Update company in CRM
+    if (msgType === 'UPDATE_COMPANY') {
+      const companyId = message.companyId as string;
+      const fields = message.fields as Record<string, unknown>;
+      updateCompanyRecord(companyId, fields)
+        .then(sendResponse)
+        .catch((err) => {
+          log.error(`Company update failed: ${err}`);
+          sendResponse({ ok: false, error: String(err) });
+        });
+      return true;
+    }
+
+    // Add contact to CRM (reuse lead upload)
+    if (msgType === 'ADD_CONTACT') {
+      const data = message.data as { fullName: string; headline: string; companyName: string; linkedinUrl: string };
+      const lead: Lead = {
+        name: data.fullName,
+        job_title: data.headline,
+        company_name: data.companyName,
+        linkedin_url: data.linkedinUrl,
+      };
+      handleLeadUpload([lead], 'linkedin_validator', '')
+        .then(sendResponse)
+        .catch((err) => {
+          log.error(`Add contact failed: ${err}`);
+          sendResponse({ success: false, error: String(err) });
+        });
       return true;
     }
 
