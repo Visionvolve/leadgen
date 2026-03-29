@@ -142,12 +142,40 @@ def enrich_career(
         logger.error("Career research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Upsert to contact_enrichment
-    _upsert_career_enrichment(entity_id, research_data, total_cost)
+    # 2. Compute quality score for career block
+    from .quality_scoring import assess_block_quality, parse_confidence
+
+    career_data = {
+        "career_highlights": research_data.get("career_highlights"),
+        "previous_companies": research_data.get("previous_companies"),
+        "education": research_data.get("education"),
+        "certifications": research_data.get("certifications"),
+        "expertise_areas": research_data.get("expertise_areas"),
+    }
+    block_flags = []
+    prev = research_data.get("previous_companies")
+    if (
+        not prev or (isinstance(prev, list) and len(prev) == 0)
+    ) and not research_data.get("career_highlights"):
+        block_flags.append("no_career_history")
+
+    quality = assess_block_quality(
+        data=career_data,
+        block_code="career",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Upsert to contact_enrichment
+    _upsert_career_enrichment(entity_id, research_data, total_cost, quality)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +281,7 @@ def _research_career(contact_data, model, user_id=None, enrichment_language=None
 # ---------------------------------------------------------------------------
 
 
-def _upsert_career_enrichment(contact_id, data, cost):
+def _upsert_career_enrichment(contact_id, data, cost, quality=None):
     """Upsert career enrichment fields into contact_enrichment table."""
     now_str = datetime.now(timezone.utc).isoformat()
 
@@ -317,6 +345,52 @@ def _upsert_career_enrichment(contact_id, data, cost):
                 VALUES (:cid, {val_list}, :enriched_at, :cost)
             """),
             params,
+        )
+
+    # Update block_quality JSONB with career block score
+    if quality:
+        _update_block_quality(contact_id, "career", quality)
+
+
+def _update_block_quality(contact_id, block_name, quality):
+    """Update block_quality JSONB field with a specific block's quality data."""
+    block_entry = json.dumps(
+        {
+            "score": quality.quality_score,
+            "confidence": quality.confidence,
+            "flags": quality.qc_flags,
+            "field_coverage": quality.field_coverage,
+        }
+    )
+    dialect = db.engine.dialect.name
+    if dialect == "sqlite":
+        row = db.session.execute(
+            text(
+                "SELECT block_quality FROM contact_enrichment WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id)},
+        ).fetchone()
+        existing = {}
+        if row and row[0]:
+            try:
+                existing = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            except (json.JSONDecodeError, TypeError):
+                existing = {}
+        existing[block_name] = json.loads(block_entry)
+        db.session.execute(
+            text(
+                "UPDATE contact_enrichment SET block_quality = :bq WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id), "bq": json.dumps(existing)},
+        )
+    else:
+        db.session.execute(
+            text("""
+                UPDATE contact_enrichment
+                SET block_quality = COALESCE(block_quality, '{}'::jsonb) || jsonb_build_object(:block, CAST(:entry AS jsonb))
+                WHERE contact_id = :cid
+            """),
+            {"cid": str(contact_id), "block": block_name, "entry": block_entry},
         )
 
 

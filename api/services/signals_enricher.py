@@ -151,10 +151,26 @@ def enrich_signals(
         logger.warning("Failed to parse signals response for company %s", company_id)
         return {"enrichment_cost_usd": 0, "error": "parse_error"}
 
-    # 5. Upsert to company_enrichment_signals
-    _upsert_signals(company_id, parsed, cost_usd)
+    # 5. Compute quality score
+    from .quality_scoring import assess_block_quality, parse_confidence
 
-    # 6. Log LLM usage
+    block_flags = []
+    if not parsed.get("hiring_signals") and not parsed.get("job_posting_count"):
+        block_flags.append("no_hiring_data")
+    if not parsed.get("ai_hiring") and not parsed.get("ai_adoption_level"):
+        block_flags.append("no_ai_signals")
+
+    quality = assess_block_quality(
+        data=parsed,
+        block_code="signals",
+        confidence=parse_confidence(parsed.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 6. Upsert to company_enrichment_signals
+    _upsert_signals(company_id, parsed, cost_usd, quality)
+
+    # 7. Log LLM usage
     duration_ms = int((time.time() - start_time) * 1000)
     if log_llm_usage:
         log_llm_usage(
@@ -174,7 +190,11 @@ def enrich_signals(
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": cost_usd}
+    return {
+        "enrichment_cost_usd": cost_usd,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +251,7 @@ def _safe_json(val):
     return json.dumps(val)
 
 
-def _upsert_signals(company_id, parsed, cost_usd):
+def _upsert_signals(company_id, parsed, cost_usd, quality=None):
     """Upsert enrichment results into company_enrichment_signals."""
     params = {
         "company_id": str(company_id),
@@ -253,6 +273,11 @@ def _upsert_signals(company_id, parsed, cost_usd):
         "digital_maturity_score": parsed.get("digital_maturity_score"),
         "it_spend_indicators": parsed.get("it_spend_indicators"),
         "cost": cost_usd,
+        "quality_score": quality.quality_score if quality else None,
+        "confidence": float(quality.confidence)
+        if quality and quality.confidence is not None
+        else None,
+        "qc_flags": json.dumps(quality.qc_flags) if quality else "[]",
     }
 
     dialect = db.engine.dialect.name
@@ -266,6 +291,7 @@ def _upsert_signals(company_id, parsed, cost_usd):
                     growth_indicators, job_posting_count, hiring_departments,
                     workflow_ai_evidence, regulatory_pressure, employee_sentiment,
                     tech_stack_categories, digital_maturity_score, it_spend_indicators,
+                    quality_score, confidence, qc_flags,
                     enriched_at, enrichment_cost_usd,
                     created_at, updated_at
                 ) VALUES (
@@ -275,6 +301,7 @@ def _upsert_signals(company_id, parsed, cost_usd):
                     :growth_indicators, :job_posting_count, :hiring_departments,
                     :workflow_ai_evidence, :regulatory_pressure, :employee_sentiment,
                     :tech_stack_categories, :digital_maturity_score, :it_spend_indicators,
+                    :quality_score, :confidence, :qc_flags,
                     CURRENT_TIMESTAMP, :cost,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
@@ -291,6 +318,7 @@ def _upsert_signals(company_id, parsed, cost_usd):
                     growth_indicators, job_posting_count, hiring_departments,
                     workflow_ai_evidence, regulatory_pressure, employee_sentiment,
                     tech_stack_categories, digital_maturity_score, it_spend_indicators,
+                    quality_score, confidence, qc_flags,
                     enriched_at, enrichment_cost_usd
                 ) VALUES (
                     :company_id, :digital_initiatives, :leadership_changes,
@@ -299,6 +327,7 @@ def _upsert_signals(company_id, parsed, cost_usd):
                     :growth_indicators, :job_posting_count, CAST(:hiring_departments AS jsonb),
                     :workflow_ai_evidence, :regulatory_pressure, :employee_sentiment,
                     :tech_stack_categories, :digital_maturity_score, :it_spend_indicators,
+                    :quality_score, :confidence, CAST(:qc_flags AS jsonb),
                     CURRENT_TIMESTAMP, :cost
                 )
                 ON CONFLICT (company_id) DO UPDATE SET
@@ -319,6 +348,9 @@ def _upsert_signals(company_id, parsed, cost_usd):
                     tech_stack_categories = EXCLUDED.tech_stack_categories,
                     digital_maturity_score = EXCLUDED.digital_maturity_score,
                     it_spend_indicators = EXCLUDED.it_spend_indicators,
+                    quality_score = EXCLUDED.quality_score,
+                    confidence = EXCLUDED.confidence,
+                    qc_flags = EXCLUDED.qc_flags,
                     enriched_at = EXCLUDED.enriched_at,
                     enrichment_cost_usd = EXCLUDED.enrichment_cost_usd,
                     updated_at = now()

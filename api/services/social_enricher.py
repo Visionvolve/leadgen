@@ -141,17 +141,44 @@ def enrich_social(
         logger.error("Social research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Upsert to contact_enrichment
-    _upsert_social_enrichment(entity_id, research_data, total_cost)
+    # 2. Compute quality score for social block
+    from .quality_scoring import assess_block_quality, parse_confidence
 
-    # 3. Update linkedin_url on contacts table if found
+    social_data = {
+        "linkedin_profile_summary": research_data.get("linkedin_profile_summary"),
+        "twitter_handle": research_data.get("twitter_handle"),
+        "github_username": research_data.get("github_username"),
+        "speaking_engagements": research_data.get("speaking_engagements"),
+        "publications": research_data.get("publications"),
+        "public_presence_level": research_data.get("public_presence_level"),
+        "thought_leadership": research_data.get("thought_leadership"),
+    }
+    block_flags = []
+    if not research_data.get("linkedin_profile_summary"):
+        block_flags.append("no_linkedin")
+
+    quality = assess_block_quality(
+        data=social_data,
+        block_code="social",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Upsert to contact_enrichment
+    _upsert_social_enrichment(entity_id, research_data, total_cost, quality)
+
+    # 4. Update linkedin_url on contacts table if found
     linkedin_url = research_data.get("linkedin_url")
     if linkedin_url and linkedin_url != "null":
         _update_contact_linkedin(entity_id, linkedin_url)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +279,7 @@ def _research_social(contact_data, model, user_id=None, enrichment_language=None
 # ---------------------------------------------------------------------------
 
 
-def _upsert_social_enrichment(contact_id, data, cost):
+def _upsert_social_enrichment(contact_id, data, cost, quality=None):
     """Upsert social enrichment fields into contact_enrichment table."""
     now_str = datetime.now(timezone.utc).isoformat()
 
@@ -299,6 +326,53 @@ def _upsert_social_enrichment(contact_id, data, cost):
                 VALUES (:cid, {val_list}, :enriched_at, :cost)
             """),
             params,
+        )
+
+    # Update block_quality JSONB with social block score
+    if quality:
+        _update_block_quality(contact_id, "social", quality)
+
+
+def _update_block_quality(contact_id, block_name, quality):
+    """Update block_quality JSONB field with a specific block's quality data."""
+    block_entry = json.dumps(
+        {
+            "score": quality.quality_score,
+            "confidence": quality.confidence,
+            "flags": quality.qc_flags,
+            "field_coverage": quality.field_coverage,
+        }
+    )
+    dialect = db.engine.dialect.name
+    if dialect == "sqlite":
+        # SQLite: read, merge, write back
+        row = db.session.execute(
+            text(
+                "SELECT block_quality FROM contact_enrichment WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id)},
+        ).fetchone()
+        existing = {}
+        if row and row[0]:
+            try:
+                existing = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            except (json.JSONDecodeError, TypeError):
+                existing = {}
+        existing[block_name] = json.loads(block_entry)
+        db.session.execute(
+            text(
+                "UPDATE contact_enrichment SET block_quality = :bq WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id), "bq": json.dumps(existing)},
+        )
+    else:
+        db.session.execute(
+            text("""
+                UPDATE contact_enrichment
+                SET block_quality = COALESCE(block_quality, '{}'::jsonb) || jsonb_build_object(:block, CAST(:entry AS jsonb))
+                WHERE contact_id = :cid
+            """),
+            {"cid": str(contact_id), "block": block_name, "entry": block_entry},
         )
 
 

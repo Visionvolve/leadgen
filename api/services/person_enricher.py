@@ -349,7 +349,33 @@ def enrich_person(
     )
     linkedin_summary = _build_linkedin_summary(profile_data)
 
-    # 7. Upsert contact_enrichment (BL-153: pass all research data)
+    # 7. Compute quality score for person block
+    from .quality_scoring import assess_block_quality, parse_confidence
+
+    person_data = {
+        "person_summary": relationship_summary,
+        "role_verified": scores.get("role_verified"),
+        "career_trajectory": profile_data.get("career_trajectory"),
+        "authority_score": scores.get("authority_score"),
+        "seniority": scores.get("seniority"),
+        "department": scores.get("department"),
+        "contact_score": scores.get("contact_score"),
+        "icp_fit": scores.get("icp_fit"),
+    }
+    block_flags = []
+    if scores.get("role_mismatch_flag"):
+        block_flags.append("role_mismatch")
+    if scores.get("authority_score") is not None and scores["authority_score"] < 30:
+        block_flags.append("low_authority")
+
+    quality = assess_block_quality(
+        data=person_data,
+        block_code="person",
+        confidence=parse_confidence(profile_data.get("data_confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 8. Upsert contact_enrichment (BL-153: pass all research data)
     _upsert_contact_enrichment(
         contact_id,
         relationship_summary,
@@ -359,14 +385,19 @@ def enrich_person(
         total_cost,
         signals_data=signals_data,
         synthesis_data=synthesis_data,
+        quality=quality,
     )
 
-    # 8. Update contact fields (pass signals_data for linkedin_activity_level)
+    # 9. Update contact fields (pass signals_data for linkedin_activity_level)
     _update_contact(contact_id, scores, total_cost, signals_data=signals_data)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -934,6 +965,7 @@ def _upsert_contact_enrichment(
     cost,
     signals_data=None,
     synthesis_data=None,
+    quality=None,
 ):
     """Upsert into contact_enrichment table.
 
@@ -1003,6 +1035,10 @@ def _upsert_contact_enrichment(
         "contact_score",
         "icp_fit",
         "scoring_flags",
+        "quality_score",
+        "confidence",
+        "qc_flags",
+        "block_quality",
     )
 
     params = {
@@ -1048,6 +1084,24 @@ def _upsert_contact_enrichment(
         "contact_score": scores.get("contact_score"),
         "icp_fit": scores.get("icp_fit"),
         "scoring_flags": scoring_flags,
+        # Quality scoring
+        "quality_score": quality.quality_score if quality else None,
+        "confidence": float(quality.confidence)
+        if quality and quality.confidence is not None
+        else None,
+        "qc_flags": json.dumps(quality.qc_flags) if quality else "[]",
+        "block_quality": json.dumps(
+            {
+                "person": {
+                    "score": quality.quality_score,
+                    "confidence": quality.confidence,
+                    "flags": quality.qc_flags,
+                    "field_coverage": quality.field_coverage,
+                },
+            }
+        )
+        if quality
+        else "{}",
         "enriched_at": now_str,
         "cost": cost,
     }

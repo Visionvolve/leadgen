@@ -143,12 +143,40 @@ def enrich_contact_details(
         logger.error("Contact details research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Update contacts table (only blank fields)
+    # 2. Compute quality score for contact_details block
+    from .quality_scoring import assess_block_quality, parse_confidence
+
+    details_data = {
+        "email": research_data.get("email_address") or contact_data.get("email"),
+        "phone": research_data.get("phone_number") or contact_data.get("phone"),
+        "linkedin_url": research_data.get("linkedin_url")
+        or contact_data.get("linkedin_url"),
+        "profile_data_confidence": research_data.get("confidence"),
+    }
+    block_flags = []
+    if details_data.get("email") and not contact_data.get("email_verified"):
+        block_flags.append("email_unverified")
+
+    quality = assess_block_quality(
+        data=details_data,
+        block_code="contact_details",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Update contacts table (only blank fields)
     _update_contact_details(entity_id, contact_data, research_data)
+
+    # 4. Update block_quality on contact_enrichment
+    _update_block_quality(entity_id, "contact_details", quality)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +282,48 @@ def _research_contact_details(
 # ---------------------------------------------------------------------------
 # Database writes
 # ---------------------------------------------------------------------------
+
+
+def _update_block_quality(contact_id, block_name, quality):
+    """Update block_quality JSONB field with a specific block's quality data."""
+    block_entry = json.dumps(
+        {
+            "score": quality.quality_score,
+            "confidence": quality.confidence,
+            "flags": quality.qc_flags,
+            "field_coverage": quality.field_coverage,
+        }
+    )
+    dialect = db.engine.dialect.name
+    if dialect == "sqlite":
+        row = db.session.execute(
+            text(
+                "SELECT block_quality FROM contact_enrichment WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id)},
+        ).fetchone()
+        existing = {}
+        if row and row[0]:
+            try:
+                existing = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            except (json.JSONDecodeError, TypeError):
+                existing = {}
+        existing[block_name] = json.loads(block_entry)
+        db.session.execute(
+            text(
+                "UPDATE contact_enrichment SET block_quality = :bq WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id), "bq": json.dumps(existing)},
+        )
+    else:
+        db.session.execute(
+            text("""
+                UPDATE contact_enrichment
+                SET block_quality = COALESCE(block_quality, '{}'::jsonb) || jsonb_build_object(:block, CAST(:entry AS jsonb))
+                WHERE contact_id = :cid
+            """),
+            {"cid": str(contact_id), "block": block_name, "entry": block_entry},
+        )
 
 
 def _update_contact_details(contact_id, existing, research_data):
