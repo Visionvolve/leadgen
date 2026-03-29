@@ -242,6 +242,10 @@ def create_campaign():
                     if isinstance(channels, dict) and channels.get("primary"):
                         channel = channels["primary"]
 
+    # UA campaign features: language + scheduled launch
+    language = body.get("language", "cs")
+    scheduled_launch_at = body.get("scheduled_launch_at")
+
     # Use ORM to avoid SQL dialect issues with JSONB casting
     campaign = Campaign(
         tenant_id=tenant_id,
@@ -251,6 +255,8 @@ def create_campaign():
         status="draft",
         strategy_id=strategy_id,
         channel=channel,
+        language=language,
+        scheduled_launch_at=scheduled_launch_at,
         target_criteria=json.dumps(target_criteria)
         if isinstance(target_criteria, dict)
         else target_criteria,
@@ -1120,6 +1126,134 @@ def add_campaign_contacts(campaign_id):
             "skipped": skipped,
             "total": added + len(existing_ids),
             "gaps": enrichment_gaps,
+        }
+    )
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/contacts/bulk", methods=["POST"])
+@require_role("editor")
+def bulk_add_contacts_by_segment(campaign_id):
+    """Bulk-add contacts to a campaign by company segment filter.
+
+    Body: {segment: "obec", filters: {language: "cs", ...}}
+    Returns: {added: N, skipped: N, total: N}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify campaign exists and is in draft or ready state
+    campaign = db.session.execute(
+        db.text("SELECT status FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+    if campaign[0] not in ("draft", "ready"):
+        return jsonify(
+            {"error": "Can only add contacts to draft or ready campaigns"}
+        ), 400
+
+    body = request.get_json(silent=True) or {}
+    segment = body.get("segment")
+    filters = body.get("filters", {})
+
+    if not segment:
+        return jsonify({"error": "segment is required"}), 400
+
+    # Build query to find contacts via company segment
+    where = [
+        "ct.tenant_id = :t",
+        "(ct.is_disqualified = false OR ct.is_disqualified IS NULL)",
+        "co.segment = :segment",
+    ]
+    params = {"t": tenant_id, "segment": segment}
+
+    # Optional language filter
+    language = filters.get("language")
+    if language:
+        where.append("ct.language = :lang")
+        params["lang"] = language
+
+    # Optional business_type filter
+    business_type = filters.get("business_type")
+    if business_type:
+        where.append("co.business_type = :btype")
+        params["btype"] = business_type
+
+    # Optional last_collaboration_at filter (active vs sleeping)
+    collab_since = filters.get("collaboration_since")
+    collab_before = filters.get("collaboration_before")
+    if collab_since:
+        where.append("ct.last_collaboration_at >= :collab_since")
+        params["collab_since"] = collab_since
+    if collab_before:
+        where.append(
+            "(ct.last_collaboration_at < :collab_before"
+            " OR ct.last_collaboration_at IS NULL)"
+        )
+        params["collab_before"] = collab_before
+
+    # Must have email
+    if filters.get("require_email", False):
+        where.append("ct.email_address IS NOT NULL")
+        where.append("ct.email_address != ''")
+
+    where_clause = " AND ".join(where)
+    query = f"""
+        SELECT ct.id FROM contacts ct
+        JOIN companies co ON ct.company_id = co.id
+        WHERE {where_clause}
+    """
+    rows = db.session.execute(db.text(query), params).fetchall()
+    contact_ids = [str(r[0]) for r in rows]
+
+    if not contact_ids:
+        return jsonify({"added": 0, "skipped": 0, "total": 0}), 200
+
+    # Get existing assignments to skip duplicates
+    existing = db.session.execute(
+        db.text("""
+            SELECT contact_id FROM campaign_contacts
+            WHERE campaign_id = :cid AND tenant_id = :t
+        """),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    existing_ids = {str(r[0]) for r in existing}
+
+    added = 0
+    for cid in contact_ids:
+        if cid in existing_ids:
+            continue
+        cc = CampaignContact(
+            campaign_id=campaign_id,
+            contact_id=cid,
+            tenant_id=tenant_id,
+            status="pending",
+        )
+        db.session.add(cc)
+        added += 1
+
+    if added > 0:
+        db.session.flush()
+        db.session.execute(
+            db.text("""
+                UPDATE campaigns
+                SET total_contacts = (
+                    SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = :cid
+                )
+                WHERE id = :cid
+            """),
+            {"cid": campaign_id},
+        )
+
+    db.session.commit()
+
+    return jsonify(
+        {
+            "added": added,
+            "skipped": len(contact_ids) - added,
+            "total": added + len(existing_ids),
         }
     )
 

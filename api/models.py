@@ -201,6 +201,10 @@ class Company(db.Model):
     website_url = db.Column(db.Text)
     linkedin_url = db.Column(db.Text)
     logo_url = db.Column(db.Text)
+    # UA campaign features (migration 054)
+    segment = db.Column(
+        db.String(50)
+    )  # obec, spolek, agentura, skola, korporace, dach_agentura
     last_enriched_at = db.Column(db.DateTime(timezone=True))
     data_quality_score = db.Column(db.SmallInteger)
     import_job_id = db.Column(UUID(as_uuid=False), db.ForeignKey("import_jobs.id"))
@@ -683,6 +687,8 @@ class Contact(db.Model):
     # Extension import (migration 028)
     is_stub = db.Column(db.Boolean, default=False)
     import_source = db.Column(db.Text)
+    # UA campaign features (migration 054)
+    last_collaboration_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
@@ -1141,6 +1147,9 @@ class Campaign(db.Model):
     linkedin_account_id = db.Column(
         UUID(as_uuid=False), db.ForeignKey("linkedin_accounts.id"), nullable=True
     )
+    # UA campaign features (migration 054)
+    language = db.Column(db.String(5), default="cs")
+    scheduled_launch_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     airtable_record_id = db.Column(db.Text)
