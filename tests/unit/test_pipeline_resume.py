@@ -1,4 +1,4 @@
-"""Tests for safe resume (skip recently enriched) + parallel execution."""
+"""Tests for safe resume (skip recently enriched) + parallel execution + rate limiter."""
 
 import time
 import uuid
@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+
+from api.services.rate_limiter import AdaptiveRateLimiter
 
 
 @pytest.fixture
@@ -369,3 +371,93 @@ class TestConfigurableParallelism:
 
         # With 0 hours, nothing is "recently" enriched
         assert mock_process.call_count == 1
+
+
+class TestAdaptiveRateLimiter:
+    """Tests for the AdaptiveRateLimiter."""
+
+    def test_report_429_reduces_rpm(self):
+        """Three 429s in quick succession should reduce RPM."""
+        limiter = AdaptiveRateLimiter(max_rpm=20)
+        assert limiter.current_rpm == 20
+
+        limiter.report_429()
+        limiter.report_429()
+        limiter.report_429()
+
+        # 3 recent 429s triggers 0.7x reduction
+        assert limiter.current_rpm == 14
+
+    def test_report_success_restores_rpm(self):
+        """Successes after a reduction should gradually restore RPM."""
+        limiter = AdaptiveRateLimiter(max_rpm=20)
+
+        # Force RPM down
+        limiter.report_429()
+        limiter.report_429()
+        limiter.report_429()
+        reduced = limiter.current_rpm
+        assert reduced < 20
+
+        # Each success restores +1
+        limiter.report_success()
+        assert limiter.current_rpm == reduced + 1
+
+        limiter.report_success()
+        assert limiter.current_rpm == reduced + 2
+
+    def test_report_success_caps_at_max(self):
+        """RPM should never exceed max_rpm."""
+        limiter = AdaptiveRateLimiter(max_rpm=10)
+        for _ in range(20):
+            limiter.report_success()
+        assert limiter.current_rpm == 10
+
+    def test_emergency_pause_on_5_consecutive_429s(self):
+        """5 consecutive 429s should trigger emergency pause and halve RPM."""
+        limiter = AdaptiveRateLimiter(max_rpm=20)
+
+        for _ in range(5):
+            limiter.report_429()
+
+        # After 5 consecutive: RPM halved (the 3rd triggered 0.7x → 14,
+        # then 5th triggers emergency halving of 14 → 7)
+        assert limiter.current_rpm <= 10
+        assert limiter.paused_until > time.time()
+        # consecutive counter reset after emergency
+        assert limiter.consecutive_429s == 0
+
+    def test_acquire_respects_rpm_limit(self):
+        """acquire() should block when at the RPM limit."""
+        limiter = AdaptiveRateLimiter(max_rpm=3)
+
+        # Acquire 3 slots quickly — should not block
+        start = time.time()
+        limiter.acquire()
+        limiter.acquire()
+        limiter.acquire()
+        elapsed = time.time() - start
+        assert elapsed < 0.5, f"First 3 acquires took {elapsed:.2f}s, expected < 0.5s"
+
+        assert len(limiter.timestamps) == 3
+
+    def test_stats_property(self):
+        """stats should return current limiter state."""
+        limiter = AdaptiveRateLimiter(max_rpm=15)
+        limiter.acquire()
+
+        stats = limiter.stats
+        assert stats["max_rpm"] == 15
+        assert stats["current_rpm"] == 15
+        assert stats["active_requests_last_60s"] == 1
+        assert stats["consecutive_429s"] == 0
+
+    def test_rpm_floor_at_5(self):
+        """RPM should never drop below 5."""
+        limiter = AdaptiveRateLimiter(max_rpm=20)
+
+        # Hammer with 429s
+        for _ in range(50):
+            limiter.report_429()
+
+        assert limiter.current_rpm >= 5

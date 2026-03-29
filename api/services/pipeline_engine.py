@@ -595,9 +595,6 @@ def _process_entity(
 # Safe resume: skip recently enriched entities
 # ---------------------------------------------------------------------------
 
-# Rate limiter for external API calls (e.g. Perplexity)
-_api_semaphore = threading.Semaphore(5)  # default; overridden by config at runtime
-
 
 def _is_recently_enriched(entity_id, stage, hours=24):
     """Check if entity was enriched for this stage within the last N hours.
@@ -703,10 +700,9 @@ def _record_completion(entity_id, stage, run_id, tenant_id):
 
 
 def _process_entity_worker(entity_id, stage, tenant_id, app):
-    """Process one entity with rate limiting. Each thread gets its own app context."""
+    """Process one entity. Rate limiting happens at the Perplexity client level."""
     with app.app_context():
-        with _api_semaphore:
-            return _process_entity(stage, entity_id, tenant_id)
+        return _process_entity(stage, entity_id, tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +756,8 @@ def run_stage(app, run_id, stage, entity_ids, tenant_id=None):
             return
 
         # Phase 2: Process entities in parallel
+        stage_start_time = time.time()
+
         if max_workers <= 1:
             # Serial fallback
             for i, entity_id in enumerate(to_process):
@@ -842,12 +840,19 @@ def run_stage(app, run_id, stage, entity_ids, tenant_id=None):
                             cost_usd=total_cost,
                             failed=failed,
                         )
+                        elapsed = time.time() - stage_start_time
+                        rate = done / elapsed * 60 if elapsed > 0 else 0
+                        remaining = len(to_process) - done - failed
+                        eta = remaining / (rate / 60) if rate > 0 else 0
                         logger.info(
-                            "[%s] Enriched %s (%d/%d)",
+                            "[%s] %d/%d done, %d skipped, %.1f entities/min, "
+                            "ETA: %.0fs",
                             stage,
-                            entity_name,
                             done,
                             len(to_process),
+                            skipped,
+                            rate,
+                            eta,
                         )
                     except Exception as e:
                         failed += 1

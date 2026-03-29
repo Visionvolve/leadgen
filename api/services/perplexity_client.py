@@ -22,7 +22,12 @@ import time
 
 import requests
 
+from .rate_limiter import AdaptiveRateLimiter
+
 logger = logging.getLogger(__name__)
+
+# Module-level rate limiter instance (lazy-initialized)
+_rate_limiter = None
 
 # Pricing per 1M tokens (input + output combined for sonar models)
 MODEL_PRICING = {
@@ -33,6 +38,20 @@ MODEL_PRICING = {
 }
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
+
+
+def get_rate_limiter():
+    """Get or create the module-level AdaptiveRateLimiter."""
+    global _rate_limiter
+    if _rate_limiter is None:
+        try:
+            from flask import current_app
+
+            max_rpm = current_app.config.get("PERPLEXITY_MAX_RPM", 20)
+        except RuntimeError:
+            max_rpm = int(os.environ.get("PERPLEXITY_MAX_RPM", "20"))
+        _rate_limiter = AdaptiveRateLimiter(max_rpm=max_rpm)
+    return _rate_limiter
 
 
 class PerplexityResponse:
@@ -110,9 +129,11 @@ class PerplexityClient:
             "Content-Type": "application/json",
         }
 
+        limiter = get_rate_limiter()
         last_error = None
         for attempt in range(1 + self.max_retries):
             try:
+                limiter.acquire()
                 resp = requests.post(
                     "{}/chat/completions".format(self.base_url),
                     headers=headers,
@@ -129,6 +150,7 @@ class PerplexityClient:
                 output_tokens = usage.get("completion_tokens", 0)
                 cost_usd = self._estimate_cost(model, input_tokens, output_tokens)
 
+                limiter.report_success()
                 return PerplexityResponse(
                     content=content,
                     model=model,
@@ -141,11 +163,14 @@ class PerplexityClient:
                 last_error = e
                 status = getattr(resp, "status_code", 0)
 
+                if status == 429:
+                    limiter.report_429()
+
                 if status not in RETRYABLE_STATUS_CODES:
                     raise
 
                 if attempt < self.max_retries:
-                    delay = self.retry_delay * (2**attempt)
+                    delay = min(2**attempt, 60)
                     logger.warning(
                         "Perplexity API %s (attempt %d/%d), retrying in %.1fs",
                         status,
