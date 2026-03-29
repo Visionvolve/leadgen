@@ -223,7 +223,7 @@ def refresh():
     iam_data = iam_resp.json()
     return jsonify(
         {
-            "access_token": iam_data.get("access_token"),
+            "access_token": iam_data.get("accessToken"),
         }
     )
 
