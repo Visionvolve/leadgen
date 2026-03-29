@@ -163,7 +163,7 @@ def enrich_signals(
     quality = assess_block_quality(
         data=parsed,
         block_code="signals",
-        confidence=parse_confidence(parsed.get("confidence")),
+        confidence=parse_confidence(parsed.get("news_confidence")),
         extra_flags=block_flags,
     )
 

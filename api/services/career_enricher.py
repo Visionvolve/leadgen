@@ -349,49 +349,9 @@ def _upsert_career_enrichment(contact_id, data, cost, quality=None):
 
     # Update block_quality JSONB with career block score
     if quality:
-        _update_block_quality(contact_id, "career", quality)
+        from .quality_scoring import update_block_quality
 
-
-def _update_block_quality(contact_id, block_name, quality):
-    """Update block_quality JSONB field with a specific block's quality data."""
-    block_entry = json.dumps(
-        {
-            "score": quality.quality_score,
-            "confidence": quality.confidence,
-            "flags": quality.qc_flags,
-            "field_coverage": quality.field_coverage,
-        }
-    )
-    dialect = db.engine.dialect.name
-    if dialect == "sqlite":
-        row = db.session.execute(
-            text(
-                "SELECT block_quality FROM contact_enrichment WHERE contact_id = :cid"
-            ),
-            {"cid": str(contact_id)},
-        ).fetchone()
-        existing = {}
-        if row and row[0]:
-            try:
-                existing = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-            except (json.JSONDecodeError, TypeError):
-                existing = {}
-        existing[block_name] = json.loads(block_entry)
-        db.session.execute(
-            text(
-                "UPDATE contact_enrichment SET block_quality = :bq WHERE contact_id = :cid"
-            ),
-            {"cid": str(contact_id), "bq": json.dumps(existing)},
-        )
-    else:
-        db.session.execute(
-            text("""
-                UPDATE contact_enrichment
-                SET block_quality = COALESCE(block_quality, '{}'::jsonb) || jsonb_build_object(:block, CAST(:entry AS jsonb))
-                WHERE contact_id = :cid
-            """),
-            {"cid": str(contact_id), "block": block_name, "entry": block_entry},
-        )
+        update_block_quality(db.session, contact_id, "career", quality)
 
 
 # ---------------------------------------------------------------------------

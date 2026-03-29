@@ -1038,7 +1038,6 @@ def _upsert_contact_enrichment(
         "quality_score",
         "confidence",
         "qc_flags",
-        "block_quality",
     )
 
     params = {
@@ -1090,18 +1089,6 @@ def _upsert_contact_enrichment(
         if quality and quality.confidence is not None
         else None,
         "qc_flags": json.dumps(quality.qc_flags) if quality else "[]",
-        "block_quality": json.dumps(
-            {
-                "person": {
-                    "score": quality.quality_score,
-                    "confidence": quality.confidence,
-                    "flags": quality.qc_flags,
-                    "field_coverage": quality.field_coverage,
-                },
-            }
-        )
-        if quality
-        else "{}",
         "enriched_at": now_str,
         "cost": cost,
     }
@@ -1133,6 +1120,12 @@ def _upsert_contact_enrichment(
             """),
             params,
         )
+
+    # Update block_quality JSONB atomically (after upsert, avoids overwrite)
+    if quality:
+        from .quality_scoring import update_block_quality
+
+        update_block_quality(db.session, contact_id, "person", quality)
 
 
 _SENIORITY_TO_DB = {

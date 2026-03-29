@@ -47,6 +47,8 @@ ALTER TABLE contact_enrichment
 -- Indexes for quality-based queries (find low-quality enrichments for re-enrichment)
 CREATE INDEX IF NOT EXISTS idx_company_enrichment_profile_quality
   ON company_enrichment_profile (quality_score) WHERE quality_score IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_company_enrichment_opportunity_quality
+  ON company_enrichment_opportunity (quality_score) WHERE quality_score IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_company_enrichment_signals_quality
   ON company_enrichment_signals (quality_score) WHERE quality_score IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_company_news_quality

@@ -172,13 +172,15 @@ def get_contact_quality(contact_id):
     total_blocks = len(block_names)
 
     if enriched_count > 0:
-        avg_score = round(
-            sum(
-                b["quality_score"]
-                for b in scored_blocks.values()
-                if b["quality_score"] is not None
-            )
-            / enriched_count
+        scores_with_values = [
+            b["quality_score"]
+            for b in scored_blocks.values()
+            if b["quality_score"] is not None
+        ]
+        avg_score = (
+            round(sum(scores_with_values) / len(scores_with_values))
+            if scores_with_values
+            else None
         )
         lowest_block = min(
             (k for k, v in scored_blocks.items() if v["quality_score"] is not None),

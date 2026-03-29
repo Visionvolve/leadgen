@@ -6,6 +6,7 @@ after processing. Extends the L1 pattern to all blocks.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Optional
 
@@ -142,7 +143,7 @@ def compute_quality_score(
     """
     fc_component = field_coverage * 100  # 0-100
     conf_component = (confidence if confidence is not None else 0.5) * 100
-    flag_penalty = max(0, 100 - len(qc_flags) * 20)
+    flag_penalty = max(0, 100 - len(qc_flags) * 25)
 
     score = round(0.60 * fc_component + 0.30 * conf_component + 0.10 * flag_penalty)
     return max(0, min(100, score))
@@ -182,6 +183,61 @@ def assess_block_quality(
         qc_flags=flags,
         field_coverage=fc,
     )
+
+
+def update_block_quality(
+    session, contact_id: str, block_name: str, quality: BlockQualityResult
+) -> None:
+    """Atomically merge a block's quality data into contact_enrichment.block_quality.
+
+    Uses COALESCE + jsonb_build_object on PostgreSQL for atomic merge.
+    Falls back to read-modify-write on SQLite (tests).
+    """
+    from ..models import db as _db
+
+    block_entry = json.dumps(
+        {
+            "score": quality.quality_score,
+            "confidence": quality.confidence,
+            "flags": quality.qc_flags,
+            "field_coverage": quality.field_coverage,
+        }
+    )
+    dialect = _db.engine.dialect.name
+    if dialect == "sqlite":
+        from sqlalchemy import text as _text
+
+        row = session.execute(
+            _text(
+                "SELECT block_quality FROM contact_enrichment WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id)},
+        ).fetchone()
+        existing = {}
+        if row and row[0]:
+            try:
+                existing = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            except (json.JSONDecodeError, TypeError):
+                existing = {}
+        existing[block_name] = json.loads(block_entry)
+        session.execute(
+            _text(
+                "UPDATE contact_enrichment SET block_quality = :bq WHERE contact_id = :cid"
+            ),
+            {"cid": str(contact_id), "bq": json.dumps(existing)},
+        )
+    else:
+        from sqlalchemy import text as _text
+
+        session.execute(
+            _text("""
+                UPDATE contact_enrichment
+                SET block_quality = COALESCE(block_quality, '{}'::jsonb)
+                    || jsonb_build_object(:block, CAST(:entry AS jsonb))
+                WHERE contact_id = :cid
+            """),
+            {"cid": str(contact_id), "block": block_name, "entry": block_entry},
+        )
 
 
 def parse_confidence(value) -> Optional[float]:
