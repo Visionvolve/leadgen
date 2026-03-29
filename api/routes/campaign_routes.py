@@ -2,12 +2,16 @@ import csv
 import io
 import json
 import logging
+import uuid
+from datetime import datetime
+from io import BytesIO
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import display_campaign_status, display_tier, display_status
 from ..models import (
+    Asset,
     Campaign,
     CampaignContact,
     CampaignStep,
@@ -16,7 +20,15 @@ from ..models import (
     Message,
     MessageFeedback,
     StrategyDocument,
+    Tenant,
     db,
+)
+from ..services.asset_service import (
+    delete_asset,
+    download_asset_bytes,
+    get_download_url,
+    upload_asset,
+    validate_upload,
 )
 from ..services.message_generator import estimate_generation_cost, start_generation
 from ..services.send_service import get_send_status, send_campaign_emails
@@ -242,6 +254,10 @@ def create_campaign():
                     if isinstance(channels, dict) and channels.get("primary"):
                         channel = channels["primary"]
 
+    # UA campaign features: language + scheduled launch
+    language = body.get("language", "cs")
+    scheduled_launch_at = body.get("scheduled_launch_at")
+
     # Use ORM to avoid SQL dialect issues with JSONB casting
     campaign = Campaign(
         tenant_id=tenant_id,
@@ -251,6 +267,8 @@ def create_campaign():
         status="draft",
         strategy_id=strategy_id,
         channel=channel,
+        language=language,
+        scheduled_launch_at=scheduled_launch_at,
         target_criteria=json.dumps(target_criteria)
         if isinstance(target_criteria, dict)
         else target_criteria,
@@ -293,7 +311,7 @@ def get_campaign(campaign_id):
                 c.generation_started_at, c.generation_completed_at,
                 c.created_at, c.updated_at,
                 o.name AS owner_name, o.id AS owner_id,
-                c.sender_config
+                c.sender_config, c.language
             FROM campaigns c
             LEFT JOIN owners o ON c.owner_id = o.id
             WHERE c.id = :id AND c.tenant_id = :t
@@ -335,6 +353,7 @@ def get_campaign(campaign_id):
             "owner_name": row[13],
             "owner_id": str(row[14]) if row[14] else None,
             "sender_config": _parse_jsonb(row[15]) or {},
+            "language": row[16] or "cs",
             "contact_status_counts": status_counts,
         }
     )
@@ -1102,11 +1121,12 @@ def add_campaign_contacts(campaign_id):
             db.text("""
                 UPDATE campaigns
                 SET total_contacts = (
-                    SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = :cid
+                    SELECT COUNT(*) FROM campaign_contacts
+                    WHERE campaign_id = :cid AND tenant_id = :t
                 )
-                WHERE id = :cid
+                WHERE id = :cid AND tenant_id = :t
             """),
-            {"cid": campaign_id},
+            {"cid": campaign_id, "t": tenant_id},
         )
 
     db.session.commit()
@@ -1120,6 +1140,144 @@ def add_campaign_contacts(campaign_id):
             "skipped": skipped,
             "total": added + len(existing_ids),
             "gaps": enrichment_gaps,
+        }
+    )
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/contacts/bulk", methods=["POST"])
+@require_role("editor")
+def bulk_add_contacts_by_segment(campaign_id):
+    """Bulk-add contacts to a campaign by company segment filter.
+
+    Body: {segment: "obec", filters: {language: "cs", ...}}
+    Returns: {added: N, skipped: N, total: N}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify campaign exists and is in draft or ready state
+    campaign = db.session.execute(
+        db.text("SELECT status FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+    if campaign[0] not in ("draft", "ready"):
+        return jsonify(
+            {"error": "Can only add contacts to draft or ready campaigns"}
+        ), 400
+
+    body = request.get_json(silent=True) or {}
+    segment = body.get("segment")
+    filters = body.get("filters", {})
+
+    if not segment:
+        return jsonify({"error": "segment is required"}), 400
+
+    # Build query to find contacts via company segment
+    where = [
+        "ct.tenant_id = :t",
+        "co.tenant_id = :t",
+        "(ct.is_disqualified = false OR ct.is_disqualified IS NULL)",
+        "co.segment = :segment",
+    ]
+    params = {"t": tenant_id, "segment": segment}
+
+    # Optional language filter
+    language = filters.get("language")
+    if language:
+        where.append("ct.language = :lang")
+        params["lang"] = language
+
+    # Optional business_type filter
+    business_type = filters.get("business_type")
+    if business_type:
+        where.append("co.business_type = :btype")
+        params["btype"] = business_type
+
+    # Optional last_collaboration_at filter (active vs sleeping)
+    collab_since = filters.get("collaboration_since")
+    collab_before = filters.get("collaboration_before")
+    if collab_since:
+        try:
+            datetime.fromisoformat(collab_since)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid collaboration_since datetime"}), 400
+        where.append("ct.last_collaboration_at >= :collab_since")
+        params["collab_since"] = collab_since
+    if collab_before:
+        try:
+            datetime.fromisoformat(collab_before)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid collaboration_before datetime"}), 400
+        where.append(
+            "(ct.last_collaboration_at < :collab_before"
+            " OR ct.last_collaboration_at IS NULL)"
+        )
+        params["collab_before"] = collab_before
+
+    # Must have email
+    if filters.get("require_email", False):
+        where.append("ct.email_address IS NOT NULL")
+        where.append("ct.email_address != ''")
+
+    where_clause = " AND ".join(where)
+    query = f"""
+        SELECT ct.id FROM contacts ct
+        JOIN companies co ON ct.company_id = co.id
+        WHERE {where_clause}
+    """
+    rows = db.session.execute(db.text(query), params).fetchall()
+    contact_ids = [str(r[0]) for r in rows]
+
+    if not contact_ids:
+        return jsonify({"added": 0, "skipped": 0, "total": 0}), 200
+
+    # Get existing assignments to skip duplicates
+    existing = db.session.execute(
+        db.text("""
+            SELECT contact_id FROM campaign_contacts
+            WHERE campaign_id = :cid AND tenant_id = :t
+        """),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    existing_ids = {str(r[0]) for r in existing}
+
+    added = 0
+    for cid in contact_ids:
+        if cid in existing_ids:
+            continue
+        cc = CampaignContact(
+            campaign_id=campaign_id,
+            contact_id=cid,
+            tenant_id=tenant_id,
+            status="pending",
+        )
+        db.session.add(cc)
+        added += 1
+
+    if added > 0:
+        db.session.flush()
+        db.session.execute(
+            db.text("""
+                UPDATE campaigns
+                SET total_contacts = (
+                    SELECT COUNT(*) FROM campaign_contacts
+                    WHERE campaign_id = :cid AND tenant_id = :t
+                )
+                WHERE id = :cid AND tenant_id = :t
+            """),
+            {"cid": campaign_id, "t": tenant_id},
+        )
+
+    db.session.commit()
+
+    return jsonify(
+        {
+            "added": added,
+            "skipped": len(contact_ids) - added,
+            "total": added + len(existing_ids),
         }
     )
 
@@ -1164,11 +1322,12 @@ def remove_campaign_contacts(campaign_id):
         db.text("""
             UPDATE campaigns
             SET total_contacts = (
-                SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = :cid
+                SELECT COUNT(*) FROM campaign_contacts
+                WHERE campaign_id = :cid AND tenant_id = :t
             )
-            WHERE id = :cid
+            WHERE id = :cid AND tenant_id = :t
         """),
-        {"cid": campaign_id},
+        {"cid": campaign_id, "t": tenant_id},
     )
     db.session.commit()
 
@@ -1516,8 +1675,10 @@ def start_campaign_generation(campaign_id):
         # Update total_contacts
         total_contacts = len(enriched_contact_ids)
         db.session.execute(
-            db.text("UPDATE campaigns SET total_contacts = :tc WHERE id = :id"),
-            {"tc": total_contacts, "id": campaign_id},
+            db.text(
+                "UPDATE campaigns SET total_contacts = :tc WHERE id = :id AND tenant_id = :t"
+            ),
+            {"tc": total_contacts, "id": campaign_id, "t": tenant_id},
         )
 
     # Transition to generating
@@ -3163,3 +3324,512 @@ def feedback_summary(campaign_id):
             "per_step": step_stats,
         }
     )
+
+
+# ── Auto-segmentation endpoints ──────────────────────────────────────
+
+
+@campaigns_bp.route("/api/companies/auto-segment", methods=["POST"])
+@require_role("editor")
+def auto_segment_companies():
+    """Run auto-segmentation on all unsegmented companies in the tenant."""
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    force = body.get("force", False)
+
+    from ..services.segmentation import auto_segment_tenant
+
+    result = auto_segment_tenant(tenant_id, force=force)
+    return jsonify(result)
+
+
+# ── Eligible contacts endpoint ───────────────────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/eligible-contacts", methods=["GET"])
+@require_auth
+def eligible_contacts(campaign_id):
+    """Return contacts eligible for a campaign based on segment matching.
+
+    Filters:
+    - Company segment matches campaign target_criteria.segment (if set)
+    - Contact not already in campaign
+    - Contact has valid email
+    - Company passed triage (status in triage_passed, enriched_l2, or above)
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Load campaign to get target segment
+    campaign = db.session.execute(
+        db.text("""
+            SELECT target_criteria FROM campaigns
+            WHERE id = :id AND tenant_id = :t
+        """),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    target_criteria = campaign[0]
+    if isinstance(target_criteria, str):
+        try:
+            target_criteria = json.loads(target_criteria)
+        except (json.JSONDecodeError, TypeError):
+            target_criteria = {}
+    target_criteria = target_criteria or {}
+
+    target_segment = target_criteria.get("segment")
+
+    # Build query
+    where = [
+        "ct.tenant_id = :t",
+        "ct.email_address IS NOT NULL",
+        "ct.email_address != ''",
+        "co.status IN ('triage_passed', 'enriched_l2', 'enrichment_l2_complete')",
+    ]
+    params = {"t": tenant_id, "cid": campaign_id}
+
+    if target_segment:
+        where.append("co.segment = :segment")
+        params["segment"] = target_segment
+
+    # Exclude contacts already in this campaign
+    where.append("""
+        ct.id NOT IN (
+            SELECT contact_id FROM campaign_contacts WHERE campaign_id = :cid
+        )
+    """)
+
+    where_clause = " AND ".join(where)
+
+    rows = db.session.execute(
+        db.text(f"""
+            SELECT ct.id, ct.first_name, ct.last_name, ct.job_title,
+                   ct.email_address, ct.contact_score, ct.icp_fit,
+                   co.id AS company_id, co.name AS company_name,
+                   co.segment, co.tier
+            FROM contacts ct
+            JOIN companies co ON ct.company_id = co.id
+            WHERE {where_clause}
+            ORDER BY ct.contact_score DESC NULLS LAST
+        """),
+        params,
+    ).fetchall()
+
+    contacts = [
+        {
+            "id": str(r[0]),
+            "first_name": r[1],
+            "last_name": r[2],
+            "job_title": r[3],
+            "email_address": r[4],
+            "contact_score": r[5],
+            "icp_fit": r[6],
+            "company_id": str(r[7]) if r[7] else None,
+            "company_name": r[8],
+            "segment": r[9],
+            "tier": r[10],
+        }
+        for r in rows
+    ]
+
+    return jsonify({"contacts": contacts, "total": len(contacts)})
+
+
+# ── Message preview + batch generation endpoints ─────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/generate-preview", methods=["POST"])
+@require_role("editor")
+def generate_message_preview(campaign_id):
+    """Generate a preview message for one contact without saving.
+
+    Body: {contact_id, step_position}
+    Returns: {subject, body, recommended_products, segment}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    contact_id = body.get("contact_id")
+    step_position = body.get("step_position")
+
+    if not contact_id or step_position is None:
+        return jsonify({"error": "contact_id and step_position required"}), 400
+
+    from ..services.message_generator import generate_preview
+
+    try:
+        result = generate_preview(
+            campaign_id=campaign_id,
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            step_position=int(step_position),
+        )
+    except Exception:
+        logger.exception("Preview generation failed")
+        return jsonify({"error": "Preview generation failed"}), 500
+
+    if not result:
+        return jsonify({"error": "Contact or campaign step not found"}), 404
+
+    return jsonify(result)
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/generate-batch", methods=["POST"])
+@require_role("editor")
+def generate_batch_messages(campaign_id):
+    """Generate messages for eligible contacts in a campaign step.
+
+    Body: {step_position, limit: 10}
+    Returns: {generated: N, total_eligible: M}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    step_position = body.get("step_position")
+    limit = min(int(body.get("limit", 10)), 50)
+
+    if step_position is None:
+        return jsonify({"error": "step_position required"}), 400
+
+    # Verify campaign exists
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    # Get campaign contacts that haven't been generated yet for this step
+    contacts = db.session.execute(
+        db.text("""
+            SELECT cc.id AS cc_id, cc.contact_id
+            FROM campaign_contacts cc
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                AND cc.status NOT IN ('excluded', 'generated', 'failed', 'generating')
+            ORDER BY cc.added_at
+            LIMIT :lim
+        """),
+        {"cid": campaign_id, "t": tenant_id, "lim": limit},
+    ).fetchall()
+
+    if not contacts:
+        return jsonify({"generated": 0, "message": "No eligible contacts"}), 200
+
+    # Use the existing start_generation which handles the full flow
+    # For batch, we start the background generation thread
+    from flask import g
+
+    user_id = str(g.current_user.id) if hasattr(g, "current_user") else None
+
+    start_generation(
+        current_app._get_current_object(),
+        campaign_id=campaign_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    return jsonify(
+        {
+            "status": "generating",
+            "total_contacts": len(contacts),
+            "message": f"Generation started for {len(contacts)} contacts",
+        }
+    ), 202
+
+
+# ── Campaign Attachments ──────────────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/attachments", methods=["POST"])
+@require_role("editor")
+def upload_attachment(campaign_id):
+    """Upload a PDF attachment for a campaign (multipart form data).
+
+    Form field: file (required)
+    Response: Asset dict with id, filename, content_type, size_bytes, etc.
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify campaign exists and belongs to tenant
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": str(tenant_id)},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "No filename"}), 400
+
+    file_data = file.read()
+    size_bytes = len(file_data)
+    content_type = file.content_type or "application/octet-stream"
+
+    error = validate_upload(content_type, size_bytes)
+    if error:
+        return jsonify({"error": error}), 400
+
+    asset_id = str(uuid.uuid4())
+    file_obj = BytesIO(file_data)
+
+    try:
+        storage_path = upload_asset(
+            file_obj=file_obj,
+            filename=file.filename,
+            content_type=content_type,
+            tenant_id=str(tenant_id),
+            campaign_id=campaign_id,
+            asset_id=asset_id,
+        )
+    except Exception as e:
+        logger.error("S3 upload failed for campaign %s: %s", campaign_id, e)
+        return jsonify({"error": "File upload failed"}), 500
+
+    asset = Asset(
+        id=asset_id,
+        tenant_id=str(tenant_id),
+        campaign_id=campaign_id,
+        filename=file.filename,
+        content_type=content_type,
+        storage_path=storage_path,
+        size_bytes=size_bytes,
+        metadata_={},
+    )
+    db.session.add(asset)
+    db.session.commit()
+
+    return jsonify(asset.to_dict()), 201
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/attachments", methods=["GET"])
+@require_auth
+def list_attachments(campaign_id):
+    """List all attachments for a campaign.
+
+    Response: { attachments: [Asset, ...] }
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": str(tenant_id)},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    assets = (
+        Asset.query.filter_by(tenant_id=str(tenant_id), campaign_id=campaign_id)
+        .order_by(Asset.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for a in assets:
+        d = a.to_dict()
+        try:
+            d["download_url"] = get_download_url(a.storage_path)
+        except Exception:
+            d["download_url"] = None
+        result.append(d)
+
+    return jsonify({"attachments": result}), 200
+
+
+@campaigns_bp.route(
+    "/api/campaigns/<campaign_id>/attachments/<attachment_id>", methods=["DELETE"]
+)
+@require_role("editor")
+def delete_attachment(campaign_id, attachment_id):
+    """Delete a campaign attachment from S3 and database."""
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    asset = Asset.query.filter_by(
+        id=attachment_id, campaign_id=campaign_id, tenant_id=str(tenant_id)
+    ).first()
+    if not asset:
+        return jsonify({"error": "Attachment not found"}), 404
+
+    try:
+        delete_asset(asset.storage_path)
+    except Exception as e:
+        logger.warning("S3 delete failed for attachment %s: %s", attachment_id, e)
+
+    db.session.delete(asset)
+    db.session.commit()
+
+    return jsonify({"ok": True}), 200
+
+
+# ── Test Email ──────────────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/send-test", methods=["POST"])
+@require_role("editor")
+def send_test_email(campaign_id):
+    """Send a test email to the current authenticated user.
+
+    Body: { message_id } — ID of an existing message to use as content
+    Response: { ok: true, sent_to: email, message_id: ... }
+
+    The test email:
+    - Has [TEST] prefix on the subject
+    - Includes a header note with original recipient info
+    - Attaches all campaign PDF attachments
+    - Is sent to the authenticated user's email
+    """
+    import resend
+
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    campaign = db.session.get(Campaign, campaign_id)
+    if not campaign or str(campaign.tenant_id) != str(tenant_id):
+        return jsonify({"error": "Campaign not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    message_id = body.get("message_id")
+    if not message_id:
+        return jsonify({"error": "message_id is required"}), 400
+
+    # Load the message
+    from ..models import Contact
+
+    message = db.session.get(Message, message_id)
+    if not message or str(message.tenant_id) != str(tenant_id):
+        return jsonify({"error": "Message not found"}), 404
+
+    contact = (
+        db.session.get(Contact, message.contact_id) if message.contact_id else None
+    )
+    contact_name = ""
+    contact_email = ""
+    if contact:
+        contact_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+        contact_email = contact.email_address or ""
+
+    # Get sender config
+    sender_config = campaign.sender_config
+    if isinstance(sender_config, str):
+        sender_config = json.loads(sender_config)
+    sender_config = sender_config or {}
+
+    from_email = sender_config.get("from_email")
+    from_name = sender_config.get("from_name")
+    reply_to = sender_config.get("reply_to")
+
+    if not from_email:
+        return jsonify({"error": "Campaign sender_config missing from_email"}), 400
+
+    # Get Resend API key from tenant
+    tenant = db.session.get(Tenant, tenant_id)
+    tenant_settings = tenant.settings if tenant else {}
+    if isinstance(tenant_settings, str):
+        tenant_settings = json.loads(tenant_settings)
+    tenant_settings = tenant_settings or {}
+
+    api_key = tenant_settings.get("resend_api_key")
+    if not api_key:
+        return jsonify({"error": "Tenant settings missing resend_api_key"}), 400
+
+    resend.api_key = api_key
+
+    # Build the test email
+    user = g.current_user
+    to_email = user.email
+
+    subject = f"[TEST] {message.subject or '(no subject)'}"
+
+    # Build HTML body with header note
+    from ..services.send_service import _render_body_html
+
+    original_body_html = _render_body_html(message.body)
+    header_note = (
+        '<div style="background:#f0f0f0;padding:12px;margin-bottom:16px;'
+        'border-left:4px solid #2196F3;font-size:13px;color:#555;">'
+        "<strong>This is a test email.</strong><br>"
+        f"Original recipient: {contact_name} &lt;{contact_email}&gt;"
+        "</div>"
+    )
+    body_html = header_note + original_body_html
+
+    sender = f"{from_name} <{from_email}>" if from_name else from_email
+
+    # Collect campaign PDF attachments
+    attachments = []
+    campaign_assets = Asset.query.filter_by(
+        campaign_id=campaign_id, tenant_id=str(tenant_id)
+    ).all()
+
+    for asset in campaign_assets:
+        if asset.content_type == "application/pdf":
+            try:
+                import base64
+
+                file_content = download_asset_bytes(asset.storage_path)
+                attachments.append(
+                    {
+                        "filename": asset.filename,
+                        "content": base64.b64encode(file_content).decode("utf-8"),
+                        "type": "application/pdf",
+                    }
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch attachment %s for test email: %s",
+                    asset.id,
+                    e,
+                )
+
+    # Send via Resend
+    params = {
+        "from_": sender,
+        "to": [to_email],
+        "subject": subject,
+        "html": body_html,
+    }
+    if reply_to:
+        params["reply_to"] = [reply_to]
+    if attachments:
+        params["attachments"] = attachments
+
+    try:
+        result = resend.Emails.send(params)
+        resend_id = (
+            result.id
+            if hasattr(result, "id")
+            else (result.get("id") if isinstance(result, dict) else str(result))
+        )
+    except Exception as e:
+        logger.error("Test email send failed for campaign %s: %s", campaign_id, e)
+        return jsonify({"error": f"Failed to send test email: {str(e)}"}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "sent_to": to_email,
+            "message_id": message_id,
+            "resend_id": resend_id,
+            "attachments_included": len(attachments),
+        }
+    ), 200

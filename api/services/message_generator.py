@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -24,7 +25,7 @@ from .llm_logger import log_llm_usage, compute_cost
 logger = logging.getLogger(__name__)
 
 # Generation model config
-GENERATION_MODEL = "claude-haiku-3-5-20241022"
+GENERATION_MODEL = "claude-3-haiku-20240307"
 GENERATION_PROVIDER = "anthropic"
 
 # Estimated tokens per message (for cost estimation)
@@ -413,6 +414,11 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
 
     total_steps = len(enabled_steps)
 
+    # Load product catalog context for enriching prompts with selling points
+    catalog_context = (
+        generation_config.get("catalog_context") or _load_catalog_context()
+    )
+
     # Load playbook strategy data and snapshot it in generation_config
     strategy_data = _load_strategy_data(tenant_id)
     if strategy_data:
@@ -497,6 +503,9 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
                 contact_id, company_id
             )
 
+            # Load segment-based product recommendations for this company
+            recommended_products = _load_product_recommendations(tenant_id, company_id)
+
             # BL-181: variant_count from generation_config (default 1, max 3)
             variant_count = min(int(generation_config.get("variant_count", 1)), 3)
 
@@ -529,6 +538,8 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
                     variant_letter="a",
                     variant_group_id=vg_id,
                     feedback_signals=step_feedback,
+                    recommended_products=recommended_products,
+                    catalog_context=catalog_context,
                 )
                 contact_cost += msg_cost
 
@@ -560,6 +571,8 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
                         variant_group_id=vg_id,
                         variant_angle=angle,
                         feedback_signals=step_feedback,
+                        recommended_products=recommended_products,
+                        catalog_context=catalog_context,
                     )
                     contact_cost += msg_cost
 
@@ -624,6 +637,53 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
         generated_count * total_steps,
         float(total_cost),
     )
+
+
+def _load_product_recommendations(tenant_id: str, company_id: str | None) -> list[dict]:
+    """Load segment-based product recommendations for a company.
+
+    Looks up the company's segment, then fetches recommended products
+    from segment_product_recommendations. Returns empty list if no
+    segment or no recommendations.
+    """
+    if not company_id:
+        return []
+
+    row = db.session.execute(
+        db.text("SELECT segment FROM companies WHERE id = :id"),
+        {"id": company_id},
+    ).fetchone()
+
+    if not row or not row[0]:
+        return []
+
+    segment = row[0]
+
+    from .segmentation import get_recommended_products
+
+    return get_recommended_products(tenant_id, segment)
+
+
+def _load_catalog_context() -> dict | None:
+    """Load the structured product catalog from data/product_catalog_losers_2026.json.
+
+    Returns the parsed JSON dict, or None if the file doesn't exist.
+    The catalog provides selling points, price notes, segment pitches,
+    and reference clients for enriching message generation prompts.
+    """
+    import json
+    import os
+
+    catalog_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "data",
+        "product_catalog_losers_2026.json",
+    )
+    try:
+        with open(catalog_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 def _load_enrichment_context(contact_id: str, company_id: str) -> tuple[dict, dict]:
@@ -733,6 +793,8 @@ def _generate_single_message(
     variant_group_id: str | None = None,
     variant_angle: dict | None = None,
     feedback_signals: dict | None = None,
+    recommended_products: list | None = None,
+    catalog_context: dict | None = None,
 ) -> Decimal:
     """Generate a single message for one contact x one step.
 
@@ -744,6 +806,7 @@ def _generate_single_message(
         variant_group_id: UUID linking variants of the same step/contact.
         variant_angle: Optional angle dict with 'key', 'label', 'instruction'.
         feedback_signals: Optional learning signals from previous feedback.
+        catalog_context: Optional product catalog data for selling points.
     """
     # Build per-message instruction from variant angle
     angle_instruction = variant_angle["instruction"] if variant_angle else None
@@ -782,6 +845,8 @@ def _generate_single_message(
         max_length=step.get("max_length"),
         reference_assets=reference_assets or None,
         feedback_signals=feedback_signals,
+        recommended_products=recommended_products,
+        catalog_context=catalog_context,
     )
 
     start_time = time.time()
@@ -799,14 +864,13 @@ def _generate_single_message(
 
     duration_ms = int((time.time() - start_time) * 1000)
 
-    # Parse response
+    # Parse response — sanitize control characters that break JSON parsing
     raw_text = response.content[0].text
+    raw_text = re.sub(r"[\x00-\x1f\x7f]", " ", raw_text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
         # Try to extract JSON from response
-        import re
-
         match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
         if match:
             parsed = json.loads(match.group())
@@ -1076,13 +1140,12 @@ def regenerate_message(
 
     duration_ms = int((time.time() - start_time) * 1000)
 
-    # Parse response
+    # Parse response — sanitize control characters that break JSON parsing
     raw_text = response.content[0].text
+    raw_text = re.sub(r"[\x00-\x1f\x7f]", " ", raw_text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
-        import re
-
         match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
         if match:
             parsed = json.loads(match.group())
@@ -1176,4 +1239,138 @@ def regenerate_message(
         "language": effective_language,
         "tone": effective_tone,
         "generation_cost_usd": float(cost),
+    }
+
+
+def generate_preview(
+    campaign_id: str,
+    tenant_id: str,
+    contact_id: str,
+    step_position: int,
+) -> dict | None:
+    """Generate a preview message for one contact without saving.
+
+    Returns dict with subject, body, recommended_products, segment
+    or None if contact/campaign not found.
+    """
+    # Load campaign + step
+    campaign_row = db.session.execute(
+        db.text("""
+            SELECT generation_config, owner_id, language
+            FROM campaigns WHERE id = :id AND tenant_id = :t
+        """),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign_row:
+        return None
+
+    generation_config = (
+        json.loads(campaign_row[0])
+        if isinstance(campaign_row[0], str)
+        else (campaign_row[0] or {})
+    )
+    campaign_language = campaign_row[2] or "cs"
+    if "language" not in generation_config:
+        generation_config["language"] = campaign_language
+
+    # Load the specific step
+    step_row = CampaignStep.query.filter_by(
+        campaign_id=campaign_id, tenant_id=str(tenant_id), position=step_position
+    ).first()
+    if not step_row:
+        return None
+
+    total_steps = CampaignStep.query.filter_by(
+        campaign_id=campaign_id, tenant_id=str(tenant_id)
+    ).count()
+
+    step = {
+        "step": step_row.position,
+        "channel": step_row.channel,
+        "label": step_row.label,
+        "day_offset": step_row.day_offset,
+        "campaign_step_id": step_row.id,
+        **_parse_step_config(step_row.config),
+    }
+
+    # Load contact
+    contact_row = db.session.execute(
+        db.text("""
+            SELECT first_name, last_name, job_title, email_address,
+                   linkedin_url, seniority_level, department, company_id
+            FROM contacts WHERE id = :id AND tenant_id = :t
+        """),
+        {"id": contact_id, "t": tenant_id},
+    ).fetchone()
+    if not contact_row:
+        return None
+
+    contact_data = {
+        "first_name": contact_row[0],
+        "last_name": contact_row[1],
+        "job_title": contact_row[2],
+        "email_address": contact_row[3],
+        "linkedin_url": contact_row[4],
+        "seniority_level": contact_row[5],
+        "department": contact_row[6],
+    }
+    company_id = str(contact_row[7]) if contact_row[7] else None
+
+    company_data, enrichment_data = _load_enrichment_context(contact_id, company_id)
+    recommended_products = _load_product_recommendations(tenant_id, company_id)
+    strategy_data = _load_strategy_data(tenant_id)
+    catalog_context = (
+        generation_config.get("catalog_context") or _load_catalog_context()
+    )
+
+    # Get company segment
+    segment = None
+    if company_id:
+        seg_row = db.session.execute(
+            db.text("SELECT segment FROM companies WHERE id = :id"),
+            {"id": company_id},
+        ).fetchone()
+        if seg_row:
+            segment = seg_row[0]
+
+    prompt = build_generation_prompt(
+        channel=step["channel"],
+        step_label=step.get("label", f"Step {step['step']}"),
+        contact_data=contact_data,
+        company_data=company_data,
+        enrichment_data=enrichment_data,
+        generation_config=generation_config,
+        step_number=step["step"],
+        total_steps=total_steps,
+        strategy_data=strategy_data,
+        recommended_products=recommended_products,
+        catalog_context=catalog_context,
+    )
+
+    import anthropic
+
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=GENERATION_MODEL,
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw_text = response.content[0].text
+    raw_text = re.sub(r"[\x00-\x1f\x7f]", " ", raw_text)
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
+        if match:
+            parsed = json.loads(match.group())
+        else:
+            parsed = {"body": raw_text}
+
+    return {
+        "subject": parsed.get("subject"),
+        "body": parsed.get("body", raw_text),
+        "recommended_products": recommended_products,
+        "segment": segment,
     }

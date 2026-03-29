@@ -18,6 +18,17 @@ from .perplexity_client import PerplexityClient
 from .stage_registry import get_model_for_stage
 
 try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+
+    def traceable(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
+try:
     from .llm_logger import log_llm_usage
 except ImportError:
     log_llm_usage = None
@@ -48,6 +59,9 @@ Do NOT include career information about similarly-named individuals.
 4. TENURE PATTERNS: Average time at each company, job-hopper vs loyal
 5. INDUSTRY EXPERIENCE: Which industries they have worked in and for how long
 6. TOTAL EXPERIENCE: Approximate total years of professional experience
+7. EDUCATION: Degrees, universities, MBA, PhD, etc.
+8. CERTIFICATIONS: Professional certifications (PMP, AWS, Scrum, etc.)
+9. EXPERTISE AREAS: Key skills and domain expertise
 
 ## OUTPUT FORMAT
 Return ONLY a JSON object. No markdown. No code fences. Start with {.
@@ -64,6 +78,9 @@ Return ONLY a JSON object. No markdown. No code fences. Start with {.
   "total_experience_years": 15,
   "tenure_pattern": "Description of tenure patterns (e.g., avg 3-4 years per role)",
   "career_highlights": "Notable achievements, promotions, career pivots",
+  "education": "Degrees, institutions, graduation years. Or 'Unknown'",
+  "certifications": "Professional certifications. Or 'None found'",
+  "expertise_areas": ["area1", "area2", "area3"],
   "data_confidence": "high|medium|low"
 }"""
 
@@ -92,6 +109,7 @@ Verify all results are about THIS person at {domain}."""
 # ---------------------------------------------------------------------------
 
 
+@traceable(name="enrich_career_history", run_type="chain")
 def enrich_career(
     entity_id, tenant_id=None, previous_data=None, boost=False, user_id=None
 ):
@@ -142,12 +160,40 @@ def enrich_career(
         logger.error("Career research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Upsert to contact_enrichment
-    _upsert_career_enrichment(entity_id, research_data, total_cost)
+    # 2. Compute quality score for career block
+    from .quality_scoring import assess_block_quality, parse_confidence
+
+    career_data = {
+        "career_highlights": research_data.get("career_highlights"),
+        "previous_companies": research_data.get("previous_companies"),
+        "education": research_data.get("education"),
+        "certifications": research_data.get("certifications"),
+        "expertise_areas": research_data.get("expertise_areas"),
+    }
+    block_flags = []
+    prev = research_data.get("previous_companies")
+    if (
+        not prev or (isinstance(prev, list) and len(prev) == 0)
+    ) and not research_data.get("career_highlights"):
+        block_flags.append("no_career_history")
+
+    quality = assess_block_quality(
+        data=career_data,
+        block_code="career",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Upsert to contact_enrichment
+    _upsert_career_enrichment(entity_id, research_data, total_cost, quality)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +299,7 @@ def _research_career(contact_data, model, user_id=None, enrichment_language=None
 # ---------------------------------------------------------------------------
 
 
-def _upsert_career_enrichment(contact_id, data, cost):
+def _upsert_career_enrichment(contact_id, data, cost, quality=None):
     """Upsert career enrichment fields into contact_enrichment table."""
     now_str = datetime.now(timezone.utc).isoformat()
 
@@ -263,6 +309,9 @@ def _upsert_career_enrichment(contact_id, data, cost):
         "previous_companies",
         "industry_experience",
         "total_experience_years",
+        "education",
+        "certifications",
+        "expertise_areas",
     )
 
     # Serialize JSON fields
@@ -272,6 +321,9 @@ def _upsert_career_enrichment(contact_id, data, cost):
     industry_exp = data.get("industry_experience", [])
     if isinstance(industry_exp, list):
         industry_exp = json.dumps(industry_exp)
+    expertise = data.get("expertise_areas", [])
+    if isinstance(expertise, list):
+        expertise = json.dumps(expertise)
 
     total_years = data.get("total_experience_years")
     if total_years is not None:
@@ -280,13 +332,26 @@ def _upsert_career_enrichment(contact_id, data, cost):
         except (ValueError, TypeError):
             total_years = None
 
+    # Build career_highlights from career_summary + tenure_pattern if highlights missing
+    career_highlights = data.get("career_highlights")
+    if not career_highlights:
+        parts = []
+        if data.get("career_summary"):
+            parts.append(data["career_summary"])
+        if data.get("tenure_pattern"):
+            parts.append(f"Tenure: {data['tenure_pattern']}")
+        career_highlights = " | ".join(parts) if parts else None
+
     params = {
         "cid": str(contact_id),
         "career_trajectory": data.get("career_trajectory", "unknown"),
-        "career_highlights": data.get("career_highlights"),
+        "career_highlights": career_highlights,
         "previous_companies": prev_companies,
         "industry_experience": industry_exp,
         "total_experience_years": total_years,
+        "education": data.get("education"),
+        "certifications": data.get("certifications"),
+        "expertise_areas": expertise,
         "enriched_at": now_str,
         "cost": cost,
     }
@@ -318,6 +383,12 @@ def _upsert_career_enrichment(contact_id, data, cost):
             """),
             params,
         )
+
+    # Update block_quality JSONB with career block score
+    if quality:
+        from .quality_scoring import update_block_quality
+
+        update_block_quality(db.session, contact_id, "career", quality)
 
 
 # ---------------------------------------------------------------------------

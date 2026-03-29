@@ -22,6 +22,17 @@ from .perplexity_client import PerplexityClient
 from .stage_registry import get_model_for_stage
 
 try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+
+    def traceable(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
+try:
     from .llm_logger import log_llm_usage
 except ImportError:
     log_llm_usage = None
@@ -96,7 +107,8 @@ Industry: {industry}
 Current date: {current_date}
 
 Search for: "{company_name}" combined with "{domain}"
-Verify all results are about THIS company ({domain}), not similarly-named entities."""
+Verify all results are about THIS company ({domain}), not similarly-named entities.
+{czech_hint}"""
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +159,8 @@ Size: {employees} employees
 Current date: {current_date}
 
 Search for: "{company_name}" combined with "{domain}"
-Verify all results are about THIS company ({domain})."""
+Verify all results are about THIS company ({domain}).
+{czech_hint}"""
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +214,10 @@ suggest general industry-relevant opportunities and note that further research m
   "pitch_framing": "growth_acceleration|efficiency_protection|competitive_catch_up|compliance_driven",
   "executive_brief": "3-4 sentence professional summary for a sales rep. Always lead with what \
 IS known about the company. If information is limited, note this neutrally and suggest next steps \
-like manual research or direct outreach. Never use dismissive or disqualifying language."
+like manual research or direct outreach. Never use dismissive or disqualifying language.",
+  "key_products": "Main products or services offered by the company (from research or profile). Or null",
+  "customer_segments": "Target customer segments or verticals. Or null",
+  "competitors": "Key competitors in their market. Or null"
 }"""
 
 SYNTHESIS_USER_TEMPLATE = """Generate AI opportunity analysis for {company_name} ({domain}):
@@ -240,6 +256,7 @@ Employee Sentiment: {employee_sentiment}"""
 # ---------------------------------------------------------------------------
 
 
+@traceable(name="enrich_deep_research", run_type="chain")
 def enrich_l2(
     company_id, tenant_id=None, previous_data=None, boost=False, user_id=None
 ):
@@ -345,6 +362,40 @@ def enrich_l2(
             db.session.commit()
             return {"enrichment_cost_usd": total_cost, "synthesis_failed": True}
 
+        # --- Compute quality scores for split tables ---
+        from .quality_scoring import assess_block_quality, parse_confidence
+
+        l1 = l1_data or {}
+        profile_data = {
+            "company_intel": synthesis_data.get("executive_brief"),
+            "key_products": l1.get("key_products")
+            or l1.get("products")
+            or synthesis_data.get("key_products"),
+            "customer_segments": l1.get("customer_segments")
+            or synthesis_data.get("customer_segments"),
+            "competitors": l1.get("competitors") or synthesis_data.get("competitors"),
+            "tech_stack": news_data.get("digital_initiatives"),
+            "leadership_team": strategic_data.get("leadership_team"),
+        }
+        opportunity_data = {
+            "pain_hypothesis": synthesis_data.get("pain_hypothesis"),
+            "ai_opportunities": synthesis_data.get("ai_opportunities"),
+            "quick_wins": synthesis_data.get("quick_wins"),
+            "industry_pain_points": synthesis_data.get("industry_pain_points"),
+        }
+
+        l2_confidence = parse_confidence(synthesis_data.get("confidence"))
+        profile_quality = assess_block_quality(
+            data=profile_data,
+            block_code="l2_profile",
+            confidence=l2_confidence,
+        )
+        opportunity_quality = assess_block_quality(
+            data=opportunity_data,
+            block_code="l2_opportunity",
+            confidence=l2_confidence,
+        )
+
         # --- Save everything ---
         _upsert_l2_enrichment(
             company_id,
@@ -353,6 +404,8 @@ def enrich_l2(
             synthesis_data,
             total_cost,
             l1_data=l1_data,
+            profile_quality=profile_quality,
+            opportunity_quality=opportunity_quality,
         )
         _set_company_status(company_id, "enriched_l2")
 
@@ -360,7 +413,11 @@ def enrich_l2(
         # and _synthesize individually. No aggregate log needed.
 
         db.session.commit()
-        return {"enrichment_cost_usd": total_cost}
+        return {
+            "enrichment_cost_usd": total_cost,
+            "quality_score": profile_quality.quality_score,
+            "qc_flags": profile_quality.qc_flags + opportunity_quality.qc_flags,
+        }
 
     except Exception as e:
         logger.exception("L2 enrichment failed for %s: %s", company_id, e)
@@ -431,12 +488,25 @@ def _load_company_and_l1(company_id):
 def _research_news(company, l1_data, model, user_id=None, enrichment_language=None):
     """Call Perplexity for news and business signals."""
     client = PerplexityClient()
+
+    # Czech/Slovak language search hint
+    country_val = company.get("hq_country") or company.get("geo_region") or "Unknown"
+    czech_countries = {"czech republic", "czechia", "cz", "slovakia", "sk"}
+    czech_hint = ""
+    if any(c in country_val.lower() for c in czech_countries):
+        czech_hint = (
+            f'\nAlso search in Czech/Slovak: "{company["name"]}" novinky OR zprávy '
+            f"OR tisková zpráva OR investice OR akvizice. "
+            f"Try Czech sources: czechcrunch.cz, lupa.cz, e15.cz, ekonom.cz."
+        )
+
     user_prompt = NEWS_USER_TEMPLATE.format(
         company_name=company["name"],
         domain=company["domain"],
-        country=company.get("hq_country") or company.get("geo_region") or "Unknown",
+        country=country_val,
         industry=company["industry"],
         current_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        czech_hint=czech_hint,
     )
 
     # Inject language instruction
@@ -489,13 +559,26 @@ def _research_strategic(
 ):
     """Call Perplexity for strategic signals."""
     client = PerplexityClient()
+
+    # Czech/Slovak language search hint
+    country_val = company.get("hq_country") or company.get("geo_region") or "Unknown"
+    czech_countries = {"czech republic", "czechia", "cz", "slovakia", "sk"}
+    czech_hint = ""
+    if any(c in country_val.lower() for c in czech_countries):
+        czech_hint = (
+            f'\nAlso search in Czech/Slovak: "{company["name"]}" vedení OR certifikace '
+            f"OR dotace OR technologie OR zaměstnanci. "
+            f"Try Czech business registries and directories."
+        )
+
     user_prompt = STRATEGIC_USER_TEMPLATE.format(
         company_name=company["name"],
         domain=company["domain"],
-        country=company.get("hq_country") or company.get("geo_region") or "Unknown",
+        country=country_val,
         industry=company["industry"],
         employees=company.get("employees") or "Unknown",
         current_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        czech_hint=czech_hint,
     )
 
     # Inject language instruction
@@ -636,7 +719,14 @@ def _synthesize(
 
 
 def _upsert_l2_enrichment(
-    company_id, news_data, strategic_data, synthesis_data, total_cost, l1_data=None
+    company_id,
+    news_data,
+    strategic_data,
+    synthesis_data,
+    total_cost,
+    l1_data=None,
+    profile_quality=None,
+    opportunity_quality=None,
 ):
     """Insert or update L2 enrichment data across split module tables.
 
@@ -741,18 +831,41 @@ def _upsert_l2_enrichment(
 
     # --- Write to split module tables (what the API reads) ---
     _upsert_split_profile(
-        company_id, news_data, strategic_data, synthesis_data, l1, now, total_cost
+        company_id,
+        news_data,
+        strategic_data,
+        synthesis_data,
+        l1,
+        now,
+        total_cost,
+        quality=profile_quality,
     )
     _upsert_split_signals(company_id, news_data, strategic_data, now, total_cost)
     _upsert_split_market(company_id, news_data, strategic_data, now, total_cost)
-    _upsert_split_opportunity(company_id, synthesis_data, quick_wins, now, total_cost)
+    _upsert_split_opportunity(
+        company_id,
+        synthesis_data,
+        quick_wins,
+        now,
+        total_cost,
+        quality=opportunity_quality,
+    )
 
 
-def _upsert_module(table_name, columns, params):
+def _upsert_module(table_name, columns, params, quality=None):
     """Generic upsert helper for a split module table."""
-    col_list = ", ".join(columns)
-    val_list = ", ".join(f":{c}" for c in columns)
-    update_list = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns)
+    all_cols = list(columns)
+    if quality:
+        all_cols.extend(["quality_score", "confidence", "qc_flags"])
+        params["quality_score"] = quality.quality_score
+        params["confidence"] = (
+            float(quality.confidence) if quality.confidence is not None else None
+        )
+        params["qc_flags"] = json.dumps(quality.qc_flags)
+
+    col_list = ", ".join(all_cols)
+    val_list = ", ".join(f":{c}" for c in all_cols)
+    update_list = ", ".join(f"{c} = EXCLUDED.{c}" for c in all_cols)
     try:
         db.session.execute(
             text(f"""
@@ -777,7 +890,14 @@ def _upsert_module(table_name, columns, params):
 
 
 def _upsert_split_profile(
-    company_id, news_data, strategic_data, synthesis_data, l1, now, total_cost
+    company_id,
+    news_data,
+    strategic_data,
+    synthesis_data,
+    l1,
+    now,
+    total_cost,
+    quality=None,
 ):
     """Upsert company_enrichment_profile."""
     cols = (
@@ -809,6 +929,7 @@ def _upsert_split_profile(
             "enriched_at": now,
             "cost": round(total_cost * 0.30, 4),
         },
+        quality=quality,
     )
 
 
@@ -882,7 +1003,9 @@ def _upsert_split_market(company_id, news_data, strategic_data, now, total_cost)
     )
 
 
-def _upsert_split_opportunity(company_id, synthesis_data, quick_wins, now, total_cost):
+def _upsert_split_opportunity(
+    company_id, synthesis_data, quick_wins, now, total_cost, quality=None
+):
     """Upsert company_enrichment_opportunity."""
     cols = (
         "pain_hypothesis",
@@ -912,6 +1035,7 @@ def _upsert_split_opportunity(company_id, synthesis_data, quick_wins, now, total
             "enriched_at": now,
             "cost": round(total_cost * 0.25, 4),
         },
+        quality=quality,
     )
 
 

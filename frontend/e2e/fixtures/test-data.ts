@@ -7,7 +7,7 @@ export const TEST_USER = {
 
 export const NAMESPACES = {
   primary: 'visionvolve',
-  secondary: 'unitedarts',
+  secondary: 'united-arts',
 }
 
 export const SCREENSHOTS_DIR = 'test-results/screenshots'

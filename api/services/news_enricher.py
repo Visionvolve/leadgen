@@ -16,6 +16,17 @@ from .perplexity_client import PerplexityClient
 from .stage_registry import get_model_for_stage
 
 try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+
+    def traceable(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
+try:
     from .llm_logger import log_llm_usage
 except ImportError:
     log_llm_usage = None
@@ -51,6 +62,7 @@ If no news is found, return empty lists and null for text fields.
 """
 
 
+@traceable(name="enrich_news_pr", run_type="chain")
 def enrich_news(
     entity_id, tenant_id=None, previous_data=None, boost=False, user_id=None
 ):
@@ -98,6 +110,18 @@ def enrich_news(
     if hq_country:
         context_lines.append(f"HQ Country: {hq_country}")
 
+    # Add Czech/Slovak language search hints for companies in those countries
+    czech_countries = {"Czech Republic", "Czechia", "CZ", "Slovakia", "SK"}
+    if hq_country and any(c.lower() in hq_country.lower() for c in czech_countries):
+        context_lines.append(
+            "\nIMPORTANT: This company is based in a Czech/Slovak-speaking country. "
+            "Search in BOTH English AND Czech/Slovak. Try these search terms:\n"
+            f'- "{company_name}" novinky OR zprávy OR tisková zpráva\n'
+            f'- "{company_name}" site:czechcrunch.cz OR site:lupa.cz OR site:e15.cz\n'
+            f'- "{company_name}" firma OR společnost OR dotace OR investice\n'
+            "Also search standard English news sources."
+        )
+
     user_prompt = "\n".join(context_lines)
 
     # 3. Call Perplexity
@@ -133,10 +157,27 @@ def enrich_news(
         logger.warning("Failed to parse news response for company %s", company_id)
         return {"enrichment_cost_usd": 0, "error": "parse_error"}
 
-    # 5. Upsert to company_news
-    _upsert_news(company_id, parsed, cost_usd)
+    # 5. Compute quality score
+    from .quality_scoring import assess_block_quality, parse_confidence
 
-    # 6. Log LLM usage
+    block_flags = []
+    media = parsed.get("media_mentions")
+    if not media or (isinstance(media, list) and len(media) == 0):
+        block_flags.append("no_media_coverage")
+    if parsed.get("sentiment_score") is None and media and len(media) > 0:
+        block_flags.append("sentiment_missing")
+
+    quality = assess_block_quality(
+        data=parsed,
+        block_code="news",
+        confidence=parse_confidence(parsed.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 6. Upsert to company_news
+    _upsert_news(company_id, parsed, cost_usd, quality)
+
+    # 7. Log LLM usage
     duration_ms = int((time.time() - start_time) * 1000)
     if log_llm_usage:
         log_llm_usage(
@@ -156,7 +197,11 @@ def enrich_news(
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": cost_usd}
+    return {
+        "enrichment_cost_usd": cost_usd,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +265,10 @@ def _safe_json_list(val):
     return "[]"
 
 
-def _upsert_news(company_id, parsed, cost_usd):
+def _upsert_news(company_id, parsed, cost_usd, quality=None):
     """Upsert enrichment results into company_news."""
+    import json as _json
+
     params = {
         "company_id": str(company_id),
         "media_mentions": _safe_json_list(parsed.get("media_mentions")),
@@ -230,6 +277,11 @@ def _upsert_news(company_id, parsed, cost_usd):
         "thought_leadership": parsed.get("thought_leadership"),
         "news_summary": parsed.get("news_summary"),
         "cost": cost_usd,
+        "quality_score": quality.quality_score if quality else None,
+        "confidence": float(quality.confidence)
+        if quality and quality.confidence is not None
+        else None,
+        "qc_flags": _json.dumps(quality.qc_flags) if quality else "[]",
     }
 
     dialect = db.engine.dialect.name
@@ -239,11 +291,13 @@ def _upsert_news(company_id, parsed, cost_usd):
                 INSERT OR REPLACE INTO company_news (
                     company_id, media_mentions, press_releases,
                     sentiment_score, thought_leadership, news_summary,
+                    quality_score, confidence, qc_flags,
                     enriched_at, enrichment_cost_usd,
                     created_at, updated_at
                 ) VALUES (
                     :company_id, :media_mentions, :press_releases,
                     :sentiment_score, :thought_leadership, :news_summary,
+                    :quality_score, :confidence, :qc_flags,
                     CURRENT_TIMESTAMP, :cost,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
@@ -256,11 +310,13 @@ def _upsert_news(company_id, parsed, cost_usd):
                 INSERT INTO company_news (
                     company_id, media_mentions, press_releases,
                     sentiment_score, thought_leadership, news_summary,
+                    quality_score, confidence, qc_flags,
                     enriched_at, enrichment_cost_usd
                 ) VALUES (
                     :company_id, CAST(:media_mentions AS jsonb),
                     CAST(:press_releases AS jsonb),
                     :sentiment_score, :thought_leadership, :news_summary,
+                    :quality_score, :confidence, CAST(:qc_flags AS jsonb),
                     CURRENT_TIMESTAMP, :cost
                 )
                 ON CONFLICT (company_id) DO UPDATE SET
@@ -269,6 +325,9 @@ def _upsert_news(company_id, parsed, cost_usd):
                     sentiment_score = EXCLUDED.sentiment_score,
                     thought_leadership = EXCLUDED.thought_leadership,
                     news_summary = EXCLUDED.news_summary,
+                    quality_score = EXCLUDED.quality_score,
+                    confidence = EXCLUDED.confidence,
+                    qc_flags = EXCLUDED.qc_flags,
                     enriched_at = EXCLUDED.enriched_at,
                     enrichment_cost_usd = EXCLUDED.enrichment_cost_usd,
                     updated_at = now()

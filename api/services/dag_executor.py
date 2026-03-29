@@ -351,7 +351,7 @@ def count_eligible_for_estimate(
         return 0
 
     entity_type = stage_def["entity_type"]
-    params = {"tenant_id": str(tenant_id), "tag_id": str(tag_id)}
+    params = {"tenant_id": str(tenant_id)}
 
     if entity_type == "company":
         base_table = "companies"
@@ -362,8 +362,12 @@ def count_eligible_for_estimate(
 
     where_clauses = [
         "e.tenant_id = :tenant_id",
-        "e.tag_id = :tag_id",
     ]
+
+    # Tag filter is optional — when tag_id is None, count all entities in tenant
+    if tag_id:
+        where_clauses.append("e.tag_id = :tag_id")
+        params["tag_id"] = str(tag_id)
 
     # Owner filter
     if owner_id:

@@ -201,6 +201,10 @@ class Company(db.Model):
     website_url = db.Column(db.Text)
     linkedin_url = db.Column(db.Text)
     logo_url = db.Column(db.Text)
+    # UA campaign features (migration 054)
+    segment = db.Column(
+        db.String(50)
+    )  # obec, spolek, agentura, skola, korporace, dach_agentura
     last_enriched_at = db.Column(db.DateTime(timezone=True))
     data_quality_score = db.Column(db.SmallInteger)
     import_job_id = db.Column(UUID(as_uuid=False), db.ForeignKey("import_jobs.id"))
@@ -292,6 +296,9 @@ class CompanyEnrichmentProfile(db.Model):
     leadership_team = db.Column(db.Text)
     certifications = db.Column(db.Text)
     expansion = db.Column(db.Text)  # new markets, offices, contracts (migration 039)
+    quality_score = db.Column(db.SmallInteger)
+    confidence = db.Column(db.Numeric(3, 2))
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
@@ -323,6 +330,9 @@ class CompanyEnrichmentSignals(db.Model):
     fiscal_year_end = db.Column(db.Text)
     digital_maturity_score = db.Column(db.Text)
     it_spend_indicators = db.Column(db.Text)
+    quality_score = db.Column(db.SmallInteger)
+    confidence = db.Column(db.Numeric(3, 2))
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
@@ -340,6 +350,9 @@ class CompanyNews(db.Model):
     sentiment_score = db.Column(db.Numeric(3, 2))
     thought_leadership = db.Column(db.Text)
     news_summary = db.Column(db.Text)
+    quality_score = db.Column(db.SmallInteger)
+    confidence = db.Column(db.Numeric(3, 2))
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
@@ -364,6 +377,9 @@ class CompanyEnrichmentMarket(db.Model):
     revenue_trend = db.Column(db.Text)
     growth_signals = db.Column(db.Text)
     ma_activity = db.Column(db.Text)
+    quality_score = db.Column(db.SmallInteger)
+    confidence = db.Column(db.Numeric(3, 2))
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
@@ -386,6 +402,9 @@ class CompanyEnrichmentOpportunity(db.Model):
     # Fields from migration 039 (previously only on old company_enrichment_l2)
     pitch_framing = db.Column(db.Text)
     competitor_ai_moves = db.Column(db.Text)
+    quality_score = db.Column(db.SmallInteger)
+    confidence = db.Column(db.Numeric(3, 2))
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
@@ -486,6 +505,8 @@ class CompanyLegalProfile(db.Model):
     credibility_score = db.Column(db.SmallInteger)
     credibility_factors = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
     source_data = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
+    quality_score = db.Column(db.SmallInteger)
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     registry_updated_at = db.Column(db.Date)
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
@@ -615,6 +636,10 @@ class ContactEnrichment(db.Model):
     # Career enrichment fields (migration 043)
     industry_experience = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     total_experience_years = db.Column(db.Integer)
+    quality_score = db.Column(db.SmallInteger)
+    confidence = db.Column(db.Numeric(3, 2))
+    qc_flags = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
+    block_quality = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
     enriched_at = db.Column(db.DateTime(timezone=True))
     enrichment_cost_usd = db.Column(db.Numeric(10, 4), default=0)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
@@ -683,6 +708,8 @@ class Contact(db.Model):
     # Extension import (migration 028)
     is_stub = db.Column(db.Boolean, default=False)
     import_source = db.Column(db.Text)
+    # UA campaign features (migration 054)
+    last_collaboration_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
@@ -1141,6 +1168,9 @@ class Campaign(db.Model):
     linkedin_account_id = db.Column(
         UUID(as_uuid=False), db.ForeignKey("linkedin_accounts.id"), nullable=True
     )
+    # UA campaign features (migration 054)
+    language = db.Column(db.String(5), default="cs")
+    scheduled_launch_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     airtable_record_id = db.Column(db.Text)
@@ -1254,6 +1284,76 @@ class CampaignStep(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class Product(db.Model):
+    __tablename__ = "products"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("uuid_generate_v4()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    name = db.Column(db.String(200), nullable=False)
+    name_en = db.Column(db.String(200))
+    category = db.Column(db.String(50))  # animation, catalogue_show, custom_program
+    performers_min = db.Column(db.SmallInteger)
+    performers_max = db.Column(db.SmallInteger)
+    duration_minutes = db.Column(db.SmallInteger)
+    price_czk = db.Column(db.Numeric(10, 2))
+    price_eur = db.Column(db.Numeric(10, 2))
+    price_unit = db.Column(db.String(20), default="per_person")
+    tech_requirements = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
+    best_for = db.Column(db.Text)
+    description = db.Column(db.Text)
+    description_cs = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "name_en": self.name_en,
+            "category": self.category,
+            "performers_min": self.performers_min,
+            "performers_max": self.performers_max,
+            "duration_minutes": self.duration_minutes,
+            "price_czk": float(self.price_czk) if self.price_czk else None,
+            "price_eur": float(self.price_eur) if self.price_eur else None,
+            "price_unit": self.price_unit,
+            "tech_requirements": self.tech_requirements,
+            "best_for": self.best_for,
+            "description": self.description,
+            "description_cs": self.description_cs,
+            "is_active": self.is_active,
+        }
+
+
+class SegmentProductRecommendation(db.Model):
+    __tablename__ = "segment_product_recommendations"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("uuid_generate_v4()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
+    )
+    segment = db.Column(db.String(50), nullable=False)
+    product_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("products.id"), nullable=False
+    )
+    recommendation_type = db.Column(db.String(20), default="entry")
+    priority = db.Column(db.SmallInteger, default=1)
+
+    product = db.relationship("Product", lazy="joined")
+
+    __table_args__ = (db.UniqueConstraint("tenant_id", "segment", "product_id"),)
 
 
 class CampaignOverlapLog(db.Model):

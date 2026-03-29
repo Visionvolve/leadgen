@@ -128,3 +128,63 @@ export async function reportLinkedInIdentity(
     body: { linkedin_name: linkedinName, linkedin_url: linkedinUrl },
   });
 }
+
+/** Validate a LinkedIn profile against CRM contacts. */
+export interface ValidationResult {
+  match: boolean;
+  contact?: Record<string, unknown>;
+  company?: Record<string, unknown>;
+  enrichment_quality?: Record<string, unknown>;
+  mismatches?: Array<{ field: string; linkedin_value: string; crm_value: string }>;
+}
+
+export async function validateContact(params: {
+  linkedin_url?: string;
+  name?: string;
+  company?: string;
+}): Promise<ValidationResult> {
+  const query = new URLSearchParams();
+  if (params.linkedin_url) query.set('linkedin_url', params.linkedin_url);
+  if (params.name) query.set('name', params.name);
+  if (params.company) query.set('company', params.company);
+  return apiFetch<ValidationResult>(`/api/extension/validate-contact?${query.toString()}`);
+}
+
+/** Validate a LinkedIn company page against CRM companies. */
+export async function validateCompany(params: {
+  linkedin_url?: string;
+  name?: string;
+  industry?: string;
+  headquarters?: string;
+  website?: string;
+}): Promise<ValidationResult> {
+  const query = new URLSearchParams();
+  if (params.linkedin_url) query.set('linkedin_url', params.linkedin_url);
+  if (params.name) query.set('name', params.name);
+  if (params.industry) query.set('industry', params.industry);
+  if (params.headquarters) query.set('headquarters', params.headquarters);
+  if (params.website) query.set('website', params.website);
+  return apiFetch<ValidationResult>(`/api/extension/validate-company?${query.toString()}`);
+}
+
+/** Update a contact in the CRM. */
+export async function updateContact(
+  contactId: string,
+  fields: Record<string, unknown>,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/contacts/${contactId}`, {
+    method: 'PATCH',
+    body: fields,
+  });
+}
+
+/** Update a company in the CRM. */
+export async function updateCompanyRecord(
+  companyId: string,
+  fields: Record<string, unknown>,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/companies/${companyId}`, {
+    method: 'PATCH',
+    body: fields,
+  });
+}

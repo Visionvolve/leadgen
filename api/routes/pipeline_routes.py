@@ -455,8 +455,6 @@ def pipeline_dag_run():
     entity_ids = body.get("entity_ids", [])
     re_enrich = body.get("re_enrich", {})
 
-    if not tag_name:
-        return jsonify({"error": "tag_name is required"}), 400
     if not stages:
         return jsonify({"error": "stages is required"}), 400
 
@@ -486,24 +484,38 @@ def pipeline_dag_run():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
-    tag_id, err = _resolve_tag(tenant_id, tag_name)
-    if err:
-        return err
+    # Tag is optional — when omitted, run across all entities in tenant
+    tag_id = None
+    if tag_name:
+        tag_id, err = _resolve_tag(tenant_id, tag_name)
+        if err:
+            return err
 
     owner_id = _resolve_owner(tenant_id, owner_name)
 
-    # Check no pipeline already running for this tag
-    existing = db.session.execute(
-        text("""
-            SELECT id FROM pipeline_runs
-            WHERE tenant_id = :t AND tag_id = :b
-              AND status IN ('running', 'stopping')
-            LIMIT 1
-        """),
-        {"t": str(tenant_id), "b": str(tag_id)},
-    ).fetchone()
+    # Check no pipeline already running for this tag (or tenant-wide if no tag)
+    if tag_id:
+        existing = db.session.execute(
+            text("""
+                SELECT id FROM pipeline_runs
+                WHERE tenant_id = :t AND tag_id = :b
+                  AND status IN ('running', 'stopping')
+                LIMIT 1
+            """),
+            {"t": str(tenant_id), "b": str(tag_id)},
+        ).fetchone()
+    else:
+        existing = db.session.execute(
+            text("""
+                SELECT id FROM pipeline_runs
+                WHERE tenant_id = :t AND tag_id IS NULL
+                  AND status IN ('running', 'stopping')
+                LIMIT 1
+            """),
+            {"t": str(tenant_id)},
+        ).fetchone()
     if existing:
-        return jsonify({"error": "A pipeline is already running for this tag"}), 409
+        return jsonify({"error": "A pipeline is already running for this selection"}), 409
 
     # Build config
     config = {"mode": "dag", "stages": stages}
@@ -523,7 +535,7 @@ def pipeline_dag_run():
     # Create pipeline_run record
     pipeline_run = PipelineRun(
         tenant_id=str(tenant_id),
-        tag_id=str(tag_id),
+        tag_id=str(tag_id) if tag_id else None,
         owner_id=str(owner_id) if owner_id else None,
         status="running",
         config=json.dumps(config),
@@ -540,7 +552,7 @@ def pipeline_dag_run():
 
         sr = StageRun(
             tenant_id=str(tenant_id),
-            tag_id=str(tag_id),
+            tag_id=str(tag_id) if tag_id else None,
             owner_id=str(owner_id) if owner_id else None,
             stage=stage_code,
             status="pending",
@@ -588,28 +600,42 @@ def pipeline_dag_status():
         return jsonify({"error": "Tenant not found"}), 404
 
     tag_name = request.args.get("tag_name", "")
-    if not tag_name:
-        return jsonify({"error": "tag_name query param required"}), 400
 
-    tag_id, err = _resolve_tag(tenant_id, tag_name)
-    if err:
-        return err
+    # Tag is optional — when omitted, find the most recent tenant-wide DAG run
+    tag_id = None
+    if tag_name:
+        tag_id, err = _resolve_tag(tenant_id, tag_name)
+        if err:
+            return err
 
     # Find the most recent DAG pipeline run
-    prow = db.session.execute(
-        text("""
-            SELECT id, status, cost_usd, stages, config, started_at, completed_at, updated_at
-            FROM pipeline_runs
-            WHERE tenant_id = :t AND tag_id = :b
-              AND CAST(config AS TEXT) LIKE '%%mode%%dag%%'
-            ORDER BY started_at DESC
-            LIMIT 1
-        """),
-        {"t": str(tenant_id), "b": str(tag_id)},
-    ).fetchone()
+    if tag_id:
+        prow = db.session.execute(
+            text("""
+                SELECT id, status, cost_usd, stages, config, started_at, completed_at, updated_at
+                FROM pipeline_runs
+                WHERE tenant_id = :t AND tag_id = :b
+                  AND CAST(config AS TEXT) LIKE '%%mode%%dag%%'
+                ORDER BY started_at DESC
+                LIMIT 1
+            """),
+            {"t": str(tenant_id), "b": str(tag_id)},
+        ).fetchone()
+    else:
+        prow = db.session.execute(
+            text("""
+                SELECT id, status, cost_usd, stages, config, started_at, completed_at, updated_at
+                FROM pipeline_runs
+                WHERE tenant_id = :t
+                  AND CAST(config AS TEXT) LIKE '%%mode%%dag%%'
+                ORDER BY started_at DESC
+                LIMIT 1
+            """),
+            {"t": str(tenant_id)},
+        ).fetchone()
 
     if not prow:
-        return jsonify({"error": "No DAG pipeline run found for this tag"}), 404
+        return jsonify({"error": "No DAG pipeline run found"}), 404
 
     pipeline_run_id = str(prow[0])
     stages_json = prow[3]

@@ -18,6 +18,17 @@ from .perplexity_client import PerplexityClient
 from .stage_registry import get_model_for_stage
 
 try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+
+    def traceable(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
+try:
     from .llm_logger import log_llm_usage
 except ImportError:
     log_llm_usage = None
@@ -91,6 +102,7 @@ Verify all results are about THIS person at {domain}."""
 # ---------------------------------------------------------------------------
 
 
+@traceable(name="enrich_social_online", run_type="chain")
 def enrich_social(
     entity_id, tenant_id=None, previous_data=None, boost=False, user_id=None
 ):
@@ -141,17 +153,54 @@ def enrich_social(
         logger.error("Social research failed for %s: %s", entity_id, exc)
         return {"error": str(exc), "enrichment_cost_usd": total_cost}
 
-    # 2. Upsert to contact_enrichment
-    _upsert_social_enrichment(entity_id, research_data, total_cost)
+    # 2. Compute quality score for social block
+    from .quality_scoring import assess_block_quality, parse_confidence
 
-    # 3. Update linkedin_url on contacts table if found
+    # Map LLM response fields to quality scoring fields
+    linkedin_activity = research_data.get("linkedin_activity")
+    if linkedin_activity and linkedin_activity.lower() in ("none found", "null"):
+        linkedin_activity = None
+    online_summary = research_data.get("online_presence_summary")
+    if online_summary and online_summary.lower() in ("none found", "null"):
+        online_summary = None
+
+    social_data = {
+        "linkedin_profile_summary": linkedin_activity
+        or research_data.get("linkedin_url"),
+        "twitter_handle": research_data.get("twitter_handle"),
+        "github_username": research_data.get("github_username"),
+        "speaking_engagements": research_data.get("speaking_engagements"),
+        "publications": research_data.get("publications"),
+        "public_presence_level": research_data.get("public_presence_level")
+        or research_data.get("data_confidence"),
+        "thought_leadership": online_summary,
+    }
+    block_flags = []
+    if not linkedin_activity and not research_data.get("linkedin_url"):
+        block_flags.append("no_linkedin")
+
+    quality = assess_block_quality(
+        data=social_data,
+        block_code="social",
+        confidence=parse_confidence(research_data.get("confidence")),
+        extra_flags=block_flags,
+    )
+
+    # 3. Upsert to contact_enrichment
+    _upsert_social_enrichment(entity_id, research_data, total_cost, quality)
+
+    # 4. Update linkedin_url on contacts table if found
     linkedin_url = research_data.get("linkedin_url")
     if linkedin_url and linkedin_url != "null":
         _update_contact_linkedin(entity_id, linkedin_url)
 
     db.session.commit()
 
-    return {"enrichment_cost_usd": total_cost}
+    return {
+        "enrichment_cost_usd": total_cost,
+        "quality_score": quality.quality_score,
+        "qc_flags": quality.qc_flags,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -252,23 +301,65 @@ def _research_social(contact_data, model, user_id=None, enrichment_language=None
 # ---------------------------------------------------------------------------
 
 
-def _upsert_social_enrichment(contact_id, data, cost):
+def _upsert_social_enrichment(contact_id, data, cost, quality=None):
     """Upsert social enrichment fields into contact_enrichment table."""
     now_str = datetime.now(timezone.utc).isoformat()
 
     _COLUMNS = (
+        "linkedin_profile_summary",
         "twitter_handle",
         "speaking_engagements",
         "publications",
         "github_username",
+        "public_presence_level",
+        "thought_leadership",
     )
+
+    # Map LLM response fields to DB columns:
+    # - linkedin_activity -> linkedin_profile_summary
+    # - online_presence_summary -> thought_leadership (general online presence narrative)
+    # - public_presence_level is not in prompt but can be inferred; use data_confidence as proxy
+    linkedin_summary = data.get("linkedin_activity")
+    if linkedin_summary and linkedin_summary.lower() in ("none found", "null"):
+        linkedin_summary = None
+
+    online_summary = data.get("online_presence_summary")
+    if online_summary and online_summary.lower() in ("none found", "null"):
+        online_summary = None
+
+    # Build a combined linkedin profile summary from URL + activity description
+    linkedin_parts = []
+    if data.get("linkedin_url") and data["linkedin_url"] not in ("null", None):
+        linkedin_parts.append(f"URL: {data['linkedin_url']}")
+    if linkedin_summary:
+        linkedin_parts.append(linkedin_summary)
+    full_linkedin_summary = "\n".join(linkedin_parts) if linkedin_parts else None
+
+    # Derive public_presence_level from data_confidence or explicit field
+    presence_level = data.get("public_presence_level")
+    if not presence_level:
+        # Heuristic: if we found linkedin + twitter + github, high; linkedin only, medium; nothing, low
+        found_count = sum(
+            1
+            for k in ("linkedin_url", "twitter_handle", "github_username")
+            if data.get(k) and data[k] not in ("null", None, "None found")
+        )
+        if found_count >= 2:
+            presence_level = "high"
+        elif found_count == 1:
+            presence_level = "medium"
+        else:
+            presence_level = "low"
 
     params = {
         "cid": str(contact_id),
+        "linkedin_profile_summary": full_linkedin_summary,
         "twitter_handle": data.get("twitter_handle"),
         "speaking_engagements": data.get("speaking_engagements"),
         "publications": data.get("publications"),
         "github_username": data.get("github_username"),
+        "public_presence_level": presence_level,
+        "thought_leadership": online_summary,
         "enriched_at": now_str,
         "cost": cost,
     }
@@ -300,6 +391,12 @@ def _upsert_social_enrichment(contact_id, data, cost):
             """),
             params,
         )
+
+    # Update block_quality JSONB with social block score
+    if quality:
+        from .quality_scoring import update_block_quality
+
+        update_block_quality(db.session, contact_id, "social", quality)
 
 
 def _update_contact_linkedin(contact_id, linkedin_url):

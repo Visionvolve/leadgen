@@ -65,7 +65,7 @@ export function EnrichPage() {
   // Run handler
   const handleRun = useCallback(() => {
     start({
-      tag_name: filters.tag,
+      tag_name: filters.tag || undefined,
       owner: filters.owner || undefined,
       tier_filter: filters.tier ? [filters.tier] : undefined,
       stages: enabledStageCodes,
@@ -101,8 +101,6 @@ export function EnrichPage() {
     [filters],
   )
 
-  const noTag = !filters.tag
-
   // Show smart empty state when namespace has no contacts
   const namespaceHasNoContacts =
     onboardingStatus !== undefined && onboardingStatus.contact_count === 0
@@ -121,18 +119,9 @@ export function EnrichPage() {
         />
       </div>
 
-      {/* No tag selected prompt */}
-      {noTag && dagMode === 'configure' && (
-        <div className="mt-12 text-center">
-          <p className="text-sm text-text-muted">Choose a tag above to select which contacts to enrich, then configure the research stages below.</p>
-        </div>
-      )}
-
-      {/* Main content — only when tag selected */}
-      {!noTag && (
-        <>
-          {/* Controls bar */}
-          <DagControls
+      {/* Controls bar */}
+      <>
+        <DagControls
             mode={dagMode}
             tagName={filters.tag}
             estimatedCost={estimatedCost}
@@ -218,8 +207,7 @@ export function EnrichPage() {
               onReset={reset}
             />
           )}
-        </>
-      )}
+      </>
     </div>
   )
 }

@@ -106,8 +106,6 @@ def enrich_estimate():
     entity_ids = body.get("entity_ids", [])
     re_enrich = body.get("re_enrich", {})
 
-    if not tag_name:
-        return jsonify({"error": "tag_name is required"}), 400
     if not stages:
         return jsonify({"error": "stages is required"}), 400
 
@@ -137,9 +135,12 @@ def enrich_estimate():
     if invalid:
         return jsonify({"error": f"Invalid stages: {', '.join(invalid)}"}), 400
 
-    tag_id, err = _resolve_tag(tenant_id, tag_name)
-    if err:
-        return err
+    # Tag is optional — when omitted, estimate across all entities in tenant
+    tag_id = None
+    if tag_name:
+        tag_id, err = _resolve_tag(tenant_id, tag_name)
+        if err:
+            return err
 
     owner_id = _resolve_owner(tenant_id, owner_name)
 
@@ -201,8 +202,6 @@ def enrich_start():
     stages = body.get("stages", [])
     sample_size = body.get("sample_size")
 
-    if not tag_name:
-        return jsonify({"error": "tag_name is required"}), 400
     if not stages:
         return jsonify({"error": "stages is required"}), 400
 
@@ -215,24 +214,38 @@ def enrich_start():
     if invalid:
         return jsonify({"error": f"Invalid stages: {', '.join(invalid)}"}), 400
 
-    tag_id, err = _resolve_tag(tenant_id, tag_name)
-    if err:
-        return err
+    # Tag is optional — when omitted, run across all entities in tenant
+    tag_id = None
+    if tag_name:
+        tag_id, err = _resolve_tag(tenant_id, tag_name)
+        if err:
+            return err
 
     owner_id = _resolve_owner(tenant_id, owner_name)
 
-    # Check no pipeline already running for this tag
-    existing = db.session.execute(
-        text("""
-            SELECT id FROM pipeline_runs
-            WHERE tenant_id = :t AND tag_id = :b
-              AND status IN ('running', 'stopping')
-            LIMIT 1
-        """),
-        {"t": str(tenant_id), "b": str(tag_id)},
-    ).fetchone()
+    # Check no pipeline already running for this tag (or tenant-wide if no tag)
+    if tag_id:
+        existing = db.session.execute(
+            text("""
+                SELECT id FROM pipeline_runs
+                WHERE tenant_id = :t AND tag_id = :b
+                  AND status IN ('running', 'stopping')
+                LIMIT 1
+            """),
+            {"t": str(tenant_id), "b": str(tag_id)},
+        ).fetchone()
+    else:
+        existing = db.session.execute(
+            text("""
+                SELECT id FROM pipeline_runs
+                WHERE tenant_id = :t AND tag_id IS NULL
+                  AND status IN ('running', 'stopping')
+                LIMIT 1
+            """),
+            {"t": str(tenant_id)},
+        ).fetchone()
     if existing:
-        return jsonify({"error": "A pipeline is already running for this tag"}), 409
+        return jsonify({"error": "A pipeline is already running for this selection"}), 409
 
     # Build config
     config = {}
@@ -246,7 +259,7 @@ def enrich_start():
     # Create pipeline_run record
     pipeline_run = PipelineRun(
         tenant_id=str(tenant_id),
-        tag_id=str(tag_id),
+        tag_id=str(tag_id) if tag_id else None,
         owner_id=str(owner_id) if owner_id else None,
         status="running",
         config=json.dumps(config) if config else "{}",
@@ -263,7 +276,7 @@ def enrich_start():
 
         sr = StageRun(
             tenant_id=str(tenant_id),
-            tag_id=str(tag_id),
+            tag_id=str(tag_id) if tag_id else None,
             owner_id=str(owner_id) if owner_id else None,
             stage=stage,
             status="pending",

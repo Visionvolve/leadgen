@@ -30,24 +30,43 @@ CHANNEL_CONSTRAINTS = {
     },
 }
 
-SYSTEM_PROMPT = """You are an expert B2B outreach copywriter. You write personalized, \
-concise outreach messages that feel human-written, not AI-generated. \
-You avoid cliches, buzzwords, and generic pitches. Every message references \
-specific details about the recipient and their company to show genuine research.
+SYSTEM_PROMPT = """You are writing short outreach emails for Losers Cirque Company / United Arts.
 
-When a STRATEGY section is provided, you MUST incorporate its messaging angles, \
-value propositions, and tone guidelines into the message. The strategy represents \
-the sender's GTM positioning — your message should feel like it comes from someone \
-who deeply understands their own product's value and the prospect's pain points. \
-Never contradict the strategy's positioning or use messaging angles not aligned \
-with it.
+CRITICAL RULES — follow these exactly:
 
-CRITICAL: When ENRICHMENT data is provided (company intel, recent news, pain \
-points, tech stack, hiring signals, growth signals, etc.), you MUST reference \
-at least one specific fact from the enrichment in your message. Generic messages \
-that ignore available enrichment data are unacceptable. Use concrete details like \
-company size, recent initiatives, technology choices, or hiring patterns to show \
-the sender has done genuine research. Avoid vague references — cite specifics."""
+1. CZECH VOCATIVE CASE: When writing in Czech, ALWAYS use the vocative form of the \
+recipient's first name in the greeting. Examples: Jana→Jano, Marianna→Marianno, \
+Petr→Petře, Hana→Hanko, Martin→Martine, Jakub→Jakube, Eliška→Eliško, \
+Renáta→Renáto, Helena→Heleno, Štěpánka→Štěpánko, Lenka→Lenko, Andrea→Andreo, \
+Silvie→Silvie (stays same for -ie endings). Apply standard Czech declension rules \
+for any name not listed here.
+
+2. NO HALLUCINATION: This is COLD outreach. DO NOT invent or imply any prior \
+interaction, conversation, meeting, or relationship. Never write "děkujeme za zájem", \
+"na základě našeho rozhovoru", "jak jsme se bavili", "thanks for reaching out", \
+or anything suggesting prior contact — unless there IS documented interaction history \
+in the ENRICHMENT section.
+
+3. KEEP IT SHORT: Maximum 150-200 words. Get to the point quickly.
+
+4. PRODUCT MENTIONS: When RECOMMENDED PRODUCTS are provided, mention only 1-2 specific \
+products by name with their price. Keep it natural — weave the product into the message \
+as a concrete suggestion, not a product spec sheet.
+
+5. TONE: Friendly professional — like a colleague recommending something. Not salesy, \
+not corporate. Write naturally as a real person would.
+
+6. SIGNATURE: Always sign as:
+Hanka Faková
+Event Producer
+hana@unitedarts.cz | +420 737 853 490
+
+7. STRATEGY & ENRICHMENT: When provided, incorporate strategy messaging angles and \
+reference specific enrichment facts (company details, industry, segment). But keep it \
+light — one or two relevant details, not a research report.
+
+8. Write the entire message in the language specified (default: Czech). Subject lines \
+should also be in that language."""
 
 
 FORMALITY_INSTRUCTIONS = {
@@ -256,6 +275,98 @@ def _build_enrichment_section(enrichment_data: dict) -> str:
     return "\n".join(lines) if lines else ""
 
 
+def _build_product_section(
+    recommended_products: list[dict],
+    language: str = "cs",
+    catalog_context: dict | None = None,
+) -> str:
+    """Format recommended products for the generation prompt.
+
+    Includes product name, price, best-for description, and catalog selling
+    points so the LLM can weave specific product recommendations into the
+    message with accurate details from the PDF catalog.
+    """
+    if not recommended_products:
+        return ""
+
+    # Build a lookup from catalog_context for selling_points by product name
+    catalog_lookup: dict[str, dict] = {}
+    if catalog_context:
+        for section_key in (
+            "animation_programs",
+            "catalogue_shows",
+            "music",
+        ):
+            for item in catalog_context.get(section_key, []):
+                name_cs = item.get("name_cs", "")
+                catalog_lookup[name_cs.lower()] = item
+
+    lines = []
+    entry_products = [
+        p for p in recommended_products if p.get("recommendation_type") == "entry"
+    ]
+    upsell_products = [
+        p for p in recommended_products if p.get("recommendation_type") == "upsell"
+    ]
+
+    if entry_products:
+        lines.append("Recommended entry product(s) for this segment:")
+        for p in entry_products:
+            price_str = ""
+            if language == "de" and p.get("price_eur"):
+                price_str = f" ({p['price_eur']:,.0f} EUR/{p['price_unit']})"
+            elif p.get("price_czk"):
+                price_str = f" ({p['price_czk']:,.0f} CZK/{p['price_unit']})"
+            desc = p.get("description_cs") or p.get("best_for") or ""
+            line = f"- {p['name']}{price_str}: {desc}"
+            # Append selling points from catalog if available
+            cat_item = catalog_lookup.get(p["name"].lower(), {})
+            if cat_item.get("selling_points"):
+                line += f"\n  Selling point: {cat_item['selling_points']}"
+            if cat_item.get("price_notes"):
+                line += f"\n  Price note: {cat_item['price_notes']}"
+            lines.append(line)
+
+    if upsell_products:
+        lines.append("Upsell option(s):")
+        for p in upsell_products:
+            price_str = ""
+            if language == "de" and p.get("price_eur"):
+                price_str = f" ({p['price_eur']:,.0f} EUR/{p['price_unit']})"
+            elif p.get("price_czk"):
+                price_str = f" ({p['price_czk']:,.0f} CZK/{p['price_unit']})"
+            desc = p.get("description_cs") or p.get("best_for") or ""
+            lines.append(f"- {p['name']}{price_str}: {desc}")
+
+    # Append segment-specific pitch from catalog context
+    # Match the segment with the highest overlap of entry product names
+    if catalog_context and entry_products:
+        seg_recs = catalog_context.get("segment_recommendations", {})
+        entry_product_names = {p["name"].lower() for p in entry_products}
+        best_seg = None
+        best_overlap = 0
+        for seg_key, seg_data in seg_recs.items():
+            seg_entry_names = {n.lower() for n in seg_data.get("entry", [])}
+            overlap = len(entry_product_names & seg_entry_names)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_seg = seg_data
+        if best_seg and best_overlap > 0:
+            pitch_key = "pitch_cs" if language != "en" else "pitch_en"
+            pitch = best_seg.get(pitch_key) or best_seg.get("pitch_cs", "")
+            if pitch:
+                lines.append(f"\nSegment pitch: {pitch}")
+
+    # General info from catalog
+    if catalog_context and catalog_context.get("general_info"):
+        info = catalog_context["general_info"]
+        refs = info.get("references", [])
+        if refs:
+            lines.append(f"References: {', '.join(refs)}")
+
+    return "\n".join(lines)
+
+
 def build_generation_prompt(
     *,
     channel: str,
@@ -273,6 +384,8 @@ def build_generation_prompt(
     max_length: int | None = None,
     reference_assets: list | None = None,
     feedback_signals: dict | None = None,
+    recommended_products: list | None = None,
+    catalog_context: dict | None = None,
 ) -> str:
     """Build the user prompt for generating a single message step.
 
@@ -338,6 +451,26 @@ def build_generation_prompt(
                 enrichment_section,
             ]
         )
+
+    # Product recommendations (segment-driven) with catalog context
+    if recommended_products:
+        language = generation_config.get("language", "cs")
+        # catalog_context comes from campaign generation_config or is passed directly
+        effective_catalog = catalog_context or generation_config.get("catalog_context")
+        product_section = _build_product_section(
+            recommended_products, language, effective_catalog
+        )
+        if product_section:
+            parts.extend(
+                [
+                    "",
+                    "--- RECOMMENDED PRODUCTS ---",
+                    "Mention the recommended entry product by name and price in the message. "
+                    "Keep it natural — don't list specs, just mention the product as a concrete suggestion. "
+                    "Do NOT mention upsell products — they are for internal reference only.",
+                    product_section,
+                ]
+            )
 
     # Reference assets (uploaded files with summaries)
     if reference_assets:
