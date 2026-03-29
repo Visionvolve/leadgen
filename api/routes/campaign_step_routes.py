@@ -102,6 +102,7 @@ def add_step(campaign_id):
         channel=data.get("channel", "linkedin_message"),
         day_offset=data.get("day_offset", 0),
         label=data.get("label", ""),
+        condition=data.get("condition", "always"),
         config=json.dumps(data.get("config", {})),
     )
     db.session.add(step)
