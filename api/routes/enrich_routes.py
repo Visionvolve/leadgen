@@ -245,7 +245,9 @@ def enrich_start():
             {"t": str(tenant_id)},
         ).fetchone()
     if existing:
-        return jsonify({"error": "A pipeline is already running for this selection"}), 409
+        return jsonify(
+            {"error": "A pipeline is already running for this selection"}
+        ), 409
 
     # Build config
     config = {}

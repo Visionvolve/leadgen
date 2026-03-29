@@ -515,7 +515,9 @@ def pipeline_dag_run():
             {"t": str(tenant_id)},
         ).fetchone()
     if existing:
-        return jsonify({"error": "A pipeline is already running for this selection"}), 409
+        return jsonify(
+            {"error": "A pipeline is already running for this selection"}
+        ), 409
 
     # Build config
     config = {"mode": "dag", "stages": stages}
