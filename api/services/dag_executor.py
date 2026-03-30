@@ -95,6 +95,45 @@ def record_completion(
             db.session.rollback()
 
 
+def _auto_record_triage(tenant_id, tag_id, pipeline_run_id, entity_id, l1_result):
+    """After L1 auto-triages a company, write a triage completion record.
+
+    The L1 enricher sets company status to 'triage_passed' or 'needs_review'.
+    The DAG executor needs a triage completion record for L2 eligibility
+    (L2 hard-depends on triage). This bridges the gap when triage isn't
+    run as a separate stage.
+    """
+    try:
+        row = db.session.execute(
+            text("SELECT status FROM companies WHERE id = :id"),
+            {"id": str(entity_id)},
+        ).fetchone()
+        if not row:
+            return
+
+        company_status = row[0]
+        if company_status == "triage_passed":
+            triage_status = "completed"
+        elif company_status in ("triage_disqualified", "needs_review"):
+            triage_status = "disqualified"
+        else:
+            # Not auto-triaged (e.g., enrichment_failed) — don't write triage record
+            return
+
+        record_completion(
+            tenant_id,
+            tag_id,
+            pipeline_run_id,
+            "company",
+            entity_id,
+            "triage",
+            status=triage_status,
+            cost_usd=0,
+        )
+    except Exception as e:
+        logger.warning("Failed to auto-record triage for %s: %s", entity_id, e)
+
+
 def build_eligibility_query(
     stage_code,
     pipeline_run_id,
@@ -673,7 +712,10 @@ def run_dag_stage(
     Like run_stage_reactive but uses completion-record-based eligibility
     and records completions after each entity.
     """
-    from .pipeline_engine import _process_entity, _extract_cost, _api_semaphore
+    from .pipeline_engine import _process_entity, _extract_cost
+    import threading
+
+    _api_semaphore = threading.Semaphore(20)
 
     stage_def = get_stage(stage_code)
     if not stage_def:
@@ -818,6 +860,18 @@ def run_dag_stage(
                                 status=completion_status,
                                 cost_usd=cost,
                             )
+
+                            # L1 auto-triage: also record triage completion
+                            # so L2 (which hard-depends on triage) becomes eligible
+                            if stage_code == "l1" and entity_type == "company":
+                                _auto_record_triage(
+                                    tenant_id,
+                                    tag_id,
+                                    pipeline_run_id,
+                                    entity_id,
+                                    result,
+                                )
+
                             _update_current_item(run_id, entity_name, "ok")
                             _update_stage_run(
                                 run_id,
@@ -913,6 +967,17 @@ def run_dag_stage(
                                     status=completion_status,
                                     cost_usd=cost,
                                 )
+
+                                # L1 auto-triage: also record triage completion
+                                if stage_code == "l1" and entity_type == "company":
+                                    _auto_record_triage(
+                                        tenant_id,
+                                        tag_id,
+                                        pipeline_run_id,
+                                        entity_id,
+                                        result,
+                                    )
+
                                 _update_current_item(run_id, entity_name, "ok")
                                 _update_stage_run(
                                     run_id,

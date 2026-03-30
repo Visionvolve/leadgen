@@ -867,16 +867,33 @@ def _save_l1_enrichment(company_id, search_results, cost_usd, confidence):
         )
     except Exception:
         db.session.rollback()
-        db.session.execute(
-            text(f"""
-                INSERT OR REPLACE INTO company_enrichment_l1 (
-                    company_id, {col_list}, enriched_at, enrichment_cost_usd
-                ) VALUES (
-                    :cid, {val_list}, :enriched_at, :cost
-                )
-            """),
-            params,
-        )
+        dialect = db.engine.dialect.name
+        if dialect == "sqlite":
+            db.session.execute(
+                text(f"""
+                    INSERT OR REPLACE INTO company_enrichment_l1 (
+                        company_id, {col_list}, enriched_at, enrichment_cost_usd
+                    ) VALUES (
+                        :cid, {val_list}, :enriched_at, :cost
+                    )
+                """),
+                params,
+            )
+        else:
+            db.session.execute(
+                text(f"""
+                    INSERT INTO company_enrichment_l1 (
+                        company_id, {col_list}, enriched_at, enrichment_cost_usd
+                    ) VALUES (
+                        :cid, {val_list}, :enriched_at, :cost
+                    )
+                    ON CONFLICT (company_id) DO UPDATE SET
+                        {update_list},
+                        enriched_at = EXCLUDED.enriched_at,
+                        enrichment_cost_usd = EXCLUDED.enrichment_cost_usd
+                """),
+                params,
+            )
 
 
 def _upsert_module(table_name, columns, params):
@@ -898,13 +915,27 @@ def _upsert_module(table_name, columns, params):
         )
     except Exception:
         db.session.rollback()
-        db.session.execute(
-            text(f"""
-                INSERT OR REPLACE INTO {table_name} (company_id, {col_list}, enriched_at, enrichment_cost_usd)
-                VALUES (:cid, {val_list}, :enriched_at, :cost)
-            """),
-            params,
-        )
+        dialect = db.engine.dialect.name
+        if dialect == "sqlite":
+            db.session.execute(
+                text(f"""
+                    INSERT OR REPLACE INTO {table_name} (company_id, {col_list}, enriched_at, enrichment_cost_usd)
+                    VALUES (:cid, {val_list}, :enriched_at, :cost)
+                """),
+                params,
+            )
+        else:
+            db.session.execute(
+                text(f"""
+                    INSERT INTO {table_name} (company_id, {col_list}, enriched_at, enrichment_cost_usd)
+                    VALUES (:cid, {val_list}, :enriched_at, :cost)
+                    ON CONFLICT (company_id) DO UPDATE SET
+                        {update_list},
+                        enriched_at = EXCLUDED.enriched_at,
+                        enrichment_cost_usd = EXCLUDED.enrichment_cost_usd
+                """),
+                params,
+            )
 
 
 def _save_l2_and_modules(company_id, search_results, synthesis, total_cost):
@@ -1030,16 +1061,33 @@ def _save_l2_and_modules(company_id, search_results, synthesis, total_cost):
         )
     except Exception:
         db.session.rollback()
-        db.session.execute(
-            text(f"""
-                INSERT OR REPLACE INTO company_enrichment_l2 (
-                    company_id, {col_list}, enriched_at, enrichment_cost_usd
-                ) VALUES (
-                    :cid, {val_list}, :enriched_at, :cost
-                )
-            """),
-            l2_params,
-        )
+        dialect = db.engine.dialect.name
+        if dialect == "sqlite":
+            db.session.execute(
+                text(f"""
+                    INSERT OR REPLACE INTO company_enrichment_l2 (
+                        company_id, {col_list}, enriched_at, enrichment_cost_usd
+                    ) VALUES (
+                        :cid, {val_list}, :enriched_at, :cost
+                    )
+                """),
+                l2_params,
+            )
+        else:
+            db.session.execute(
+                text(f"""
+                    INSERT INTO company_enrichment_l2 (
+                        company_id, {col_list}, enriched_at, enrichment_cost_usd
+                    ) VALUES (
+                        :cid, {val_list}, :enriched_at, :cost
+                    )
+                    ON CONFLICT (company_id) DO UPDATE SET
+                        {update_list},
+                        enriched_at = EXCLUDED.enriched_at,
+                        enrichment_cost_usd = EXCLUDED.enrichment_cost_usd
+                """),
+                l2_params,
+            )
 
     # --- company_enrichment_profile ---
     _upsert_module(

@@ -816,18 +816,38 @@ def _upsert_l2_enrichment(
         )
     except Exception:
         db.session.rollback()
-        db.session.execute(
-            text(f"""
-                INSERT OR REPLACE INTO company_enrichment_l2 (
-                    company_id, {col_list},
-                    enriched_at, enrichment_cost_usd
-                ) VALUES (
-                    :cid, {val_list},
-                    :enriched_at, :cost
-                )
-            """),
-            l2_params,
-        )
+        dialect = db.engine.dialect.name
+        if dialect == "sqlite":
+            db.session.execute(
+                text(f"""
+                    INSERT OR REPLACE INTO company_enrichment_l2 (
+                        company_id, {col_list},
+                        enriched_at, enrichment_cost_usd
+                    ) VALUES (
+                        :cid, {val_list},
+                        :enriched_at, :cost
+                    )
+                """),
+                l2_params,
+            )
+        else:
+            # Retry PG upsert after rollback
+            db.session.execute(
+                text(f"""
+                    INSERT INTO company_enrichment_l2 (
+                        company_id, {col_list},
+                        enriched_at, enrichment_cost_usd
+                    ) VALUES (
+                        :cid, {val_list},
+                        :enriched_at, :cost
+                    )
+                    ON CONFLICT (company_id) DO UPDATE SET
+                        {update_list},
+                        enriched_at = EXCLUDED.enriched_at,
+                        enrichment_cost_usd = EXCLUDED.enrichment_cost_usd
+                """),
+                l2_params,
+            )
 
     # --- Write to split module tables (what the API reads) ---
     _upsert_split_profile(
@@ -880,13 +900,27 @@ def _upsert_module(table_name, columns, params, quality=None):
         )
     except Exception:
         db.session.rollback()
-        db.session.execute(
-            text(f"""
-                INSERT OR REPLACE INTO {table_name} (company_id, {col_list}, enriched_at, enrichment_cost_usd)
-                VALUES (:cid, {val_list}, :enriched_at, :cost)
-            """),
-            params,
-        )
+        dialect = db.engine.dialect.name
+        if dialect == "sqlite":
+            db.session.execute(
+                text(f"""
+                    INSERT OR REPLACE INTO {table_name} (company_id, {col_list}, enriched_at, enrichment_cost_usd)
+                    VALUES (:cid, {val_list}, :enriched_at, :cost)
+                """),
+                params,
+            )
+        else:
+            db.session.execute(
+                text(f"""
+                    INSERT INTO {table_name} (company_id, {col_list}, enriched_at, enrichment_cost_usd)
+                    VALUES (:cid, {val_list}, :enriched_at, :cost)
+                    ON CONFLICT (company_id) DO UPDATE SET
+                        {update_list},
+                        enriched_at = EXCLUDED.enriched_at,
+                        enrichment_cost_usd = EXCLUDED.enrichment_cost_usd
+                """),
+                params,
+            )
 
 
 def _upsert_split_profile(
