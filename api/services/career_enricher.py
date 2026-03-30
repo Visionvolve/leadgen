@@ -375,14 +375,29 @@ def _upsert_career_enrichment(contact_id, data, cost, quality=None):
         )
     except Exception:
         db.session.rollback()
-        db.session.execute(
-            text(f"""
-                INSERT OR REPLACE INTO contact_enrichment
-                    (contact_id, {col_list}, enriched_at, enrichment_cost_usd)
-                VALUES (:cid, {val_list}, :enriched_at, :cost)
-            """),
-            params,
-        )
+        dialect = db.engine.dialect.name
+        if dialect == "sqlite":
+            db.session.execute(
+                text(f"""
+                    INSERT OR REPLACE INTO contact_enrichment
+                        (contact_id, {col_list}, enriched_at, enrichment_cost_usd)
+                    VALUES (:cid, {val_list}, :enriched_at, :cost)
+                """),
+                params,
+            )
+        else:
+            db.session.execute(
+                text(f"""
+                    INSERT INTO contact_enrichment
+                        (contact_id, {col_list}, enriched_at, enrichment_cost_usd)
+                    VALUES (:cid, {val_list}, :enriched_at, :cost)
+                    ON CONFLICT (contact_id) DO UPDATE SET
+                        {update_list},
+                        enriched_at = EXCLUDED.enriched_at,
+                        enrichment_cost_usd = EXCLUDED.enrichment_cost_usd
+                """),
+                params,
+            )
 
     # Update block_quality JSONB with career block score
     if quality:

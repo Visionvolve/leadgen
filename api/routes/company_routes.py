@@ -992,7 +992,7 @@ def get_company(company_id):
             SELECT ct.id, ct.first_name, ct.last_name, ct.job_title, ct.email_address,
                    ct.contact_score, ct.icp_fit, ct.message_status,
                    ct.linkedin_url, ct.seniority_level, ct.department,
-                   ct.ai_champion, ct.ai_champion_score, ct.authority_score,
+                   ce.ai_champion, ce.ai_champion_score, ce.authority_score,
                    ce.person_summary, ce.career_trajectory
             FROM contacts ct
             LEFT JOIN contact_enrichment ce ON ce.contact_id = ct.id

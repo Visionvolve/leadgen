@@ -41,3 +41,15 @@ class Config:
         + "/.well-known/jwks.json",
     )
     IAM_AUDIENCE = os.environ.get("IAM_AUDIENCE", "leadgen")
+
+    # SQLAlchemy connection pool — sized for parallel enrichment workers
+    # Only set pool options for PostgreSQL; SQLite uses StaticPool (no pool_size)
+    _db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/leadgen")
+    if _db_url.startswith("sqlite"):
+        SQLALCHEMY_ENGINE_OPTIONS = {}
+    else:
+        SQLALCHEMY_ENGINE_OPTIONS = {
+            "pool_size": int(os.environ.get("SQLALCHEMY_POOL_SIZE", "20")),
+            "max_overflow": int(os.environ.get("SQLALCHEMY_MAX_OVERFLOW", "30")),
+            "pool_pre_ping": True,
+        }
