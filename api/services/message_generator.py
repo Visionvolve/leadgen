@@ -57,6 +57,39 @@ VARIANT_ANGLES = [
 VARIANT_LETTERS = ["A", "B", "C"]
 
 
+def _validate_greeting_name(body: str, first_name: str) -> bool:
+    """Check if the message greeting plausibly uses the recipient's first name.
+
+    Returns True if the greeting appears to reference the contact's first name
+    (exact match or common Czech vocative forms). Returns False if the name
+    seems wrong (e.g. sender name used instead of recipient).
+
+    The check only looks at the first 120 characters (greeting area).
+    """
+    if not first_name or not body:
+        return True  # Can't validate without a name
+
+    greeting_area = body[:120].lower()
+    first_name_lower = first_name.lower()
+
+    # Direct match (nominative or exact substring)
+    if first_name_lower in greeting_area:
+        return True
+
+    # Common Czech vocative transformations — check if greeting contains
+    # a string that starts with at least the first 3 chars of the name
+    # (vocative usually changes only the ending)
+    if len(first_name_lower) >= 3:
+        stem = first_name_lower[:3]
+        # Look for a word in the greeting area starting with the name stem
+        words = re.findall(r"[a-záčďéěíňóřšťúůýž]+", greeting_area)
+        for word in words:
+            if word.startswith(stem) and len(word) >= len(first_name_lower) - 1:
+                return True
+
+    return False
+
+
 def _parse_step_config(config) -> dict:
     """Safely parse a CampaignStep.config value to a dict.
 
@@ -1011,6 +1044,18 @@ def _generate_single_message(
 
     subject = parsed.get("subject")
     body = parsed.get("body", raw_text)
+
+    # Validate greeting uses the recipient's name, not the sender's
+    recipient_first = contact_data.get("first_name", "")
+    if recipient_first and not _validate_greeting_name(body, recipient_first):
+        logger.warning(
+            "Greeting name mismatch for contact %s (%s %s) in campaign %s — "
+            "body greeting may not reference the recipient's name",
+            contact_id,
+            recipient_first,
+            contact_data.get("last_name", ""),
+            campaign_id,
+        )
 
     # Enforce channel constraints
     constraints = CHANNEL_CONSTRAINTS.get(step["channel"], {})

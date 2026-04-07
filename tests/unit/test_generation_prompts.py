@@ -411,6 +411,90 @@ class TestBuildGenerationPromptWithStrategy:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Recipient name clarity + greeting validation
+# ---------------------------------------------------------------------------
+
+
+class TestRecipientNameClarity:
+    """Tests that prompts clearly distinguish sender from recipient."""
+
+    def test_contact_section_labels_recipient(self):
+        """Contact section prominently labels the name as RECIPIENT."""
+        from api.services.generation_prompts import _build_contact_section
+
+        section = _build_contact_section(
+            {"first_name": "Aneta", "last_name": "Novakova"},
+            {"l2": {}, "person": {}},
+        )
+        assert "RECIPIENT NAME" in section
+        assert "Aneta Novakova" in section
+        assert "RECIPIENT FIRST NAME: Aneta" in section
+
+    def test_system_prompt_distinguishes_sender_recipient(self):
+        """SYSTEM_PROMPT explicitly separates sender and recipient identity."""
+        from api.services.generation_prompts import SYSTEM_PROMPT
+
+        assert "SENDER" in SYSTEM_PROMPT
+        assert "RECIPIENT" in SYSTEM_PROMPT
+        assert "RECIPIENT NAME IN GREETING" in SYSTEM_PROMPT
+        # Sender identity is clearly marked
+        assert "writing AS the SENDER" in SYSTEM_PROMPT
+        # Recipient identity is clearly marked
+        assert "writing TO the RECIPIENT" in SYSTEM_PROMPT
+
+    def test_vocative_rule_references_recipient(self):
+        """Vocative rule explicitly says to use the RECIPIENT's first name."""
+        from api.services.generation_prompts import SYSTEM_PROMPT
+
+        assert "RECIPIENT's first name" in SYSTEM_PROMPT
+        # Additional vocative examples for names that caused bugs
+        assert "Anna" in SYSTEM_PROMPT and "Anno" in SYSTEM_PROMPT
+        assert "Aneta" in SYSTEM_PROMPT and "Aneto" in SYSTEM_PROMPT
+
+
+class TestValidateGreetingName:
+    """Tests for _validate_greeting_name post-generation check."""
+
+    def test_exact_match(self):
+        from api.services.message_generator import _validate_greeting_name
+
+        assert _validate_greeting_name("Dobrý den, Aneto,\nráda bych...", "Aneta")
+
+    def test_vocative_match(self):
+        from api.services.message_generator import _validate_greeting_name
+
+        assert _validate_greeting_name("Ahoj Anno,\ndovolte mi...", "Anna")
+
+    def test_wrong_name_detected(self):
+        from api.services.message_generator import _validate_greeting_name
+
+        # Sender name "Hanka" used instead of recipient "Aneta"
+        assert not _validate_greeting_name("Dobrý den, Hanko,\nráda bych...", "Aneta")
+
+    def test_empty_first_name_passes(self):
+        from api.services.message_generator import _validate_greeting_name
+
+        assert _validate_greeting_name("Hello,\nsome body text", "")
+
+    def test_empty_body_passes(self):
+        from api.services.message_generator import _validate_greeting_name
+
+        assert _validate_greeting_name("", "Aneta")
+
+    def test_name_in_body_not_greeting(self):
+        """Name appearing after the first 120 chars is NOT counted."""
+        from api.services.message_generator import _validate_greeting_name
+
+        body = "X" * 130 + "Aneta"
+        assert not _validate_greeting_name(body, "Aneta")
+
+    def test_case_insensitive(self):
+        from api.services.message_generator import _validate_greeting_name
+
+        assert _validate_greeting_name("dobrý den, aneto,", "Aneta")
+
+
+# ---------------------------------------------------------------------------
 # Tests: Strategy snapshot in generation_config
 # ---------------------------------------------------------------------------
 
