@@ -12,7 +12,6 @@ import {
 import { Tabs, type TabDef } from '../../components/ui/Tabs'
 import { EnrichmentTimeline } from '../../components/ui/EnrichmentTimeline'
 import { RawResearchSection } from '../../components/ui/RawResearchSection'
-import type { SourceInfo } from '../../components/ui/SourceTooltip'
 import {
   SENIORITY_DISPLAY, SENIORITY_REVERSE,
   DEPARTMENT_DISPLAY, DEPARTMENT_REVERSE,
@@ -91,12 +90,6 @@ export function ContactDetail({ contact, onNavigate }: Props) {
       toast('Failed to save changes', 'error')
     }
   }
-
-  const personSource: SourceInfo | undefined = contact.enrichment ? {
-    label: 'Person Enrichment',
-    timestamp: contact.enrichment.enriched_at,
-    cost: contact.enrichment.enrichment_cost_usd,
-  } : undefined
 
   /* ---- Tab definitions ---- */
 
