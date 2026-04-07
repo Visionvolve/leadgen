@@ -24,14 +24,19 @@ GOOGLE_CONTACTS_SCOPES = [
 GOOGLE_GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
+GOOGLE_GMAIL_SEND_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
 
 
-def _encode_state(user_id, tenant_id, return_url=None):
+def _encode_state(user_id, tenant_id, return_url=None, scopes=None):
     """JWT-encode OAuth state parameter."""
     payload = {
         "user_id": str(user_id),
         "tenant_id": str(tenant_id),
         "return_url": return_url or "",
+        "scopes": scopes or [],
         "exp": int(time.time()) + 600,  # 10 minute expiry
     }
     return jwt.encode(payload, current_app.config["JWT_SECRET_KEY"], algorithm="HS256")
@@ -61,7 +66,10 @@ def google_auth_url():
     scopes = []
     if scope_param == "both" or "contacts" in scope_param:
         scopes.extend(GOOGLE_CONTACTS_SCOPES)
-    if scope_param == "both" or "gmail" in scope_param:
+    if "gmail_send" in scope_param:
+        # Gmail send includes read + send scopes
+        scopes.extend(GOOGLE_GMAIL_SEND_SCOPES)
+    elif scope_param == "both" or "gmail" in scope_param:
         scopes.extend(GOOGLE_GMAIL_SCOPES)
     if not scopes:
         scopes = GOOGLE_CONTACTS_SCOPES
@@ -70,7 +78,10 @@ def google_auth_url():
     scopes.append("openid")
     scopes.append("email")
 
-    state = _encode_state(g.current_user.id, tenant_id, return_url)
+    # Deduplicate
+    scopes = list(dict.fromkeys(scopes))
+
+    state = _encode_state(g.current_user.id, tenant_id, return_url, scopes=scopes)
     auth_url = get_google_auth_url(state, scopes)
 
     return jsonify({"auth_url": auth_url})
@@ -99,6 +110,7 @@ def google_callback():
     user_id = state_data["user_id"]
     tenant_id = state_data["tenant_id"]
     return_url = state_data.get("return_url", "")
+    requested_scopes = state_data.get("scopes", [])
 
     try:
         token_data = exchange_code(code)
@@ -126,6 +138,10 @@ def google_callback():
         existing.provider_email = token_data["email"]
         existing.status = "active"
         existing.updated_at = now
+        # Merge scopes: keep existing + add newly requested
+        old_scopes = set(existing.scopes or [])
+        new_scopes = set(requested_scopes)
+        existing.scopes = list(old_scopes | new_scopes)
     else:
         conn = OAuthConnection(
             user_id=user_id,
@@ -139,7 +155,7 @@ def google_callback():
                 time.time() + token_data["expires_in"],
                 tz=timezone.utc,
             ),
-            scopes=request.args.getlist("scope") or [],
+            scopes=requested_scopes,
             status="active",
         )
         db.session.add(conn)

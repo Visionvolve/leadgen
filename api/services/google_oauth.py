@@ -14,6 +14,12 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
+# Gmail send scope — separate from read-only scopes so users explicitly grant
+GOOGLE_GMAIL_SEND_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
+
 
 def _get_fernet():
     key = current_app.config["OAUTH_ENCRYPTION_KEY"]
@@ -167,3 +173,11 @@ def revoke_connection(oauth_connection):
     oauth_connection.refresh_token_enc = None
     oauth_connection.updated_at = datetime.now(timezone.utc)
     db.session.flush()
+
+
+def has_send_scope(oauth_connection) -> bool:
+    """Check if an OAuth connection has the gmail.send scope granted."""
+    scopes = oauth_connection.scopes
+    if not scopes or not isinstance(scopes, list):
+        return False
+    return "https://www.googleapis.com/auth/gmail.send" in scopes
