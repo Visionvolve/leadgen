@@ -113,10 +113,16 @@ const LAST_NAMESPACE_KEY = 'leadgen_last_namespace'
 export function getDefaultNamespace(user: StoredUser | null): string | null {
   if (!user?.roles) return null
   const namespaces = Object.keys(user.roles)
-  if (namespaces.length === 0) return null
 
   // Check localStorage for last-used namespace
   const stored = localStorage.getItem(LAST_NAMESPACE_KEY)
+
+  if (namespaces.length === 0) {
+    // Super admin with no tenant-scoped roles — use stored or fallback
+    if (user.is_super_admin) return stored || 'visionvolve'
+    return null
+  }
+
   if (stored && namespaces.includes(stored)) return stored
 
   // For super admins, also check if the stored namespace exists (may not be in roles)
