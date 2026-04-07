@@ -7,11 +7,9 @@ Tests cover:
 - Strategy snapshot storage in campaign generation_config
 - Backward compatibility (prompts work without strategy_data)
 """
-import json
-import sys
-from unittest.mock import patch, MagicMock
 
-import pytest
+import json
+from unittest.mock import patch, MagicMock
 
 from api.services.generation_prompts import (
     _build_strategy_section,
@@ -177,9 +175,9 @@ class TestBuildStrategySection:
 
     def test_competitive_positioning_as_list(self):
         """Competitive positioning can be a list."""
-        result = _build_strategy_section({
-            "competitive_positioning": ["AI-first", "Hands-on implementation"]
-        })
+        result = _build_strategy_section(
+            {"competitive_positioning": ["AI-first", "Hands-on implementation"]}
+        )
         assert "AI-first" in result
         assert "Hands-on implementation" in result
 
@@ -187,7 +185,11 @@ class TestBuildStrategySection:
         """At most 3 personas are included."""
         many_personas = {
             "personas": [
-                {"title_patterns": [f"Persona {i}"], "pain_points": [f"pain {i}"], "goals": []}
+                {
+                    "title_patterns": [f"Persona {i}"],
+                    "pain_points": [f"pain {i}"],
+                    "goals": [],
+                }
                 for i in range(5)
             ]
         }
@@ -240,19 +242,23 @@ class TestBuildEnrichmentSection:
 
     def test_l2_only(self):
         """Only L2 data, no person data."""
-        result = _build_enrichment_section({
-            "l2": {"tech_stack": "Java, Spring Boot"},
-            "person": {},
-        })
+        result = _build_enrichment_section(
+            {
+                "l2": {"tech_stack": "Java, Spring Boot"},
+                "person": {},
+            }
+        )
         assert "Tech Stack: Java" in result
         assert "Career Trajectory" not in result
 
     def test_person_only(self):
         """Only person data, no L2 data."""
-        result = _build_enrichment_section({
-            "l2": {},
-            "person": {"career_trajectory": "McKinsey -> Startup -> CTO"},
-        })
+        result = _build_enrichment_section(
+            {
+                "l2": {},
+                "person": {"career_trajectory": "McKinsey -> Startup -> CTO"},
+            }
+        )
         assert "Career Trajectory: McKinsey" in result
         assert "Tech Stack" not in result
 
@@ -523,7 +529,10 @@ class TestStrategySnapshot:
         result = _load_strategy_data(str(tenant.id))
         assert result is not None
         assert result["icp"]["industries"] == ["SaaS", "FinTech"]
-        assert result["value_proposition"] == "We help mid-market SaaS companies ship AI features 3x faster"
+        assert (
+            result["value_proposition"]
+            == "We help mid-market SaaS companies ship AI features 3x faster"
+        )
 
     def test_load_strategy_data_returns_none_when_no_doc(self, app, db):
         """_load_strategy_data returns None when no StrategyDocument exists."""
@@ -561,7 +570,12 @@ class TestStrategySnapshot:
     def test_strategy_snapshot_stored_in_generation_config(self, app, db):
         """_generate_all stores strategy_snapshot in campaign.generation_config."""
         from api.models import (
-            Tenant, Owner, Campaign, Contact, CampaignContact, StrategyDocument,
+            Tenant,
+            Owner,
+            Campaign,
+            Contact,
+            CampaignContact,
+            StrategyDocument,
         )
         from api.services.message_generator import _generate_all
 
@@ -588,9 +602,11 @@ class TestStrategySnapshot:
             owner_id=owner.id,
             name="Test Campaign",
             status="generating",
-            template_config=json.dumps([
-                {"step": 1, "label": "Intro", "channel": "email", "enabled": True},
-            ]),
+            template_config=json.dumps(
+                [
+                    {"step": 1, "label": "Intro", "channel": "email", "enabled": True},
+                ]
+            ),
             generation_config=json.dumps({"tone": "professional", "language": "en"}),
         )
         db.session.add(campaign)
@@ -617,12 +633,15 @@ class TestStrategySnapshot:
 
         # Mock the Anthropic API call
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"subject": "Hi", "body": "Test message"}')]
+        mock_response.content = [
+            MagicMock(text='{"subject": "Hi", "body": "Test message"}')
+        ]
         mock_response.usage.input_tokens = 100
         mock_response.usage.output_tokens = 50
 
         with patch.dict("sys.modules", {"anthropic": MagicMock()}) as _:
             import anthropic as mock_anthropic
+
             mock_client = MagicMock()
             mock_anthropic.Anthropic.return_value = mock_client
             mock_client.messages.create.return_value = mock_response
@@ -660,9 +679,11 @@ class TestStrategySnapshot:
             owner_id=owner.id,
             name="No Strategy Campaign",
             status="generating",
-            template_config=json.dumps([
-                {"step": 1, "label": "Intro", "channel": "email", "enabled": True},
-            ]),
+            template_config=json.dumps(
+                [
+                    {"step": 1, "label": "Intro", "channel": "email", "enabled": True},
+                ]
+            ),
             generation_config=json.dumps({"tone": "casual", "language": "cs"}),
         )
         db.session.add(campaign)
@@ -693,6 +714,7 @@ class TestStrategySnapshot:
 
         with patch.dict("sys.modules", {"anthropic": MagicMock()}) as _:
             import anthropic as mock_anthropic
+
             mock_client = MagicMock()
             mock_anthropic.Anthropic.return_value = mock_client
             mock_client.messages.create.return_value = mock_response
