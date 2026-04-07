@@ -122,6 +122,9 @@ def _get_warmup_day(tenant_id: str) -> int:
     if not first_send:
         return 1
 
+    # SQLite returns strings; PostgreSQL returns datetime — handle both
+    if isinstance(first_send, str):
+        first_send = datetime.fromisoformat(first_send.replace("Z", "+00:00"))
     # Ensure timezone-aware comparison
     if first_send.tzinfo is None:
         first_send = first_send.replace(tzinfo=timezone.utc)

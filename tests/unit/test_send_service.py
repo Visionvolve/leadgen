@@ -14,8 +14,8 @@ Covers:
 - Pre-send email validation
 - Quota info in send-status response
 """
+
 import json
-from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -140,9 +140,7 @@ class TestSendCampaignEmails:
         from api.services.send_service import send_campaign_emails
 
         with app.app_context():
-            result = send_campaign_emails(
-                str(campaign.id), str(seed["tenant"].id)
-            )
+            result = send_campaign_emails(str(campaign.id), str(seed["tenant"].id))
 
         # Only contacts with email addresses should be sent
         contacts_with_email = [c for c in contacts if c.email_address]
@@ -181,9 +179,7 @@ class TestSendCampaignEmails:
         from api.services.send_service import send_campaign_emails
 
         with app.app_context():
-            result = send_campaign_emails(
-                str(campaign.id), str(seed["tenant"].id)
-            )
+            result = send_campaign_emails(str(campaign.id), str(seed["tenant"].id))
 
         assert result["skipped_count"] >= 1
         # The first message was skipped, so send_count should be less
@@ -215,15 +211,16 @@ class TestSendCampaignEmails:
         from api.services.send_service import send_campaign_emails
 
         with app.app_context():
-            result = send_campaign_emails(
-                str(campaign.id), str(seed["tenant"].id)
-            )
+            result = send_campaign_emails(str(campaign.id), str(seed["tenant"].id))
 
         # At least one should have succeeded and at least one failed
         assert result["sent_count"] >= 1
         assert result["failed_count"] >= 1
         # Total should account for all attempts
-        assert result["total"] == result["sent_count"] + result["failed_count"] + result["skipped_count"]
+        assert (
+            result["total"]
+            == result["sent_count"] + result["failed_count"] + result["skipped_count"]
+        )
 
     @patch("api.services.send_service.time.sleep")
     @patch("api.services.send_service._send_single_email")
@@ -242,16 +239,16 @@ class TestSendCampaignEmails:
         from api.services.send_service import send_campaign_emails
 
         with app.app_context():
-            send_campaign_emails(
-                str(campaign.id), str(seed["tenant"].id)
-            )
+            send_campaign_emails(str(campaign.id), str(seed["tenant"].id))
 
         # Only email messages should be sent, not linkedin
         for call_args in mock_send.call_args_list:
             # verify we never tried to send a linkedin message
             assert "connect" not in str(call_args).lower()
 
-    def test_send_raises_on_missing_sender_config(self, app, db, seed_companies_contacts):
+    def test_send_raises_on_missing_sender_config(
+        self, app, db, seed_companies_contacts
+    ):
         """send_campaign_emails raises when sender_config has no from_email."""
         from api.models import Campaign
 
@@ -302,10 +299,16 @@ class TestQuotaEnforcement:
     ):
         """Sending is blocked when daily quota is reached."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"daily": 50, "hourly": 30, "warmup_enabled": False}
-        })
-        campaign, messages, _ = _setup_campaign_with_approved_emails(db, seed, msg_count=2)
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {"daily": 50, "hourly": 30, "warmup_enabled": False}
+            },
+        )
+        campaign, messages, _ = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=2
+        )
 
         # Pretend 50 emails already sent today
         mock_count_today.return_value = 50
@@ -328,10 +331,16 @@ class TestQuotaEnforcement:
     ):
         """Sending is blocked when hourly quota is reached."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"daily": 100, "hourly": 10, "warmup_enabled": False}
-        })
-        campaign, messages, _ = _setup_campaign_with_approved_emails(db, seed, msg_count=2)
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {"daily": 100, "hourly": 10, "warmup_enabled": False}
+            },
+        )
+        campaign, messages, _ = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=2
+        )
 
         # Pretend 10 emails sent this hour
         mock_count_hour.return_value = 10
@@ -353,10 +362,21 @@ class TestQuotaEnforcement:
     ):
         """Tenant-specific send limits are respected."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"daily": 200, "hourly": 50, "delay_seconds": 5, "warmup_enabled": False}
-        })
-        campaign, messages, contacts = _setup_campaign_with_approved_emails(db, seed, msg_count=2)
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {
+                    "daily": 200,
+                    "hourly": 50,
+                    "delay_seconds": 5,
+                    "warmup_enabled": False,
+                }
+            },
+        )
+        campaign, messages, contacts = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=2
+        )
         mock_send.return_value = {"id": "resend_msg_001"}
 
         from api.services.send_service import send_campaign_emails
@@ -403,15 +423,27 @@ class TestWarmupSchedule:
     @patch("api.services.send_service._get_warmup_day")
     @patch("api.services.send_service._count_sent_today")
     def test_warmup_caps_daily_limit(
-        self, mock_count_today, mock_warmup_day, mock_send, mock_sleep,
-        app, db, seed_companies_contacts
+        self,
+        mock_count_today,
+        mock_warmup_day,
+        mock_send,
+        mock_sleep,
+        app,
+        db,
+        seed_companies_contacts,
     ):
         """Warm-up limit overrides daily limit when it's lower."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"daily": 100, "hourly": 50, "warmup_enabled": True}
-        })
-        campaign, messages, _ = _setup_campaign_with_approved_emails(db, seed, msg_count=2)
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {"daily": 100, "hourly": 50, "warmup_enabled": True}
+            },
+        )
+        campaign, messages, _ = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=2
+        )
 
         # Day 1 warm-up = 20, daily = 100 → effective is 20
         mock_warmup_day.return_value = 1
@@ -432,10 +464,16 @@ class TestWarmupSchedule:
     ):
         """When warmup_enabled=false, warm-up schedule is not applied."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"daily": 100, "hourly": 50, "warmup_enabled": False}
-        })
-        campaign, messages, contacts = _setup_campaign_with_approved_emails(db, seed, msg_count=2)
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {"daily": 100, "hourly": 50, "warmup_enabled": False}
+            },
+        )
+        campaign, messages, contacts = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=2
+        )
         mock_send.return_value = {"id": "resend_msg_001"}
 
         from api.services.send_service import send_campaign_emails
@@ -473,7 +511,9 @@ class TestSendDelay:
         if mock_sleep.call_count > 0:
             for call in mock_sleep.call_args_list:
                 delay = call[0][0]
-                assert 25.0 <= delay <= 35.0, f"Delay {delay} not in expected range [25, 35]"
+                assert 25.0 <= delay <= 35.0, (
+                    f"Delay {delay} not in expected range [25, 35]"
+                )
 
     @patch("api.services.send_service.time.sleep")
     @patch("api.services.send_service._send_single_email")
@@ -482,9 +522,13 @@ class TestSendDelay:
     ):
         """Tenant-configured delay is used instead of default."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"delay_seconds": 10, "warmup_enabled": False}
-        })
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {"delay_seconds": 10, "warmup_enabled": False}
+            },
+        )
         campaign, messages, contacts = _setup_campaign_with_approved_emails(
             db, seed, msg_count=2
         )
@@ -498,22 +542,24 @@ class TestSendDelay:
         if mock_sleep.call_count > 0:
             for call in mock_sleep.call_args_list:
                 delay = call[0][0]
-                assert 5.0 <= delay <= 15.0, f"Delay {delay} not in expected range [5, 15]"
+                assert 5.0 <= delay <= 15.0, (
+                    f"Delay {delay} not in expected range [5, 15]"
+                )
 
 
 class TestUnsubscribeHeader:
     """Tests for List-Unsubscribe CAN-SPAM header."""
 
     @patch("api.services.send_service.time.sleep")
-    @patch("api.services.send_service.resend")
+    @patch("api.services.send_service.resend", create=True)
     def test_list_unsubscribe_header_included(
         self, mock_resend_module, mock_sleep, app, db, seed_companies_contacts
     ):
         """Emails include List-Unsubscribe header for CAN-SPAM compliance."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"warmup_enabled": False}
-        })
+        _setup_tenant_with_resend_key(
+            db, seed, extra_settings={"send_limits": {"warmup_enabled": False}}
+        )
         campaign, messages, contacts = _setup_campaign_with_approved_emails(
             db, seed, msg_count=1
         )
@@ -540,8 +586,8 @@ class TestUnsubscribeHeader:
         """_send_single_email includes List-Unsubscribe when sender_domain provided."""
         import unittest.mock as mock
 
-        with mock.patch("api.services.send_service.resend") as mock_resend:
-            mock_resend.Emails.send.return_value = type("R", (), {"id": "re_456"})()
+        with mock.patch("resend.Emails.send") as mock_send:
+            mock_send.return_value = type("R", (), {"id": "re_456"})()
 
             from api.services.send_service import _send_single_email
 
@@ -554,11 +600,14 @@ class TestUnsubscribeHeader:
                 sender_domain="acme.com",
             )
 
-            call_args = mock_resend.Emails.send.call_args[0][0]
+            call_args = mock_send.call_args[0][0]
             assert "headers" in call_args
             assert "List-Unsubscribe" in call_args["headers"]
             assert "acme.com" in call_args["headers"]["List-Unsubscribe"]
-            assert call_args["headers"]["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+            assert (
+                call_args["headers"]["List-Unsubscribe-Post"]
+                == "List-Unsubscribe=One-Click"
+            )
 
 
 class TestPreSendValidation:
@@ -676,7 +725,9 @@ class TestPreSendValidation:
 class TestSendEmailsEndpoint:
     """Integration tests for POST /api/campaigns/<id>/send-emails."""
 
-    def test_send_emails_missing_sender_config(self, client, seed_companies_contacts, db):
+    def test_send_emails_missing_sender_config(
+        self, client, seed_companies_contacts, db
+    ):
         """Returns 400 when campaign has no sender_config."""
         from api.models import Campaign
 
@@ -718,7 +769,9 @@ class TestSendEmailsEndpoint:
         assert resp.status_code == 400
         assert "resend_api_key" in resp.get_json()["error"].lower()
 
-    def test_send_emails_no_approved_messages(self, client, seed_companies_contacts, db):
+    def test_send_emails_no_approved_messages(
+        self, client, seed_companies_contacts, db
+    ):
         """Returns 400 when campaign has no approved email messages."""
         from api.models import Campaign
 
@@ -968,9 +1021,13 @@ class TestGetQuotaStatus:
     def test_quota_status_custom_limits(self, app, db, seed_companies_contacts):
         """Returns tenant-specific limits."""
         seed = seed_companies_contacts
-        _setup_tenant_with_resend_key(db, seed, extra_settings={
-            "send_limits": {"daily": 200, "hourly": 50, "warmup_enabled": False}
-        })
+        _setup_tenant_with_resend_key(
+            db,
+            seed,
+            extra_settings={
+                "send_limits": {"daily": 200, "hourly": 50, "warmup_enabled": False}
+            },
+        )
 
         from api.services.send_service import get_quota_status
 
