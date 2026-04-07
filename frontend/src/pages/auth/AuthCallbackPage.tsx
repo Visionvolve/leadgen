@@ -8,7 +8,13 @@
  */
 
 import { useEffect, useState } from 'react'
-import { storeTokens, storeUser, getDefaultNamespace, type StoredUser } from '../../lib/auth'
+import {
+  storeTokens,
+  storeUser,
+  clearTokens,
+  getDefaultNamespace,
+  type StoredUser,
+} from '../../lib/auth'
 
 export function AuthCallbackPage() {
   const [error, setError] = useState<string | null>(null)
@@ -58,7 +64,10 @@ export function AuthCallbackPage() {
       if (ns) {
         window.location.href = user?.is_super_admin ? `/${ns}/admin` : `/${ns}/contacts`
       } else {
-        window.location.href = '/'
+        // SSO succeeded but user has no workspace access (no roles assigned in IAM)
+        clearTokens()
+        setError('no_access')
+        return
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication callback failed')
@@ -66,10 +75,23 @@ export function AuthCallbackPage() {
   }, [])
 
   if (error) {
+    const isNoAccess = error === 'no_access'
     return (
       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-bg">
         <div className="max-w-[400px] px-10 py-11 bg-surface/85 backdrop-blur-[24px] border border-accent/20 rounded-[20px] shadow-2xl text-center">
-          <div className="text-error text-[0.9rem] mb-4">{error}</div>
+          {isNoAccess ? (
+            <>
+              <div className="text-[1.1rem] font-semibold text-text mb-2">No workspace access</div>
+              <div className="text-text-muted text-[0.9rem] mb-2">
+                Your account was authenticated successfully, but you don't have access to any workspace.
+              </div>
+              <div className="text-text-muted text-[0.85rem] mb-6">
+                Contact your administrator to request access.
+              </div>
+            </>
+          ) : (
+            <div className="text-error text-[0.9rem] mb-4">{error}</div>
+          )}
           <a
             href="/"
             className="inline-block px-6 py-2.5 rounded-[10px] text-white text-[0.85rem] font-semibold no-underline"
