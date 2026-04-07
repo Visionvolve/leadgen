@@ -31,7 +31,12 @@ from ..services.asset_service import (
     validate_upload,
 )
 from ..services.message_generator import estimate_generation_cost, start_generation
-from ..services.send_service import get_send_status, send_campaign_emails
+from ..services.send_service import (
+    get_quota_status,
+    get_send_status,
+    send_campaign_emails,
+    send_campaign_emails_gmail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2296,13 +2301,14 @@ def batch_message_action(campaign_id):
 @campaigns_bp.route("/api/campaigns/<campaign_id>/send-emails", methods=["POST"])
 @require_role("editor")
 def send_emails(campaign_id):
-    """Send approved email messages for a campaign via Resend.
+    """Send approved email messages for a campaign via Resend or Gmail.
 
-    Validates campaign has approved email messages and a sender_config.
-    Starts the send in a background thread and returns immediately.
+    Checks sender_config.send_via to determine the backend:
+    - "gmail": sends via user's Gmail account (requires OAuth connection with send scope)
+    - "resend" (default): sends via Resend API
 
     Body: { confirm?: boolean }
-    Response: { queued_count: N, sender: { from_email, from_name } }
+    Response: { queued_count: N, sender: { from_email, from_name }, send_via: str }
     """
     import threading
 
@@ -2320,27 +2326,64 @@ def send_emails(campaign_id):
         sender_config = json.loads(sender_config)
     sender_config = sender_config or {}
 
-    from_email = sender_config.get("from_email")
-    if not from_email:
-        return jsonify(
-            {
-                "error": "Campaign sender_config is missing from_email. Configure sender identity first."
-            }
-        ), 400
+    send_via = sender_config.get("send_via", "resend")
 
-    # Validate tenant has Resend API key
-    from ..models import Tenant
+    if send_via == "gmail":
+        # Gmail path: validate OAuth connection
+        from ..models import OAuthConnection
 
-    tenant = db.session.get(Tenant, tenant_id)
-    tenant_settings = tenant.settings if tenant else {}
-    if isinstance(tenant_settings, str):
-        tenant_settings = json.loads(tenant_settings)
-    tenant_settings = tenant_settings or {}
+        oauth_connection_id = sender_config.get("oauth_connection_id")
+        if not oauth_connection_id:
+            return jsonify(
+                {
+                    "error": "Gmail sending requires an OAuth connection. Connect your Gmail account first."
+                }
+            ), 400
 
-    if not tenant_settings.get("resend_api_key"):
-        return jsonify(
-            {"error": "Tenant settings missing resend_api_key. Contact your admin."}
-        ), 400
+        oauth_conn = db.session.get(OAuthConnection, oauth_connection_id)
+        if not oauth_conn or str(oauth_conn.tenant_id) != str(tenant_id):
+            return jsonify({"error": "OAuth connection not found"}), 404
+        if oauth_conn.status != "active":
+            return jsonify(
+                {
+                    "error": f"Gmail connection is {oauth_conn.status}. Please reconnect your Gmail account."
+                }
+            ), 400
+
+        from ..services.google_oauth import has_send_scope
+
+        if not has_send_scope(oauth_conn):
+            return jsonify(
+                {
+                    "error": "Gmail connection does not have send permission. Please reconnect with send access."
+                }
+            ), 403
+
+        from_email = oauth_conn.provider_email
+        from_name = sender_config.get("from_name")
+    else:
+        # Resend path: validate from_email and API key
+        from_email = sender_config.get("from_email")
+        from_name = sender_config.get("from_name")
+        if not from_email:
+            return jsonify(
+                {
+                    "error": "Campaign sender_config is missing from_email. Configure sender identity first."
+                }
+            ), 400
+
+        from ..models import Tenant as TenantModel
+
+        tenant = db.session.get(TenantModel, tenant_id)
+        tenant_settings = tenant.settings if tenant else {}
+        if isinstance(tenant_settings, str):
+            tenant_settings = json.loads(tenant_settings)
+        tenant_settings = tenant_settings or {}
+
+        if not tenant_settings.get("resend_api_key"):
+            return jsonify(
+                {"error": "Tenant settings missing resend_api_key. Contact your admin."}
+            ), 400
 
     # Count approved email messages not yet sent
     approved_count = db.session.execute(
@@ -2356,16 +2399,49 @@ def send_emails(campaign_id):
     if approved_count == 0:
         return jsonify({"error": "No approved email messages to send"}), 400
 
+    # Pre-flight quota check (Resend only — Gmail checks internally)
+    if send_via != "gmail":
+        tenant = db.session.get(Tenant, tenant_id)
+        t_settings = tenant.settings if tenant else {}
+        if isinstance(t_settings, str):
+            t_settings = json.loads(t_settings)
+        t_settings = t_settings or {}
+        quota = get_quota_status(str(tenant_id), t_settings)
+        if quota["daily_remaining"] == 0:
+            return jsonify(
+                {
+                    "error": (
+                        f"Daily send limit reached ({quota['daily_limit']} emails). "
+                        f"Try again tomorrow or increase tenant send_limits."
+                    ),
+                    "quota": quota,
+                }
+            ), 429
+        if quota["hourly_remaining"] == 0:
+            return jsonify(
+                {
+                    "error": (
+                        f"Hourly send limit reached ({quota['hourly_limit']} emails). "
+                        f"Try again next hour."
+                    ),
+                    "quota": quota,
+                }
+            ), 429
+
     # Start background send
     app = current_app._get_current_object()
+    send_fn = (
+        send_campaign_emails_gmail if send_via == "gmail" else send_campaign_emails
+    )
 
     def _run_send():
         with app.app_context():
             try:
-                result = send_campaign_emails(campaign_id, str(tenant_id))
+                result = send_fn(campaign_id, str(tenant_id))
                 logger.info(
-                    "Send completed for campaign %s: %s",
+                    "Send completed for campaign %s (via %s): %s",
                     campaign_id,
+                    send_via,
                     result,
                 )
             except Exception:
@@ -2374,15 +2450,18 @@ def send_emails(campaign_id):
     thread = threading.Thread(target=_run_send, daemon=True)
     thread.start()
 
-    return jsonify(
-        {
-            "queued_count": approved_count,
-            "sender": {
-                "from_email": from_email,
-                "from_name": sender_config.get("from_name"),
-            },
-        }
-    )
+    response = {
+        "queued_count": approved_count,
+        "send_via": send_via,
+        "sender": {
+            "from_email": from_email,
+            "from_name": from_name,
+        },
+    }
+    if send_via != "gmail":
+        response["quota"] = quota  # noqa: F821 — quota defined in resend branch above
+
+    return jsonify(response)
 
 
 @campaigns_bp.route("/api/campaigns/<campaign_id>/send-status", methods=["GET"])
