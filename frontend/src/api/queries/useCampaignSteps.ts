@@ -4,6 +4,7 @@ import { apiFetch } from '../client'
 export interface StepConfig {
   max_length?: number
   tone?: string
+  formality?: 'formal' | 'informal'
   language?: string
   custom_instructions?: string
   example_messages?: ExampleMessage[]

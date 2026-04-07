@@ -286,7 +286,7 @@ def _extract_messaging_sections(content: str, max_chars: int = 2000) -> str:
     return result
 
 
-def _load_feedback_signals(
+def _load_campaign_feedback_signals(
     campaign_id: str, step_channel: str, campaign_step_id: str | None = None
 ) -> dict | None:
     """Load learning signals from previous feedback for a campaign step.
@@ -354,6 +354,118 @@ def _load_feedback_signals(
     if rejected_patterns:
         signals["rejected_patterns"] = rejected_patterns
     return signals
+
+
+def _load_tenant_feedback_signals(
+    tenant_id: str, channel: str, limit: int = 50
+) -> dict | None:
+    """Load learning signals across ALL campaigns for a tenant, filtered by channel.
+
+    Aggregates feedback from the entire tenant history for the given channel,
+    providing broader pattern awareness beyond a single campaign.
+
+    Returns a dict with approved_examples, common_edits, rejected_patterns
+    or None if no feedback exists.
+    """
+    rows = db.session.execute(
+        db.text("""
+            SELECT mf.action, mf.edit_reason, m.body
+            FROM message_feedback mf
+            JOIN messages m ON mf.message_id = m.id
+            WHERE m.tenant_id = :tenant_id AND m.channel = :channel
+            ORDER BY mf.created_at DESC
+            LIMIT :limit
+        """),
+        {"tenant_id": str(tenant_id), "channel": channel, "limit": limit},
+    ).fetchall()
+
+    if not rows:
+        return None
+
+    approved_bodies: list[str] = []
+    rejected_bodies: list[str] = []
+    edit_reasons: dict[str, int] = {}
+
+    for action, edit_reason, body in rows:
+        if action == "approved" and body:
+            approved_bodies.append(body)
+        elif action == "rejected" and body:
+            rejected_bodies.append(body)
+        if edit_reason:
+            edit_reasons[edit_reason] = edit_reasons.get(edit_reason, 0) + 1
+
+    approved_examples = approved_bodies[:3]
+    rejected_patterns = rejected_bodies[:2]
+    common_edits = sorted(edit_reasons.items(), key=lambda x: -x[1])[:3]
+
+    if not approved_examples and not rejected_patterns and not common_edits:
+        return None
+
+    signals: dict = {}
+    if approved_examples:
+        signals["approved_examples"] = approved_examples
+    if common_edits:
+        signals["common_edits"] = common_edits
+    if rejected_patterns:
+        signals["rejected_patterns"] = rejected_patterns
+    return signals
+
+
+def _merge_feedback_signals(
+    campaign_signals: dict | None, tenant_signals: dict | None
+) -> dict | None:
+    """Merge campaign-level and tenant-level feedback signals.
+
+    Campaign signals take priority. Tenant signals fill gaps up to caps:
+    - approved_examples: cap 3
+    - common_edits: cap 3 (combined counts, re-sorted)
+    - rejected_patterns: cap 2
+    """
+    if not campaign_signals and not tenant_signals:
+        return None
+    if not campaign_signals:
+        return tenant_signals
+    if not tenant_signals:
+        return campaign_signals
+
+    merged: dict = {}
+
+    # Approved examples: campaign first, tenant fills gaps, cap at 3
+    camp_approved = campaign_signals.get("approved_examples", [])
+    tenant_approved = tenant_signals.get("approved_examples", [])
+    combined_approved = list(camp_approved)
+    for ex in tenant_approved:
+        if len(combined_approved) >= 3:
+            break
+        if ex not in combined_approved:
+            combined_approved.append(ex)
+    if combined_approved:
+        merged["approved_examples"] = combined_approved[:3]
+
+    # Common edits: combine counts, re-sort, cap at 3
+    camp_edits = dict(campaign_signals.get("common_edits", []))
+    tenant_edits = dict(tenant_signals.get("common_edits", []))
+    combined_edits: dict[str, int] = {}
+    for reason, count in camp_edits.items():
+        combined_edits[reason] = combined_edits.get(reason, 0) + count
+    for reason, count in tenant_edits.items():
+        combined_edits[reason] = combined_edits.get(reason, 0) + count
+    if combined_edits:
+        merged["common_edits"] = sorted(combined_edits.items(), key=lambda x: -x[1])[:3]
+
+    # Rejected patterns: campaign first, tenant fills gaps, cap at 2
+    camp_rejected = campaign_signals.get("rejected_patterns", [])
+    tenant_rejected = tenant_signals.get("rejected_patterns", [])
+    combined_rejected = list(camp_rejected)
+    for ex in tenant_rejected:
+        if len(combined_rejected) >= 2:
+            break
+        if ex not in combined_rejected:
+            combined_rejected.append(ex)
+    if combined_rejected:
+        merged["rejected_patterns"] = combined_rejected[:2]
+
+    return merged if merged else None
 
 
 def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
@@ -455,6 +567,9 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
     generated_count = 0
     total_cost = Decimal("0")
 
+    # Cache tenant-level feedback signals per channel (loaded lazily)
+    tenant_feedback_cache: dict[str, dict | None] = {}
+
     for i, contact_row in enumerate(contacts):
         # Check for cancellation before each contact
         cancel_row = db.session.execute(
@@ -513,10 +628,19 @@ def _generate_all(campaign_id: str, tenant_id: str, user_id: str):
             contact_cost = Decimal("0")
             for step in enabled_steps:
                 # Load feedback signals for this step (once per step per contact batch)
-                step_feedback = _load_feedback_signals(
+                ch = step["channel"]
+                campaign_feedback = _load_campaign_feedback_signals(
                     campaign_id,
-                    step["channel"],
+                    ch,
                     step.get("campaign_step_id"),
+                )
+                # Load tenant-level signals lazily, cached per channel
+                if ch not in tenant_feedback_cache:
+                    tenant_feedback_cache[ch] = _load_tenant_feedback_signals(
+                        tenant_id, ch
+                    )
+                step_feedback = _merge_feedback_signals(
+                    campaign_feedback, tenant_feedback_cache[ch]
                 )
 
                 # Generate variant A (always — default/no angle)
@@ -808,6 +932,14 @@ def _generate_single_message(
         feedback_signals: Optional learning signals from previous feedback.
         catalog_context: Optional product catalog data for selling points.
     """
+    # Merge step-level config overrides (tone, formality) into generation_config
+    effective_config = {**generation_config}
+    step_config = step.get("config", {}) or {}
+    if step_config.get("tone"):
+        effective_config["tone"] = step_config["tone"]
+    if step_config.get("formality"):
+        effective_config["formality"] = step_config["formality"]
+
     # Build per-message instruction from variant angle
     angle_instruction = variant_angle["instruction"] if variant_angle else None
 
@@ -836,7 +968,7 @@ def _generate_single_message(
         contact_data=contact_data,
         company_data=company_data,
         enrichment_data=enrichment_data,
-        generation_config=generation_config,
+        generation_config=effective_config,
         step_number=step["step"],
         total_steps=total_steps,
         strategy_data=strategy_data,

@@ -3326,6 +3326,171 @@ def feedback_summary(campaign_id):
     )
 
 
+# ── Feedback Insights ────────────────────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/feedback-insights", methods=["GET"])
+@require_auth
+def feedback_insights(campaign_id):
+    """Actionable insights derived from feedback patterns for a campaign.
+
+    Applies heuristic rules to feedback data and suggests configuration
+    changes (formality, length, personalization, tone) when patterns exceed
+    defined thresholds.  Returns empty insights when fewer than 5 feedback
+    actions exist.
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify campaign belongs to tenant
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": str(tenant_id)},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    feedbacks = MessageFeedback.query.filter_by(campaign_id=campaign_id).all()
+
+    total_actions = len(feedbacks)
+
+    # Not enough data for meaningful insights
+    if total_actions < 5:
+        return jsonify({"insights": [], "stats": {"total_actions": total_actions}})
+
+    # Aggregate stats
+    by_action: dict[str, int] = {}
+    edit_reasons: dict[str, int] = {}
+    step_stats: dict[str, dict] = {}
+
+    for f in feedbacks:
+        by_action[f.action] = by_action.get(f.action, 0) + 1
+        if f.edit_reason:
+            edit_reasons[f.edit_reason] = edit_reasons.get(f.edit_reason, 0) + 1
+
+        msg = db.session.get(Message, f.message_id)
+        if msg and msg.campaign_step_id:
+            sid = str(msg.campaign_step_id)
+            if sid not in step_stats:
+                step_stats[sid] = {"total": 0, "approved": 0}
+            step_stats[sid]["total"] += 1
+            if f.action == "approved":
+                step_stats[sid]["approved"] += 1
+
+    approved_count = by_action.get("approved", 0)
+    approval_rate = round(approved_count / total_actions, 2) if total_actions else 0
+
+    total_edits = sum(edit_reasons.values()) or 1  # avoid division by zero
+
+    # Build insights from heuristic rules
+    insights: list[dict] = []
+
+    # Too formal
+    too_formal_pct = edit_reasons.get("too_formal", 0) / total_edits
+    if too_formal_pct > 0.25:
+        insights.append(
+            {
+                "type": "tone_mismatch",
+                "severity": "warning",
+                "message": (
+                    f"{round(too_formal_pct * 100)}% of edits cite 'too formal'. "
+                    "Consider switching to informal address."
+                ),
+                "suggestion": {"field": "formality", "value": "informal"},
+            }
+        )
+
+    # Too casual
+    too_casual_pct = edit_reasons.get("too_casual", 0) / total_edits
+    if too_casual_pct > 0.25:
+        insights.append(
+            {
+                "type": "tone_mismatch",
+                "severity": "warning",
+                "message": (
+                    f"{round(too_casual_pct * 100)}% of edits cite 'too casual'. "
+                    "Consider switching to formal address."
+                ),
+                "suggestion": {"field": "formality", "value": "formal"},
+            }
+        )
+
+    # Too long
+    too_long_pct = edit_reasons.get("too_long", 0) / total_edits
+    if too_long_pct > 0.20:
+        insights.append(
+            {
+                "type": "length_issue",
+                "severity": "warning",
+                "message": (
+                    f"{round(too_long_pct * 100)}% of edits cite 'too long'. "
+                    "Consider reducing max message length."
+                ),
+                "suggestion": {"field": "max_length", "value": "shorter"},
+            }
+        )
+
+    # Generic
+    generic_pct = edit_reasons.get("generic", 0) / total_edits
+    if generic_pct > 0.20:
+        insights.append(
+            {
+                "type": "personalization_gap",
+                "severity": "warning",
+                "message": (
+                    f"{round(generic_pct * 100)}% of edits cite 'generic'. "
+                    "Consider increasing personalization level."
+                ),
+                "suggestion": {"field": "personalization_level", "value": 4},
+            }
+        )
+
+    # Wrong tone (absolute count)
+    wrong_tone_count = edit_reasons.get("wrong_tone", 0)
+    if wrong_tone_count > 3:
+        insights.append(
+            {
+                "type": "tone_review",
+                "severity": "info",
+                "message": (
+                    f"'Wrong tone' was cited {wrong_tone_count} times. "
+                    "Review the tone setting for this campaign."
+                ),
+                "suggestion": {"field": "tone", "value": "review"},
+            }
+        )
+
+    # Low-performing steps (approval rate < 50%)
+    for sid, stats in step_stats.items():
+        if stats["total"] >= 3:
+            step_approval = stats["approved"] / stats["total"]
+            if step_approval < 0.50:
+                insights.append(
+                    {
+                        "type": "low_performing_step",
+                        "severity": "warning",
+                        "message": (
+                            f"Step {sid} has a {round(step_approval * 100)}% approval rate "
+                            f"({stats['approved']}/{stats['total']}). "
+                            "Consider revising this step's configuration."
+                        ),
+                        "suggestion": {"field": "step", "value": sid},
+                    }
+                )
+
+    return jsonify(
+        {
+            "insights": insights,
+            "stats": {
+                "total_actions": total_actions,
+                "approval_rate": approval_rate,
+                "edit_reasons": edit_reasons,
+            },
+        }
+    )
+
+
 # ── Auto-segmentation endpoints ──────────────────────────────────────
 
 
