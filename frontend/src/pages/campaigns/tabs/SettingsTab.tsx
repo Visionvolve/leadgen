@@ -7,7 +7,7 @@ import { SectionDivider } from '../../../components/ui/DetailField'
 
 // ── Defaults & limits ────────────────────────────────────
 
-const DEFAULTS: Required<Omit<SenderConfig, 'from_email' | 'from_name' | 'reply_to'>> = {
+const DEFAULTS: Required<Omit<SenderConfig, 'from_email' | 'from_name' | 'reply_to' | 'send_via' | 'oauth_connection_id'>> = {
   linkedin_daily_connections: 12,
   linkedin_daily_messages: 25,
   linkedin_active_hours: { start: '08:00', end: '18:00' },
