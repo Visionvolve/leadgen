@@ -347,7 +347,7 @@ def list_companies():
                 c.created_at,
                 c.company_size, c.geo_region, c.revenue_range,
                 c.business_model, c.ownership_type, c.buying_stage,
-                c.engagement_status, c.ai_adoption,
+                c.engagement_status,
                 c.verified_employees, c.verified_revenue_eur_m,
                 c.credibility_score, c.linkedin_url, c.website_url,
                 c.data_quality_score, c.last_enriched_at,
@@ -412,9 +412,9 @@ def list_companies():
         completions = stage_map.get(cid, [])
         tag_names = tag_map.get(cid, [])
         raw_status = r[3]
-        has_l1 = bool(r[26])
-        has_l2 = bool(r[27])
-        has_person = bool(r[28])
+        has_l1 = bool(r[25])
+        has_l2 = bool(r[26])
+        has_person = bool(r[27])
         stage = _compute_enrichment_stage(raw_status, has_l1, has_l2, has_person)
         triage_score = float(r[8]) if r[8] is not None else None
         companies.append(
@@ -441,14 +441,13 @@ def list_companies():
                 "ownership_type": display_ownership_type(r[15]),
                 "buying_stage": display_buying_stage(r[16]),
                 "engagement_status": display_engagement_status(r[17]),
-                "ai_adoption": display_confidence(r[18]),
-                "verified_employees": float(r[19]) if r[19] is not None else None,
-                "verified_revenue_eur_m": float(r[20]) if r[20] is not None else None,
-                "credibility_score": int(r[21]) if r[21] is not None else None,
-                "linkedin_url": r[22],
-                "website_url": r[23],
-                "data_quality_score": int(r[24]) if r[24] is not None else None,
-                "last_enriched_at": r[25].isoformat() if r[25] else None,
+                "verified_employees": float(r[18]) if r[18] is not None else None,
+                "verified_revenue_eur_m": float(r[19]) if r[19] is not None else None,
+                "credibility_score": int(r[20]) if r[20] is not None else None,
+                "linkedin_url": r[21],
+                "website_url": r[22],
+                "data_quality_score": int(r[23]) if r[23] is not None else None,
+                "last_enriched_at": r[24].isoformat() if r[24] else None,
             }
         )
 
@@ -619,16 +618,15 @@ def get_company(company_id):
                 c.business_model, c.company_size, c.ownership_type,
                 c.geo_region, c.industry, c.industry_category,
                 c.revenue_range, c.buying_stage, c.engagement_status,
-                c.crm_status, c.ai_adoption, c.news_confidence,
+                c.crm_status,
                 c.business_type, c.cohort,
                 c.summary, c.hq_city, c.hq_country,
-                c.triage_notes, c.triage_score,
+                c.triage_score,
                 c.verified_revenue_eur_m, c.verified_employees,
-                c.enrichment_cost_usd, c.pre_score,
+                c.enrichment_cost_usd,
                 c.lemlist_synced, c.error_message, c.notes, c.custom_fields,
                 c.created_at, c.updated_at,
                 o.name AS owner_name, b.name AS tag_name,
-                c.ico,
                 c.website_url, c.linkedin_url, c.logo_url,
                 c.last_enriched_at, c.data_quality_score
             FROM companies c
@@ -658,33 +656,28 @@ def get_company(company_id):
         "buying_stage": display_buying_stage(row[12]),
         "engagement_status": display_engagement_status(row[13]),
         "crm_status": display_crm_status(row[14]),
-        "ai_adoption": display_confidence(row[15]),
-        "news_confidence": display_confidence(row[16]),
-        "business_type": display_business_type(row[17]),
-        "cohort": display_cohort(row[18]),
-        "summary": row[19],
-        "hq_city": row[20],
-        "hq_country": row[21],
-        "triage_notes": row[22],
-        "triage_score": float(row[23]) if row[23] is not None else None,
-        "verified_revenue_eur_m": float(row[24]) if row[24] is not None else None,
-        "verified_employees": float(row[25]) if row[25] is not None else None,
-        "enrichment_cost_usd": float(row[26]) if row[26] is not None else None,
-        "pre_score": float(row[27]) if row[27] is not None else None,
-        "lemlist_synced": row[28],
-        "error_message": row[29],
-        "notes": row[30],
-        "custom_fields": _parse_jsonb(row[31]),
-        "created_at": _iso(row[32]),
-        "updated_at": _iso(row[33]),
-        "owner_name": row[34],
-        "tag_name": row[35],
-        "ico": row[36],
-        "website_url": row[37],
-        "linkedin_url": row[38],
-        "logo_url": row[39],
-        "last_enriched_at": _iso(row[40]),
-        "data_quality_score": float(row[41]) if row[41] is not None else None,
+        "business_type": display_business_type(row[15]),
+        "cohort": display_cohort(row[16]),
+        "summary": row[17],
+        "hq_city": row[18],
+        "hq_country": row[19],
+        "triage_score": float(row[20]) if row[20] is not None else None,
+        "verified_revenue_eur_m": float(row[21]) if row[21] is not None else None,
+        "verified_employees": float(row[22]) if row[22] is not None else None,
+        "enrichment_cost_usd": float(row[23]) if row[23] is not None else None,
+        "lemlist_synced": row[24],
+        "error_message": row[25],
+        "notes": row[26],
+        "custom_fields": _parse_jsonb(row[27]),
+        "created_at": _iso(row[28]),
+        "updated_at": _iso(row[29]),
+        "owner_name": row[30],
+        "tag_name": row[31],
+        "website_url": row[32],
+        "linkedin_url": row[33],
+        "logo_url": row[34],
+        "last_enriched_at": _iso(row[35]),
+        "data_quality_score": float(row[36]) if row[36] is not None else None,
     }
 
     # L1 enrichment
@@ -864,6 +857,25 @@ def get_company(company_id):
         }
     else:
         company["enrichment_l2"] = None
+
+    # Backfill top-level convenience fields from enrichment tables
+    if company.get("enrichment_l1"):
+        company["triage_notes"] = company["enrichment_l1"].get("triage_notes")
+        company["pre_score"] = company["enrichment_l1"].get("pre_score")
+    else:
+        company["triage_notes"] = None
+        company["pre_score"] = None
+
+    if l2_modules.get("signals"):
+        company["ai_adoption"] = display_confidence(
+            l2_modules["signals"].get("ai_adoption_level")
+        )
+        company["news_confidence"] = display_confidence(
+            l2_modules["signals"].get("news_confidence")
+        )
+    else:
+        company["ai_adoption"] = None
+        company["news_confidence"] = None
 
     # Legal profile (unified registry data)
     lp_row = db.session.execute(
@@ -1257,7 +1269,7 @@ def triage_queue():
         db.text(f"""
             SELECT
                 c.id, c.name, c.domain, c.tier, c.status,
-                c.triage_score, c.triage_notes, c.industry,
+                c.triage_score, l1.triage_notes, c.industry,
                 c.hq_country, c.company_size, c.revenue_range,
                 o.name AS owner_name,
                 l1.pre_score, l1.confidence
@@ -1314,7 +1326,7 @@ def enrich_registry(company_id):
     # Verify company belongs to tenant
     row = db.session.execute(
         db.text(
-            "SELECT name, ico, hq_country, domain FROM companies WHERE id = :id AND tenant_id = :t"
+            "SELECT name, hq_country, domain FROM companies WHERE id = :id AND tenant_id = :t"
         ),
         {"id": company_id, "t": tenant_id},
     ).fetchone()
@@ -1331,9 +1343,9 @@ def enrich_registry(company_id):
         company_id=company_id,
         tenant_id=str(tenant_id),
         name=row[0],
-        reg_id=ico_override or row[1],
-        hq_country=row[2],
-        domain=row[3],
+        reg_id=ico_override,
+        hq_country=row[1],
+        domain=row[2],
     )
 
     return jsonify(result)
@@ -1387,7 +1399,7 @@ def enrich_registry_country(company_id, country):
 
     row = db.session.execute(
         db.text(
-            "SELECT name, ico, hq_country, domain FROM companies WHERE id = :id AND tenant_id = :t"
+            "SELECT name, hq_country, domain FROM companies WHERE id = :id AND tenant_id = :t"
         ),
         {"id": company_id, "t": tenant_id},
     ).fetchone()
@@ -1407,8 +1419,8 @@ def enrich_registry_country(company_id, country):
         company_id=company_id,
         tenant_id=str(tenant_id),
         name=row[0],
-        reg_id=reg_id or row[1],
-        hq_country=row[2],
-        domain=row[3],
+        reg_id=reg_id,
+        hq_country=row[1],
+        domain=row[2],
     )
     return jsonify(result)
