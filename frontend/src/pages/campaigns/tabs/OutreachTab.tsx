@@ -353,7 +353,9 @@ export function OutreachTab({ campaign }: Props) {
             ?
           </p>
           <p className="text-xs text-text-dim">
-            This will dispatch all approved email messages via Resend. Already-sent messages will be skipped.
+            {senderConfig?.send_via === 'gmail'
+              ? 'Emails will be sent from your Gmail inbox with a 45-second delay between each. Already-sent messages will be skipped.'
+              : 'This will dispatch all approved email messages via Resend. Already-sent messages will be skipped.'}
           </p>
         </div>
       </Modal>

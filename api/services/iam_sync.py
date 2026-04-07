@@ -90,6 +90,34 @@ def sync_iam_roles(local_user, iam_permissions, db_session=None):
             local_user.is_super_admin = True
             logger.info("Promoted user %s to super_admin via IAM", local_user.email)
 
+    # Super admins with no scope get assigned to all active tenants
+    if local_user.is_super_admin:
+        scoped_slugs = {
+            p.get("scope")
+            for p in leadgen_perms
+            if p.get("scope") and p.get("scope") != "*"
+        }
+        all_tenants = Tenant.query.filter_by(is_active=True).all()
+        for tenant in all_tenants:
+            if tenant.slug in scoped_slugs:
+                continue  # will be handled by explicit perm below
+            existing = UserTenantRole.query.filter_by(
+                user_id=local_user.id, tenant_id=tenant.id
+            ).first()
+            if not existing:
+                session.add(
+                    UserTenantRole(
+                        user_id=local_user.id,
+                        tenant_id=tenant.id,
+                        role="admin",
+                    )
+                )
+                logger.info(
+                    "Auto-granted admin to super_admin %s on tenant %s",
+                    local_user.email,
+                    tenant.slug,
+                )
+
     for perm in leadgen_perms:
         scope = perm.get("scope")
         role = perm.get("role")

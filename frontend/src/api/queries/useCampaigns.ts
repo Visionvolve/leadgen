@@ -17,9 +17,11 @@ export interface Campaign {
 }
 
 export interface SenderConfig {
+  send_via?: 'resend' | 'gmail'
   from_email?: string
   from_name?: string
   reply_to?: string
+  oauth_connection_id?: string
   linkedin_daily_connections?: number
   linkedin_daily_messages?: number
   linkedin_active_hours?: { start: string; end: string }

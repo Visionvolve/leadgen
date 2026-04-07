@@ -13,14 +13,24 @@ import {
 import { useToast } from '../../../components/ui/Toast'
 import { Modal } from '../../../components/ui/Modal'
 import { GenerationProgressModal } from '../../../components/campaign/GenerationProgressModal'
+import { FeedbackInsights } from '../../../components/campaign/FeedbackInsights'
 import { EditableSelect, EditableTextarea, FieldGrid, Field } from '../../../components/ui/DetailField'
 import { WarningBanner } from '../../../components/ui/WarningBanner'
 
 const TONE_OPTIONS = [
   { value: 'professional', label: 'Professional' },
+  { value: 'friendly', label: 'Friendly' },
   { value: 'casual', label: 'Casual' },
   { value: 'bold', label: 'Bold' },
+  { value: 'authoritative', label: 'Authoritative' },
   { value: 'empathetic', label: 'Empathetic' },
+]
+
+const PERSONALIZATION_LEVELS = [
+  { value: 1, label: 'Name only' },
+  { value: 2, label: 'Company' },
+  { value: 3, label: 'Context' },
+  { value: 4, label: 'Hyperpersonalized' },
 ]
 
 const CHANNEL_ICONS: Record<string, string> = {
@@ -127,6 +137,57 @@ export function MessageGenTab({ campaign, isEditable }: Props) {
     }
   }, [generationConfig, campaign.id, updateCampaign, toast])
 
+  const handlePersonalizationChange = useCallback(async (level: number) => {
+    const newConfig = { ...generationConfig, personalization_level: level }
+    try {
+      await updateCampaign.mutateAsync({
+        id: campaign.id,
+        data: { generation_config: newConfig },
+      })
+    } catch {
+      toast('Failed to update personalization level', 'error')
+    }
+  }, [generationConfig, campaign.id, updateCampaign, toast])
+
+  const handleStepToneOverride = useCallback(async (stepIndex: number, tone: string | null) => {
+    const newConfig = [...templateConfig]
+    const stepConfig = (newConfig[stepIndex] as TemplateStep & { config?: Record<string, unknown> })
+    const existingConfig = stepConfig.config || {}
+    newConfig[stepIndex] = {
+      ...newConfig[stepIndex],
+      config: { ...existingConfig, tone: tone || undefined },
+    } as TemplateStep & { config: Record<string, unknown> }
+    try {
+      await updateCampaign.mutateAsync({
+        id: campaign.id,
+        data: { template_config: newConfig },
+      })
+    } catch {
+      toast('Failed to update step tone', 'error')
+    }
+  }, [templateConfig, campaign.id, updateCampaign, toast])
+
+  const handleStepFormalityOverride = useCallback(async (stepIndex: number, formality: string | null) => {
+    const newConfig = [...templateConfig]
+    const stepConfig = (newConfig[stepIndex] as TemplateStep & { config?: Record<string, unknown> })
+    const existingConfig = stepConfig.config || {}
+    newConfig[stepIndex] = {
+      ...newConfig[stepIndex],
+      config: { ...existingConfig, formality: formality || undefined },
+    } as TemplateStep & { config: Record<string, unknown> }
+    try {
+      await updateCampaign.mutateAsync({
+        id: campaign.id,
+        data: { template_config: newConfig },
+      })
+    } catch {
+      toast('Failed to update step formality', 'error')
+    }
+  }, [templateConfig, campaign.id, updateCampaign, toast])
+
+  // Track which steps have expanded overrides
+  const [expandedStepOverrides, setExpandedStepOverrides] = useState<Set<number>>(new Set())
+
   // Cost estimate -> confirmation dialog
   const handleEstimateCost = useCallback(async () => {
     try {
@@ -173,45 +234,120 @@ export function MessageGenTab({ campaign, isEditable }: Props) {
       {/* Step list */}
       {templateConfig.length > 0 ? (
         <div className="space-y-1.5">
-          {templateConfig.map((step, idx) => (
-            <div
-              key={idx}
-              className={`flex items-center gap-3 px-3 py-2 rounded border transition-colors ${
-                step.enabled
-                  ? 'border-border bg-surface'
-                  : 'border-border/50 bg-surface/50 opacity-50'
-              }`}
-            >
-              {isEditable && (
-                <button
-                  onClick={() => handleToggleStep(idx)}
-                  className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] cursor-pointer transition-colors ${
+          {templateConfig.map((step, idx) => {
+            const stepWithConfig = step as TemplateStep & { config?: Record<string, unknown> }
+            const stepTone = (stepWithConfig.config?.tone as string) || ''
+            const stepFormality = (stepWithConfig.config?.formality as string) || ''
+            const isOverrideExpanded = expandedStepOverrides.has(idx)
+            const hasOverrides = !!stepTone || !!stepFormality
+
+            return (
+              <div key={idx} className="rounded border transition-colors overflow-hidden"
+                style={{ borderColor: step.enabled ? undefined : 'transparent' }}
+              >
+                <div
+                  className={`flex items-center gap-3 px-3 py-2 ${
                     step.enabled
-                      ? 'bg-accent border-accent text-white'
-                      : 'bg-transparent border-[#8B92A0]/40 text-transparent'
+                      ? 'border-border bg-surface'
+                      : 'border-border/50 bg-surface/50 opacity-50'
                   }`}
                 >
-                  {step.enabled ? '\u2713' : ''}
-                </button>
-              )}
-              <span className="w-6 h-5 flex items-center justify-center text-[9px] font-bold text-text-muted bg-surface-alt rounded">
-                {CHANNEL_ICONS[step.channel] || '?'}
-              </span>
-              <span className="text-sm text-text flex-1">{step.label}</span>
-              <span className="text-xs text-text-dim">{step.channel.replace('_', ' ')}</span>
-              {step.needs_pdf && (
-                <span className="text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent rounded">PDF</span>
-              )}
-            </div>
-          ))}
+                  {isEditable && (
+                    <button
+                      onClick={() => handleToggleStep(idx)}
+                      className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] cursor-pointer transition-colors ${
+                        step.enabled
+                          ? 'bg-accent border-accent text-white'
+                          : 'bg-transparent border-[#8B92A0]/40 text-transparent'
+                      }`}
+                    >
+                      {step.enabled ? '\u2713' : ''}
+                    </button>
+                  )}
+                  <span className="w-6 h-5 flex items-center justify-center text-[9px] font-bold text-text-muted bg-surface-alt rounded">
+                    {CHANNEL_ICONS[step.channel] || '?'}
+                  </span>
+                  <span className="text-sm text-text flex-1">{step.label}</span>
+                  {hasOverrides && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-accent-cyan/10 text-accent-cyan rounded">
+                      {[stepTone, stepFormality].filter(Boolean).join(', ')}
+                    </span>
+                  )}
+                  <span className="text-xs text-text-dim">{step.channel.replace('_', ' ')}</span>
+                  {step.needs_pdf && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent rounded">PDF</span>
+                  )}
+                  {isEditable && step.enabled && (
+                    <button
+                      onClick={() => {
+                        const next = new Set(expandedStepOverrides)
+                        if (isOverrideExpanded) next.delete(idx)
+                        else next.add(idx)
+                        setExpandedStepOverrides(next)
+                      }}
+                      className="text-[10px] text-text-dim hover:text-text cursor-pointer bg-transparent border-none transition-colors"
+                      title="Step overrides"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"
+                        className={`transition-transform ${isOverrideExpanded ? 'rotate-180' : ''}`}>
+                        <path d="M4 6l4 4 4-4" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                {isOverrideExpanded && isEditable && step.enabled && (
+                  <div className="px-3 py-2 bg-surface-alt/50 border-t border-border/50 flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-text-dim whitespace-nowrap">Tone override</label>
+                      <select
+                        value={stepTone}
+                        onChange={(e) => handleStepToneOverride(idx, e.target.value || null)}
+                        className="px-1.5 py-1 text-xs rounded border border-border bg-surface-alt text-text focus:outline-none focus:border-accent"
+                      >
+                        <option value="">Campaign default</option>
+                        {TONE_OPTIONS.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-text-dim whitespace-nowrap">Formality</label>
+                      <div className="flex rounded border border-border overflow-hidden">
+                        {[
+                          { value: '', label: 'Default' },
+                          { value: 'formal', label: 'Formal' },
+                          { value: 'informal', label: 'Informal' },
+                        ].map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => handleStepFormalityOverride(idx, opt.value || null)}
+                            className={`px-2 py-0.5 text-[10px] transition-colors cursor-pointer border-none ${
+                              stepFormality === opt.value || (!stepFormality && opt.value === '')
+                                ? 'bg-accent/15 text-accent font-medium'
+                                : 'bg-surface-alt text-text-dim hover:text-text'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       ) : (
         <p className="text-xs text-text-muted">No message steps configured. Load a template above to get started.</p>
       )}
 
-      {/* Generation config (tone + instructions) */}
+      {/* Generation config (tone + personalization + instructions) */}
       {templateConfig.length > 0 && (
         <div className="space-y-3 mt-4">
+          {/* Feedback insights banner */}
+          <FeedbackInsights campaignId={campaign.id} generationConfig={campaign.generation_config || {}} />
+
           {typeof generationConfig.custom_instructions === 'string' &&
             generationConfig.custom_instructions.startsWith('Pre-filled from GTM Strategy') ? (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent/5 border border-accent/20">
@@ -224,6 +360,33 @@ export function MessageGenTab({ campaign, isEditable }: Props) {
             ) : null}
           {isEditable ? (
             <>
+              {/* Personalization Level */}
+              <div>
+                <label className="text-xs text-text-muted mb-1.5 block">Personalization Level</label>
+                <div className="flex rounded-lg border border-border-solid overflow-hidden">
+                  {PERSONALIZATION_LEVELS.map((level) => {
+                    const current = (generationConfig.personalization_level as number) || 4
+                    const isSelected = current === level.value
+                    return (
+                      <button
+                        key={level.value}
+                        onClick={() => handlePersonalizationChange(level.value)}
+                        className={`flex-1 px-2 py-1.5 text-xs transition-colors cursor-pointer border-none border-r border-border last:border-r-0 ${
+                          isSelected
+                            ? 'bg-accent/15 text-accent font-medium'
+                            : 'bg-surface-alt text-text-muted hover:text-text hover:bg-surface-alt/80'
+                        }`}
+                      >
+                        {level.label}
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="text-[10px] text-text-dim mt-1">
+                  Controls how much recipient context is included in the prompt. Higher levels produce more tailored messages but require enrichment data.
+                </p>
+              </div>
+
               <EditableSelect
                 label="Tone"
                 name="tone"
@@ -244,6 +407,10 @@ export function MessageGenTab({ campaign, isEditable }: Props) {
             </>
           ) : (
             <FieldGrid>
+              <Field
+                label="Personalization Level"
+                value={PERSONALIZATION_LEVELS.find((l) => l.value === ((generationConfig.personalization_level as number) || 4))?.label || 'Context'}
+              />
               <Field label="Tone" value={(generationConfig.tone as string) || 'professional'} />
               <Field label="Custom Instructions" value={(generationConfig.custom_instructions as string) || '-'} />
             </FieldGrid>
@@ -268,7 +435,7 @@ export function MessageGenTab({ campaign, isEditable }: Props) {
                 disabled={startGeneration.isPending || costEstimate.isPending}
                 className="px-4 py-2 text-sm font-medium rounded bg-accent text-white border-none cursor-pointer hover:bg-accent-hover transition-colors disabled:opacity-50"
               >
-                {startGeneration.isPending ? 'Starting...' : 'Generate Messages'}
+                {startGeneration.isPending ? 'Starting...' : costEstimate.isPending ? 'Estimating...' : 'Estimate & Generate'}
               </button>
             </>
           )}

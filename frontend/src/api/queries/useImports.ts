@@ -96,7 +96,10 @@ interface ImportStatusResponse {
 interface OAuthConnection {
   id: string
   provider: string
-  email: string
+  provider_email: string
+  email: string // alias for backwards compat
+  scopes: string[]
+  status: string
   connected_at: string
 }
 
@@ -193,9 +196,15 @@ export function getOAuthConnections() {
   return apiFetch<OAuthConnection[]>('/oauth/connections')
 }
 
-export function getGoogleAuthUrl(returnUrl: string) {
+export function getGoogleAuthUrl(returnUrl: string, scopes = 'contacts') {
   return apiFetch<GoogleAuthUrlResponse>('/oauth/google/auth-url', {
-    params: { return_url: returnUrl },
+    params: { return_url: returnUrl, scopes },
+  })
+}
+
+export function getGmailSendAuthUrl(returnUrl: string) {
+  return apiFetch<GoogleAuthUrlResponse>('/oauth/google/auth-url', {
+    params: { return_url: returnUrl, scopes: 'gmail_send' },
   })
 }
 

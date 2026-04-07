@@ -32,40 +32,52 @@ CHANNEL_CONSTRAINTS = {
 
 SYSTEM_PROMPT = """You are writing short outreach emails for Losers Cirque Company / United Arts.
 
+YOU are writing AS the SENDER (Hanka Faková). You are writing TO the RECIPIENT \
+whose details appear in the CONTACT section of each prompt. Never confuse the two.
+
 CRITICAL RULES — follow these exactly:
 
-1. CZECH VOCATIVE CASE: When writing in Czech, ALWAYS use the vocative form of the \
-recipient's first name in the greeting. Examples: Jana→Jano, Marianna→Marianno, \
-Petr→Petře, Hana→Hanko, Martin→Martine, Jakub→Jakube, Eliška→Eliško, \
-Renáta→Renáto, Helena→Heleno, Štěpánka→Štěpánko, Lenka→Lenko, Andrea→Andreo, \
-Silvie→Silvie (stays same for -ie endings). Apply standard Czech declension rules \
-for any name not listed here.
+1. RECIPIENT NAME IN GREETING: The greeting MUST use the RECIPIENT's first name \
+(from the CONTACT section), NEVER the sender's name. The RECIPIENT is the person \
+you are writing TO. The SENDER (Hanka Faková) is the person you are writing AS. \
+Double-check: the name after "Dobrý den," / "Ahoj," / "Dear" must come from the \
+CONTACT section, not from the signature.
 
-2. NO HALLUCINATION: This is COLD outreach. DO NOT invent or imply any prior \
+2. CZECH VOCATIVE CASE: When writing in Czech, apply the vocative form to the \
+RECIPIENT's first name (from the CONTACT section) in the greeting. Common examples: \
+Jana→Jano, Marianna→Marianno, Petr→Petře, Hana→Hanko, Martin→Martine, \
+Jakub→Jakube, Eliška→Eliško, Renáta→Renáto, Helena→Heleno, Štěpánka→Štěpánko, \
+Lenka→Lenko, Andrea→Andreo, Anna→Anno, Aneta→Aneto, Silvie→Silvie (stays same \
+for -ie endings), Eva→Evo, Lucie→Lucie, Kateřina→Kateřino, Tereza→Terezo, \
+Monika→Moniko, Petra→Petro, Veronika→Veroniko, Barbora→Barbory→Barbory is wrong→Barboro. \
+Apply standard Czech declension rules for any name not listed here. \
+NEVER hallucinate or invent a vocative form — if unsure, use the nominative (base) form.
+
+3. NO HALLUCINATION: This is COLD outreach. DO NOT invent or imply any prior \
 interaction, conversation, meeting, or relationship. Never write "děkujeme za zájem", \
 "na základě našeho rozhovoru", "jak jsme se bavili", "thanks for reaching out", \
 or anything suggesting prior contact — unless there IS documented interaction history \
 in the ENRICHMENT section.
 
-3. KEEP IT SHORT: Maximum 150-200 words. Get to the point quickly.
+4. KEEP IT SHORT: Maximum 150-200 words. Get to the point quickly.
 
-4. PRODUCT MENTIONS: When RECOMMENDED PRODUCTS are provided, mention only 1-2 specific \
+5. PRODUCT MENTIONS: When RECOMMENDED PRODUCTS are provided, mention only 1-2 specific \
 products by name with their price. Keep it natural — weave the product into the message \
 as a concrete suggestion, not a product spec sheet.
 
-5. TONE: Friendly professional — like a colleague recommending something. Not salesy, \
+6. TONE: Friendly professional — like a colleague recommending something. Not salesy, \
 not corporate. Write naturally as a real person would.
 
-6. SIGNATURE: Always sign as:
+7. SIGNATURE: Always sign as (this is the SENDER, not the recipient):
 Hanka Faková
 Event Producer
 hana@unitedarts.cz | +420 737 853 490
 
-7. STRATEGY & ENRICHMENT: When provided, incorporate strategy messaging angles and \
+8. STRATEGY & ENRICHMENT: When provided, incorporate strategy messaging angles and \
 reference specific enrichment facts (company details, industry, segment). But keep it \
 light — one or two relevant details, not a research report.
 
-8. Write the entire message in the language specified (default: Czech). Subject lines \
+9. Write the entire message in the language specified (default: Czech). Subject lines \
 should also be in that language."""
 
 
@@ -221,18 +233,26 @@ def _build_strategy_section(strategy_data: dict) -> str:
     return "\n".join(lines) if lines else ""
 
 
-def _build_enrichment_section(enrichment_data: dict) -> str:
+def _build_enrichment_section(enrichment_data: dict, level: int = 4) -> str:
     """Format enrichment data (L1/L2/Person) as a comprehensive section.
 
     BL-173: Enhanced to include growth signals, M&A activity, and
     AI champion indicators for enrichment-grounded personalization.
+
+    Levels:
+        1-2: No enrichment context (return empty)
+        3: L2 tech_stack, pain_hypothesis, key_products, competitors,
+           customer_segments
+        4: All of level 3 + digital_initiatives, hiring_signals,
+           growth_signals, ma_activity + person career_trajectory,
+           speaking_engagements, publications, ai_champion, authority
     """
-    if not enrichment_data:
+    if not enrichment_data or level < 3:
         return ""
 
     lines = []
 
-    # L2 deep research
+    # Level 3+: core L2 research
     l2 = enrichment_data.get("l2", {})
     if l2.get("tech_stack"):
         lines.append(f"Tech Stack: {l2['tech_stack']}")
@@ -244,33 +264,38 @@ def _build_enrichment_section(enrichment_data: dict) -> str:
         lines.append(f"Customer Segments: {l2['customer_segments']}")
     if l2.get("competitors"):
         lines.append(f"Competitors: {l2['competitors']}")
-    if l2.get("digital_initiatives"):
-        lines.append(f"Digital Initiatives: {l2['digital_initiatives']}")
-    if l2.get("hiring_signals"):
-        lines.append(f"Hiring Signals: {l2['hiring_signals']}")
-    # BL-173: Additional L2 fields for richer personalization
-    if l2.get("growth_signals"):
-        lines.append(f"Growth Signals: {l2['growth_signals']}")
-    if l2.get("ma_activity"):
-        lines.append(f"M&A Activity: {l2['ma_activity']}")
 
-    # Person enrichment extras (beyond what _build_contact_section covers)
-    person = enrichment_data.get("person", {})
-    if person.get("career_trajectory"):
-        lines.append(f"Career Trajectory: {person['career_trajectory']}")
-    if person.get("speaking_engagements"):
-        lines.append(f"Speaking: {person['speaking_engagements']}")
-    if person.get("publications"):
-        lines.append(f"Publications: {person['publications']}")
-    # BL-173: AI champion / authority signals for personalization
-    if person.get("ai_champion_score") and int(person["ai_champion_score"] or 0) >= 7:
-        lines.append(
-            "AI Champion: High likelihood — this person actively promotes AI/tech adoption."
-        )
-    if person.get("authority_score") and int(person["authority_score"] or 0) >= 8:
-        lines.append(
-            "Authority: Senior decision-maker with high organizational influence."
-        )
+    if level >= 4:
+        # Additional L2 signals
+        if l2.get("digital_initiatives"):
+            lines.append(f"Digital Initiatives: {l2['digital_initiatives']}")
+        if l2.get("hiring_signals"):
+            lines.append(f"Hiring Signals: {l2['hiring_signals']}")
+        if l2.get("growth_signals"):
+            lines.append(f"Growth Signals: {l2['growth_signals']}")
+        if l2.get("ma_activity"):
+            lines.append(f"M&A Activity: {l2['ma_activity']}")
+
+        # Person enrichment extras (beyond what _build_contact_section covers)
+        person = enrichment_data.get("person", {})
+        if person.get("career_trajectory"):
+            lines.append(f"Career Trajectory: {person['career_trajectory']}")
+        if person.get("speaking_engagements"):
+            lines.append(f"Speaking: {person['speaking_engagements']}")
+        if person.get("publications"):
+            lines.append(f"Publications: {person['publications']}")
+        # BL-173: AI champion / authority signals for personalization
+        if (
+            person.get("ai_champion_score")
+            and int(person["ai_champion_score"] or 0) >= 7
+        ):
+            lines.append(
+                "AI Champion: High likelihood — this person actively promotes AI/tech adoption."
+            )
+        if person.get("authority_score") and int(person["authority_score"] or 0) >= 8:
+            lines.append(
+                "Authority: Senior decision-maker with high organizational influence."
+            )
 
     return "\n".join(lines) if lines else ""
 
@@ -400,9 +425,16 @@ def build_generation_prompt(
     language = generation_config.get("language", "en")
     custom_instructions = generation_config.get("custom_instructions", "")
 
+    # Personalization level gates how much context is included (1=minimal, 4=full)
+    personalization_level = generation_config.get("personalization_level", 4)
+
     # Build context sections
-    contact_section = _build_contact_section(contact_data, enrichment_data)
-    company_section = _build_company_section(company_data, enrichment_data)
+    contact_section = _build_contact_section(
+        contact_data, enrichment_data, level=personalization_level
+    )
+    company_section = _build_company_section(
+        company_data, enrichment_data, level=personalization_level
+    )
 
     # Build format instructions
     if constraints["has_subject"]:
@@ -442,7 +474,9 @@ def build_generation_prompt(
             )
 
     # Enrichment deep-dive section (tech stack, pain points, etc.)
-    enrichment_section = _build_enrichment_section(enrichment_data)
+    enrichment_section = _build_enrichment_section(
+        enrichment_data, level=personalization_level
+    )
     if enrichment_section:
         parts.extend(
             [
@@ -584,67 +618,102 @@ def build_generation_prompt(
     return "\n".join(parts)
 
 
-def _build_contact_section(contact_data: dict, enrichment_data: dict) -> str:
-    lines = []
-    name = f"{contact_data.get('first_name', '')} {contact_data.get('last_name', '')}".strip()
-    if name:
-        lines.append(f"Name: {name}")
-    if contact_data.get("job_title"):
-        lines.append(f"Title: {contact_data['job_title']}")
-    if contact_data.get("email_address"):
-        lines.append(f"Email: {contact_data['email_address']}")
-    if contact_data.get("linkedin_url"):
-        lines.append(f"LinkedIn: {contact_data['linkedin_url']}")
-    if contact_data.get("seniority_level"):
-        lines.append(f"Seniority: {contact_data['seniority_level']}")
-    if contact_data.get("department"):
-        lines.append(f"Department: {contact_data['department']}")
+def _build_contact_section(
+    contact_data: dict, enrichment_data: dict, level: int = 4
+) -> str:
+    """Build contact context section with graduated personalization.
 
-    # Person enrichment data
-    person = enrichment_data.get("person", {})
-    if person.get("person_summary"):
-        lines.append(f"Person Summary: {person['person_summary']}")
-    if person.get("relationship_synthesis"):
-        lines.append(f"Relationship: {person['relationship_synthesis']}")
+    Levels:
+        1: first_name, last_name only
+        2: + job_title, seniority_level
+        3-4: + email, linkedin_url, department, person_summary, relationship_synthesis
+    """
+    lines = []
+    # Level 1+: name — prominently labeled as RECIPIENT
+    first_name = contact_data.get("first_name", "")
+    last_name = contact_data.get("last_name", "")
+    name = f"{first_name} {last_name}".strip()
+    if name:
+        lines.append(f"RECIPIENT NAME (use this name in the greeting): {name}")
+        if first_name:
+            lines.append(f"RECIPIENT FIRST NAME: {first_name}")
+
+    if level >= 2:
+        if contact_data.get("job_title"):
+            lines.append(f"Title: {contact_data['job_title']}")
+        if contact_data.get("seniority_level"):
+            lines.append(f"Seniority: {contact_data['seniority_level']}")
+
+    if level >= 3:
+        if contact_data.get("email_address"):
+            lines.append(f"Email: {contact_data['email_address']}")
+        if contact_data.get("linkedin_url"):
+            lines.append(f"LinkedIn: {contact_data['linkedin_url']}")
+        if contact_data.get("department"):
+            lines.append(f"Department: {contact_data['department']}")
+
+        # Person enrichment data
+        person = enrichment_data.get("person", {})
+        if person.get("person_summary"):
+            lines.append(f"Person Summary: {person['person_summary']}")
+        if person.get("relationship_synthesis"):
+            lines.append(f"Relationship: {person['relationship_synthesis']}")
 
     return "\n".join(lines) if lines else "No contact details available."
 
 
-def _build_company_section(company_data: dict, enrichment_data: dict) -> str:
-    """BL-173: Enhanced with enrichment-grounded fields (size, revenue, business model)."""
+def _build_company_section(
+    company_data: dict, enrichment_data: dict, level: int = 4
+) -> str:
+    """Build company context section with graduated personalization.
+
+    Levels:
+        1: No company context
+        2: name, industry, hq_country only
+        3: + domain, company_size, employee_count, revenue, business_model,
+           summary, L2 company_intel, recent_news
+        4: All of level 3 + ai_opportunities, pitch_framing, expansion
+    """
+    if level < 2:
+        return "No company context at this personalization level."
+
     lines = []
+    # Level 2+: basic company info
     if company_data.get("name"):
         lines.append(f"Company: {company_data['name']}")
-    if company_data.get("domain"):
-        lines.append(f"Domain: {company_data['domain']}")
     if company_data.get("industry"):
         lines.append(f"Industry: {company_data['industry']}")
     if company_data.get("hq_country"):
         lines.append(f"Country: {company_data['hq_country']}")
-    # BL-173: Add company size and employee/revenue data for grounded personalization
-    if company_data.get("company_size"):
-        lines.append(f"Company Size: {company_data['company_size']}")
-    if company_data.get("employee_count"):
-        lines.append(f"Employees: ~{company_data['employee_count']}")
-    if company_data.get("revenue_eur_m"):
-        lines.append(f"Revenue: ~{company_data['revenue_eur_m']}M EUR")
-    if company_data.get("business_model"):
-        lines.append(f"Business Model: {company_data['business_model']}")
-    if company_data.get("summary"):
-        lines.append(f"Summary: {company_data['summary']}")
 
-    # L2 enrichment data
-    l2 = enrichment_data.get("l2", {})
-    if l2.get("company_intel"):
-        lines.append(f"Intel: {l2['company_intel']}")
-    if l2.get("recent_news"):
-        lines.append(f"Recent News: {l2['recent_news']}")
-    if l2.get("ai_opportunities"):
-        lines.append(f"AI Opportunities: {l2['ai_opportunities']}")
-    # BL-173: Add pitch framing from L2 for message grounding
-    if l2.get("pitch_framing"):
-        lines.append(f"Recommended Approach: {l2['pitch_framing']}")
-    if l2.get("expansion"):
-        lines.append(f"Growth/Expansion: {l2['expansion']}")
+    if level >= 3:
+        if company_data.get("domain"):
+            lines.append(f"Domain: {company_data['domain']}")
+        if company_data.get("company_size"):
+            lines.append(f"Company Size: {company_data['company_size']}")
+        if company_data.get("employee_count"):
+            lines.append(f"Employees: ~{company_data['employee_count']}")
+        if company_data.get("revenue_eur_m"):
+            lines.append(f"Revenue: ~{company_data['revenue_eur_m']}M EUR")
+        if company_data.get("business_model"):
+            lines.append(f"Business Model: {company_data['business_model']}")
+        if company_data.get("summary"):
+            lines.append(f"Summary: {company_data['summary']}")
+
+        # L2 enrichment data (level 3+)
+        l2 = enrichment_data.get("l2", {})
+        if l2.get("company_intel"):
+            lines.append(f"Intel: {l2['company_intel']}")
+        if l2.get("recent_news"):
+            lines.append(f"Recent News: {l2['recent_news']}")
+
+    if level >= 4:
+        l2 = enrichment_data.get("l2", {})
+        if l2.get("ai_opportunities"):
+            lines.append(f"AI Opportunities: {l2['ai_opportunities']}")
+        if l2.get("pitch_framing"):
+            lines.append(f"Recommended Approach: {l2['pitch_framing']}")
+        if l2.get("expansion"):
+            lines.append(f"Growth/Expansion: {l2['expansion']}")
 
     return "\n".join(lines) if lines else "No company details available."

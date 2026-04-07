@@ -1,11 +1,13 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useUpdateCampaign, type CampaignDetail, type SenderConfig } from '../../../api/queries/useCampaigns'
+import { getOAuthConnections, getGmailSendAuthUrl } from '../../../api/queries/useImports'
+import type { OAuthConnection } from '../../../api/queries/useImports'
 import { useToast } from '../../../components/ui/Toast'
 import { SectionDivider } from '../../../components/ui/DetailField'
 
 // ── Defaults & limits ────────────────────────────────────
 
-const DEFAULTS: Required<Omit<SenderConfig, 'from_email' | 'from_name' | 'reply_to'>> = {
+const DEFAULTS: Required<Omit<SenderConfig, 'from_email' | 'from_name' | 'reply_to' | 'send_via' | 'oauth_connection_id'>> = {
   linkedin_daily_connections: 12,
   linkedin_daily_messages: 25,
   linkedin_active_hours: { start: '08:00', end: '18:00' },
@@ -119,6 +121,7 @@ export function SettingsTab({ campaign, isEditable }: Props) {
 
   // Local state mirrors the JSONB sender_config from the campaign
   const [config, setConfig] = useState<SenderConfig>(() => ({
+    send_via: 'resend',
     from_email: '',
     from_name: '',
     reply_to: '',
@@ -132,9 +135,32 @@ export function SettingsTab({ campaign, isEditable }: Props) {
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  // Gmail OAuth connection state
+  const [gmailConnections, setGmailConnections] = useState<OAuthConnection[]>([])
+  const [connectingGmail, setConnectingGmail] = useState(false)
+
+  // Load OAuth connections on mount
+  useEffect(() => {
+    getOAuthConnections()
+      .then((connections) => {
+        // Filter for active Google connections with gmail.send scope
+        const gmail = connections.filter(
+          (c) =>
+            c.provider === 'google' &&
+            c.status === 'active' &&
+            c.scopes?.includes('https://www.googleapis.com/auth/gmail.send'),
+        )
+        setGmailConnections(gmail)
+      })
+      .catch(() => {
+        // Silently fail — user can still use Resend
+      })
+  }, [])
+
   // Sync when campaign data changes (e.g. after a refetch)
   useEffect(() => {
     setConfig({
+      send_via: 'resend',
       from_email: '',
       from_name: '',
       reply_to: '',
@@ -201,6 +227,49 @@ export function SettingsTab({ campaign, isEditable }: Props) {
     }
   }, [campaign.id, config, updateCampaign, toast])
 
+  // ── Gmail connect ──
+
+  const handleConnectGmail = useCallback(async () => {
+    setConnectingGmail(true)
+    try {
+      const returnUrl = window.location.href
+      const resp = await getGmailSendAuthUrl(returnUrl)
+      window.location.href = resp.auth_url
+    } catch {
+      toast('Failed to start Gmail connection', 'error')
+      setConnectingGmail(false)
+    }
+  }, [toast])
+
+  const handleSendViaChange = useCallback((sendVia: 'resend' | 'gmail') => {
+    setConfig((prev) => {
+      const updated: SenderConfig = { ...prev, send_via: sendVia }
+      if (sendVia === 'gmail' && gmailConnections.length > 0) {
+        // Auto-select first connection
+        updated.oauth_connection_id = gmailConnections[0].id
+        updated.from_email = gmailConnections[0].provider_email ?? gmailConnections[0].email
+      }
+      return updated
+    })
+    setDirty(true)
+  }, [gmailConnections])
+
+  const handleGmailConnectionChange = useCallback((connectionId: string) => {
+    const conn = gmailConnections.find((c) => c.id === connectionId)
+    setConfig((prev) => ({
+      ...prev,
+      oauth_connection_id: connectionId,
+      from_email: conn?.provider_email ?? conn?.email ?? prev.from_email,
+    }))
+    setDirty(true)
+  }, [gmailConnections])
+
+  // Derived state
+  const sendVia = config.send_via ?? 'resend'
+  const selectedGmailConnection = gmailConnections.find(
+    (c) => c.id === config.oauth_connection_id,
+  )
+
   // ── Warning flags ──
 
   const connectionsAboveRec =
@@ -225,33 +294,113 @@ export function SettingsTab({ campaign, isEditable }: Props) {
         </div>
       )}
 
-      {/* ── Email Sender ── */}
+      {/* ── Send Via ── */}
       <div>
-        <SectionDivider title="Email Sender" />
+        <SectionDivider title="Email Delivery Method" />
         <p className="text-xs text-text-dim mb-4">
-          Configure the sender identity for outreach emails
+          Choose how outreach emails are sent
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <InputField
-            label="From Email"
-            name="from_email"
-            value={config.from_email ?? ''}
-            onChange={handleTextChange}
-            type="email"
-            placeholder="outreach@company.com"
-            required
-            disabled={!isEditable}
-            helperText="Required for email campaigns"
-          />
-          <InputField
-            label="From Name"
-            name="from_name"
-            value={config.from_name ?? ''}
-            onChange={handleTextChange}
-            placeholder="Jane Smith"
-            disabled={!isEditable}
-          />
-          <div className="sm:col-span-2">
+
+        {/* Radio group */}
+        <div className="flex gap-4 mb-4">
+          <label className={`flex items-center gap-2 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${sendVia === 'gmail' ? 'border-accent bg-accent/5' : 'border-border bg-surface-alt'}`}>
+            <input
+              type="radio"
+              name="send_via"
+              value="gmail"
+              checked={sendVia === 'gmail'}
+              onChange={() => handleSendViaChange('gmail')}
+              disabled={!isEditable}
+              className="accent-accent"
+            />
+            <div>
+              <div className="text-sm font-medium text-text">Gmail</div>
+              <div className="text-[11px] text-text-dim">Send from your real inbox</div>
+            </div>
+          </label>
+          <label className={`flex items-center gap-2 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${sendVia === 'resend' ? 'border-accent bg-accent/5' : 'border-border bg-surface-alt'}`}>
+            <input
+              type="radio"
+              name="send_via"
+              value="resend"
+              checked={sendVia === 'resend'}
+              onChange={() => handleSendViaChange('resend')}
+              disabled={!isEditable}
+              className="accent-accent"
+            />
+            <div>
+              <div className="text-sm font-medium text-text">Resend</div>
+              <div className="text-[11px] text-text-dim">Bulk sending with custom domain</div>
+            </div>
+          </label>
+        </div>
+
+        {/* Gmail-specific settings */}
+        {sendVia === 'gmail' && (
+          <div className="space-y-4 p-4 bg-surface-alt rounded-lg border border-border">
+            {gmailConnections.length > 0 ? (
+              <>
+                <div>
+                  <label className="text-xs text-text-muted mb-1 block">Gmail Account</label>
+                  <select
+                    value={config.oauth_connection_id ?? ''}
+                    onChange={(e) => handleGmailConnectionChange(e.target.value)}
+                    disabled={!isEditable}
+                    className="w-full bg-surface border border-border-solid rounded-md px-3 py-1.5 text-sm text-text focus:outline-none focus:border-accent disabled:opacity-50"
+                  >
+                    {gmailConnections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.provider_email ?? c.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedGmailConnection && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-success/10 text-success rounded font-medium">
+                      Connected
+                    </span>
+                    <span className="text-text-dim">
+                      Emails will appear in your Sent folder
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-start gap-2 px-3 py-2 bg-warning/5 border border-warning/15 rounded-lg">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-warning flex-shrink-0 mt-0.5">
+                    <path d="M8 1.5L1 14h14L8 1.5z" />
+                    <path d="M8 6v3" />
+                    <circle cx="8" cy="11.5" r="0.5" fill="currentColor" />
+                  </svg>
+                  <p className="text-[11px] text-text-dim">
+                    Gmail daily limit: 100 emails. Emails are sent with a 45-second delay between each to protect your sender reputation.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-sm text-text-muted mb-3">
+                  Connect your Gmail account to send emails from your inbox
+                </p>
+                <button
+                  onClick={handleConnectGmail}
+                  disabled={connectingGmail}
+                  className="px-4 py-2 text-sm font-medium rounded bg-accent text-white border-none cursor-pointer hover:bg-accent-hover transition-colors disabled:opacity-50"
+                >
+                  {connectingGmail ? 'Connecting...' : 'Connect Gmail Account'}
+                </button>
+              </div>
+            )}
+
+            {/* From Name (optional for Gmail) */}
+            <InputField
+              label="From Name"
+              name="from_name"
+              value={config.from_name ?? ''}
+              onChange={handleTextChange}
+              placeholder="Jane Smith"
+              disabled={!isEditable}
+              helperText="Optional — defaults to your Gmail display name"
+            />
             <InputField
               label="Reply-To Email"
               name="reply_to"
@@ -260,10 +409,47 @@ export function SettingsTab({ campaign, isEditable }: Props) {
               type="email"
               placeholder="replies@company.com"
               disabled={!isEditable}
-              helperText="Optional — replies go to From Email if not set"
+              helperText="Optional — replies go to your Gmail address if not set"
             />
           </div>
-        </div>
+        )}
+
+        {/* Resend-specific settings */}
+        {sendVia === 'resend' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InputField
+              label="From Email"
+              name="from_email"
+              value={config.from_email ?? ''}
+              onChange={handleTextChange}
+              type="email"
+              placeholder="outreach@company.com"
+              required
+              disabled={!isEditable}
+              helperText="Required for email campaigns"
+            />
+            <InputField
+              label="From Name"
+              name="from_name"
+              value={config.from_name ?? ''}
+              onChange={handleTextChange}
+              placeholder="Jane Smith"
+              disabled={!isEditable}
+            />
+            <div className="sm:col-span-2">
+              <InputField
+                label="Reply-To Email"
+                name="reply_to"
+                value={config.reply_to ?? ''}
+                onChange={handleTextChange}
+                type="email"
+                placeholder="replies@company.com"
+                disabled={!isEditable}
+                helperText="Optional — replies go to From Email if not set"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── LinkedIn Safety ── */}

@@ -7,8 +7,10 @@ const LANGUAGES = LANG_LIST.map((l) => ({ value: l.code, label: l.label }))
 
 const TONES = [
   { value: 'professional', label: 'Professional' },
+  { value: 'friendly', label: 'Friendly' },
   { value: 'casual', label: 'Casual' },
   { value: 'bold', label: 'Bold' },
+  { value: 'authoritative', label: 'Authoritative' },
   { value: 'empathetic', label: 'Empathetic' },
 ]
 

@@ -1,4 +1,6 @@
 import { useState, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useUpdateContact, type ContactDetail as ContactDetailType } from '../../api/queries/useContacts'
 import { useToast } from '../../components/ui/Toast'
 import { Badge } from '../../components/ui/Badge'
@@ -10,7 +12,6 @@ import {
 import { Tabs, type TabDef } from '../../components/ui/Tabs'
 import { EnrichmentTimeline } from '../../components/ui/EnrichmentTimeline'
 import { RawResearchSection } from '../../components/ui/RawResearchSection'
-import type { SourceInfo } from '../../components/ui/SourceTooltip'
 import {
   SENIORITY_DISPLAY, SENIORITY_REVERSE,
   DEPARTMENT_DISPLAY, DEPARTMENT_REVERSE,
@@ -21,6 +22,18 @@ import {
   MESSAGE_STATUS_REVERSE,
   filterOptions,
 } from '../../lib/display'
+
+/** Renders a markdown string with proper heading/bold/list formatting. */
+function MarkdownField({ label, text }: { label?: string; text: string }) {
+  return (
+    <div>
+      {label && <h4 className="text-xs font-medium text-text-muted mb-1">{label}</h4>}
+      <div className="prose-sm-msg text-sm text-text leading-relaxed">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    </div>
+  )
+}
 
 interface Props {
   contact: ContactDetailType
@@ -77,12 +90,6 @@ export function ContactDetail({ contact, onNavigate }: Props) {
       toast('Failed to save changes', 'error')
     }
   }
-
-  const personSource: SourceInfo | undefined = contact.enrichment ? {
-    label: 'Person Enrichment',
-    timestamp: contact.enrichment.enriched_at,
-    cost: contact.enrichment.enrichment_cost_usd,
-  } : undefined
 
   /* ---- Tab definitions ---- */
 
@@ -216,19 +223,13 @@ export function ContactDetail({ contact, onNavigate }: Props) {
             <div className="border border-accent/20 rounded-lg p-4 bg-accent/5 space-y-3">
               <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Person Summary</h3>
               {e.person_summary && (
-                <p className="text-sm text-text leading-relaxed">{e.person_summary}</p>
+                <MarkdownField text={e.person_summary} />
               )}
               {e.relationship_synthesis && (
-                <div>
-                  <h4 className="text-xs font-medium text-text-muted mb-1">Relationship Insights</h4>
-                  <p className="text-sm text-text leading-relaxed">{e.relationship_synthesis}</p>
-                </div>
+                <MarkdownField label="Relationship Insights" text={e.relationship_synthesis} />
               )}
               {e.linkedin_profile_summary && (
-                <div>
-                  <h4 className="text-xs font-medium text-text-muted mb-1">LinkedIn Summary</h4>
-                  <p className="text-sm text-text leading-relaxed">{e.linkedin_profile_summary}</p>
-                </div>
+                <MarkdownField label="LinkedIn Summary" text={e.linkedin_profile_summary} />
               )}
             </div>
           )}
@@ -274,10 +275,10 @@ export function ContactDetail({ contact, onNavigate }: Props) {
                 )}
 
                 {e.education && (
-                  <Field label="Education" value={e.education} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Education" text={String(e.education)} />
                 )}
                 {e.certifications && (
-                  <Field label="Certifications" value={e.certifications} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Certifications" text={String(e.certifications)} />
                 )}
                 {e.expertise_areas && (
                   <div>
@@ -293,10 +294,10 @@ export function ContactDetail({ contact, onNavigate }: Props) {
                 )}
 
                 {e.speaking_engagements && (
-                  <Field label="Speaking Engagements" value={e.speaking_engagements} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Speaking Engagements" text={String(e.speaking_engagements)} />
                 )}
                 {e.publications && (
-                  <Field label="Publications" value={e.publications} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Publications" text={String(e.publications)} />
                 )}
 
                 {(e.twitter_handle || e.github_username) && (
@@ -364,13 +365,13 @@ export function ContactDetail({ contact, onNavigate }: Props) {
                 </div>
 
                 {e.budget_signals && (
-                  <Field label="Budget Signals" value={e.budget_signals} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Budget Signals" text={String(e.budget_signals)} />
                 )}
                 {e.buying_signals && (
-                  <Field label="Buying Signals" value={e.buying_signals} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Buying Signals" text={String(e.buying_signals)} />
                 )}
                 {e.pain_indicators && (
-                  <Field label="Pain Indicators" value={e.pain_indicators} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Pain Indicators" text={String(e.pain_indicators)} />
                 )}
                 {e.technology_interests && (
                   <div>
@@ -393,7 +394,7 @@ export function ContactDetail({ contact, onNavigate }: Props) {
             <CollapsibleSection title="Relationship Strategy">
               <div className="space-y-4">
                 {e.personalization_angle && (
-                  <Field label="Personalization Angle" value={e.personalization_angle} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Personalization Angle" text={String(e.personalization_angle)} />
                 )}
                 {e.connection_points && (
                   <div>
@@ -405,15 +406,15 @@ export function ContactDetail({ contact, onNavigate }: Props) {
                         ))}
                       </ul>
                     ) : (
-                      <p className="text-sm text-text">{String(e.connection_points)}</p>
+                      <MarkdownField text={String(e.connection_points)} />
                     )}
                   </div>
                 )}
                 {e.conversation_starters && (
-                  <Field label="Conversation Starters" value={e.conversation_starters} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Conversation Starters" text={String(e.conversation_starters)} />
                 )}
                 {e.objection_prediction && (
-                  <Field label="Objection Prediction" value={e.objection_prediction} className="col-span-full" source={personSource} />
+                  <MarkdownField label="Objection Prediction" text={String(e.objection_prediction)} />
                 )}
               </div>
             </CollapsibleSection>

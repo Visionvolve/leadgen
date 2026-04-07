@@ -1,6 +1,5 @@
 """Unit tests for ARES-related routes (company detail, enrich-registry, confirm-registry, estimate)."""
 
-import json
 from unittest.mock import patch
 
 from tests.conftest import auth_header
@@ -52,20 +51,29 @@ class TestCompanyDetailRegistryData:
         assert reg["match_confidence"] == 1.0
         assert reg["match_method"] == "ico_direct"
 
-    def test_ico_field_in_company(self, client, db, seed_companies_contacts):
+    def test_ico_field_via_registry_data(self, client, db, seed_companies_contacts):
+        """ico is served via registry_data, not as a top-level company column."""
         headers = auth_header(client)
         headers["X-Namespace"] = "test-corp"
         company_id = str(seed_companies_contacts["companies"][0].id)
 
         db.session.execute(
-            db.text("UPDATE companies SET ico = '99887766' WHERE id = :id"),
-            {"id": company_id},
+            db.text("""
+                INSERT INTO company_registry_data (
+                    company_id, ico, match_confidence, match_method,
+                    registration_status, insolvency_flag
+                ) VALUES (
+                    :cid, '99887766', 1.0, 'ico_direct', 'active', 0
+                )
+            """),
+            {"cid": company_id},
         )
         db.session.commit()
 
         resp = client.get(f"/api/companies/{company_id}", headers=headers)
         assert resp.status_code == 200
-        assert resp.get_json()["ico"] == "99887766"
+        data = resp.get_json()
+        assert data["registry_data"]["ico"] == "99887766"
 
 
 class TestEnrichRegistry:
@@ -127,7 +135,11 @@ class TestEnrichRegistry:
         mock_enrich.return_value = {
             "status": "ambiguous",
             "candidates": [
-                {"ico": "11111111", "official_name": "Acme A s.r.o.", "similarity": 0.75},
+                {
+                    "ico": "11111111",
+                    "official_name": "Acme A s.r.o.",
+                    "similarity": 0.75,
+                },
                 {"ico": "22222222", "official_name": "Acme B a.s.", "similarity": 0.70},
             ],
         }
@@ -242,7 +254,9 @@ class TestConfirmRegistry:
 class TestRegistryInEnrichEstimate:
     """Registry (legacy alias 'ares') should appear in estimate with $0.00 cost."""
 
-    def test_registry_estimate_via_legacy_alias(self, client, db, seed_companies_contacts):
+    def test_registry_estimate_via_legacy_alias(
+        self, client, db, seed_companies_contacts
+    ):
         headers = auth_header(client)
         headers["X-Namespace"] = "test-corp"
         tag_name = seed_companies_contacts["tags"][0].name
@@ -259,7 +273,9 @@ class TestRegistryInEnrichEstimate:
         assert data["stages"]["registry"]["cost_per_item"] == 0.00
         assert data["stages"]["registry"]["estimated_cost"] == 0.00
 
-    def test_registry_in_multi_stage_estimate(self, client, db, seed_companies_contacts):
+    def test_registry_in_multi_stage_estimate(
+        self, client, db, seed_companies_contacts
+    ):
         headers = auth_header(client)
         headers["X-Namespace"] = "test-corp"
         tag_name = seed_companies_contacts["tags"][0].name

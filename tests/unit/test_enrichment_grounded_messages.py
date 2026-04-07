@@ -106,7 +106,7 @@ class TestEnrichmentGroundedPrompts:
         from api.services.generation_prompts import SYSTEM_PROMPT
 
         assert "ENRICHMENT" in SYSTEM_PROMPT
-        assert "specific fact" in SYSTEM_PROMPT.lower()
+        assert "enrichment facts" in SYSTEM_PROMPT.lower()
 
     def test_full_prompt_includes_all_sections(self):
         from api.services.generation_prompts import build_generation_prompt

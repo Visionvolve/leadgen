@@ -49,8 +49,10 @@ const CHANNEL_ICONS: Record<string, string> = {
 
 const TONE_OPTIONS = [
   { value: 'professional', label: 'Professional' },
+  { value: 'friendly', label: 'Friendly' },
   { value: 'casual', label: 'Casual' },
   { value: 'bold', label: 'Bold' },
+  { value: 'authoritative', label: 'Authoritative' },
   { value: 'empathetic', label: 'Empathetic' },
 ]
 

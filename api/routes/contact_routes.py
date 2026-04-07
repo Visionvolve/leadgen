@@ -312,10 +312,13 @@ def list_contacts():
             SELECT
                 ct.id, ct.first_name, ct.last_name, ct.job_title,
                 co.id AS company_id, co.name AS company_name,
-                ct.email_address, ct.contact_score, ct.icp_fit,
+                ct.email_address,
+                COALESCE(ct.contact_score, ce.contact_score) AS contact_score,
+                COALESCE(ct.icp_fit, ce.icp_fit) AS icp_fit,
                 ct.message_status,
                 o.name AS owner_name,
-                ct.seniority_level, ct.department,
+                COALESCE(ct.seniority_level, ce.seniority) AS seniority_level,
+                COALESCE(ct.department, ce.department) AS department,
                 ct.location_city, ct.location_country,
                 ct.linkedin_url, ct.phone_number,
                 ct.ai_champion_score, ct.authority_score,
@@ -326,6 +329,7 @@ def list_contacts():
                 ct.processed_enrich,
                 ct.last_enriched_at
             FROM contacts ct
+            LEFT JOIN contact_enrichment ce ON ce.contact_id = ct.id
             {joins}
             WHERE {where_clause}
             ORDER BY {order}
@@ -458,12 +462,15 @@ def get_contact(contact_id):
                 ct.id, ct.first_name, ct.last_name, ct.job_title,
                 ct.email_address, ct.linkedin_url, ct.phone_number,
                 ct.profile_photo_url,
-                ct.seniority_level, ct.department,
+                COALESCE(ct.seniority_level, ce.seniority) AS seniority_level,
+                COALESCE(ct.department, ce.department) AS department,
                 ct.location_city, ct.location_country,
-                ct.icp_fit, ct.relationship_status,
+                COALESCE(ct.icp_fit, ce.icp_fit) AS icp_fit,
+                ct.relationship_status,
                 ct.contact_source, ct.language, ct.message_status,
                 ct.ai_champion, ct.ai_champion_score,
-                ct.authority_score, ct.contact_score,
+                ct.authority_score,
+                COALESCE(ct.contact_score, ce.contact_score) AS contact_score,
                 ct.enrichment_cost_usd, ct.processed_enrich,
                 ct.email_lookup, ct.duplicity_check,
                 ct.duplicity_conflict, ct.duplicity_detail,
@@ -479,6 +486,7 @@ def get_contact(contact_id):
             LEFT JOIN companies co ON ct.company_id = co.id
             LEFT JOIN owners o ON ct.owner_id = o.id
             LEFT JOIN tags b ON ct.tag_id = b.id
+            LEFT JOIN contact_enrichment ce ON ce.contact_id = ct.id
             WHERE ct.id = :id AND ct.tenant_id = :tenant_id
         """),
         {"id": contact_id, "tenant_id": tenant_id},
