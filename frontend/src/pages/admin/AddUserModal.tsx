@@ -31,13 +31,14 @@ export function AddUserModal({ open, onClose, tenantId }: AddUserModalProps) {
   }
 
   function validate(): string | null {
-    if (!email.trim() || !displayName.trim() || !password) {
-      return 'All fields are required.'
+    if (!email.trim()) {
+      return 'Email is required.'
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       return 'Please enter a valid email address.'
     }
-    if (password.length < 8) {
+    // Display name and password only required for new users
+    if (displayName.trim() && password && password.length < 8) {
       return 'Password must be at least 8 characters.'
     }
     return null
@@ -104,6 +105,9 @@ export function AddUserModal({ open, onClose, tenantId }: AddUserModalProps) {
             className="w-full bg-surface-alt border border-border rounded-md px-3 py-2 text-sm text-text placeholder:text-text-dim focus:outline-none focus:border-accent-cyan"
             placeholder="user@company.com"
           />
+          <p className="text-xs text-text-dim mt-1">
+            If this user already exists, they will be granted access to this namespace.
+          </p>
         </div>
 
         <div>

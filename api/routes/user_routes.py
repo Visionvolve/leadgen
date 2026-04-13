@@ -45,14 +45,41 @@ def create_user():
     tenant_id = data.get("tenant_id")
     role = data.get("role", "viewer")
 
-    if not email or not display_name:
-        return jsonify({"error": "email and display_name required"}), 400
+    if not email:
+        return jsonify({"error": "email is required"}), 400
 
     if role not in ("admin", "editor", "viewer"):
         return jsonify({"error": "Invalid role"}), 400
 
-    if User.query.filter_by(email=email).first():
-        return jsonify({"error": "Email already registered"}), 409
+    existing_user = User.query.filter_by(email=email).first()
+
+    if existing_user:
+        # User exists — grant access to the target tenant instead of rejecting
+        if not tenant_id:
+            return jsonify({"error": "Email already registered"}), 409
+
+        tenant = db.session.get(Tenant, tenant_id)
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
+
+        existing_role = UserTenantRole.query.filter_by(
+            user_id=existing_user.id, tenant_id=tenant_id
+        ).first()
+        if existing_role:
+            return jsonify({"error": "User already has access to this namespace"}), 409
+
+        utr = UserTenantRole(
+            user_id=existing_user.id,
+            tenant_id=tenant_id,
+            role=role,
+            granted_by=g.current_user.id,
+        )
+        db.session.add(utr)
+        db.session.commit()
+        return jsonify(existing_user.to_dict(include_roles=True)), 201
+
+    if not display_name:
+        return jsonify({"error": "email and display_name required"}), 400
 
     user = User(
         email=email,
