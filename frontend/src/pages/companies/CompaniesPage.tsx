@@ -17,6 +17,7 @@ import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
 import { CreateCompanyModal } from '../../components/ui/CreateCompanyModal'
 import { useToast } from '../../components/ui/Toast'
+import { useScrollRestore } from '../../hooks/useScrollRestore'
 import { COMPANY_COLUMNS, COMPANY_ALWAYS_VISIBLE } from '../../config/companyColumns'
 import {
   ENRICHMENT_STAGE_DISPLAY,
@@ -84,15 +85,21 @@ export function CompaniesPage() {
   const bulkAddTags = useBulkAddTags()
   const matchingCount = useCompaniesMatchingCount()
 
+  // Scroll position restore (saves before navigating to detail, restores on mount)
+  const { saveScrollPosition } = useScrollRestore('companies_scroll')
+
   // Listen for custom navigation events from column renderers
   useEffect(() => {
     const handler = (e: Event) => {
       const path = (e as CustomEvent<string>).detail
-      if (path) navigate(withRev(path), { state: { origin: withRev(`/${namespace}/companies`) } })
+      if (path) {
+        saveScrollPosition()
+        navigate(withRev(path), { state: { origin: withRev(`/${namespace}/companies`) } })
+      }
     }
     window.addEventListener('leadgen:navigate', handler)
     return () => window.removeEventListener('leadgen:navigate', handler)
-  }, [navigate, namespace])
+  }, [navigate, namespace, saveScrollPosition])
 
   // Build CompanyFilters from advanced state + sort
   const filters: CompanyFilters = useMemo(() => ({
