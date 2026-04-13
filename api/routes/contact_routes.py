@@ -201,7 +201,7 @@ def list_contacts():
             skills_clauses = []
             for i, v in enumerate(skills_vals):
                 params[f"skill_{i}"] = v.lower()
-                skills_clauses.append(f"LOWER(sk.value::text) = :skill_{i}")
+                skills_clauses.append(f"LOWER(CAST(sk.value AS TEXT)) = :skill_{i}")
             combined_skills = " OR ".join(skills_clauses)
             if skills_exclude:
                 where.append(
@@ -230,7 +230,9 @@ def list_contacts():
             interests_clauses = []
             for i, v in enumerate(interests_vals):
                 params[f"interest_{i}"] = v.lower()
-                interests_clauses.append(f"LOWER(ti.value::text) = :interest_{i}")
+                interests_clauses.append(
+                    f"LOWER(CAST(ti.value AS TEXT)) = :interest_{i}"
+                )
             combined_interests = " OR ".join(interests_clauses)
             if interests_exclude:
                 where.append(
@@ -314,11 +316,11 @@ def list_contacts():
                 co.id AS company_id, co.name AS company_name,
                 ct.email_address,
                 COALESCE(ct.contact_score, ce.contact_score) AS contact_score,
-                COALESCE(ct.icp_fit::text, ce.icp_fit) AS icp_fit,
+                COALESCE(CAST(ct.icp_fit AS TEXT), ce.icp_fit) AS icp_fit,
                 ct.message_status,
                 o.name AS owner_name,
-                COALESCE(ct.seniority_level::text, ce.seniority) AS seniority_level,
-                COALESCE(ct.department::text, ce.department) AS department,
+                COALESCE(CAST(ct.seniority_level AS TEXT), ce.seniority) AS seniority_level,
+                COALESCE(CAST(ct.department AS TEXT), ce.department) AS department,
                 ct.location_city, ct.location_country,
                 ct.linkedin_url, ct.phone_number,
                 ct.ai_champion_score, ct.authority_score,
@@ -462,10 +464,10 @@ def get_contact(contact_id):
                 ct.id, ct.first_name, ct.last_name, ct.job_title,
                 ct.email_address, ct.linkedin_url, ct.phone_number,
                 ct.profile_photo_url,
-                COALESCE(ct.seniority_level::text, ce.seniority) AS seniority_level,
-                COALESCE(ct.department::text, ce.department) AS department,
+                COALESCE(CAST(ct.seniority_level AS TEXT), ce.seniority) AS seniority_level,
+                COALESCE(CAST(ct.department AS TEXT), ce.department) AS department,
                 ct.location_city, ct.location_country,
-                COALESCE(ct.icp_fit::text, ce.icp_fit) AS icp_fit,
+                COALESCE(CAST(ct.icp_fit AS TEXT), ce.icp_fit) AS icp_fit,
                 ct.relationship_status,
                 ct.contact_source, ct.language, ct.message_status,
                 ct.ai_champion, ct.ai_champion_score,
@@ -687,35 +689,80 @@ def update_contact(contact_id):
     contact_enum_validators = {
         "icp_fit": {"strong_fit", "moderate_fit", "weak_fit", "unknown"},
         "seniority_level": {
-            "c_level", "vp", "director", "manager",
-            "individual_contributor", "founder", "other",
+            "c_level",
+            "vp",
+            "director",
+            "manager",
+            "individual_contributor",
+            "founder",
+            "other",
         },
         "department": {
-            "executive", "engineering", "product", "sales", "marketing",
-            "customer_success", "finance", "hr", "operations", "other",
+            "executive",
+            "engineering",
+            "product",
+            "sales",
+            "marketing",
+            "customer_success",
+            "finance",
+            "hr",
+            "operations",
+            "other",
         },
         "message_status": {
-            "not_started", "generating", "pending_review", "approved",
-            "sent", "replied", "no_channel", "generation_failed",
+            "not_started",
+            "generating",
+            "pending_review",
+            "approved",
+            "sent",
+            "replied",
+            "no_channel",
+            "generation_failed",
         },
         "language": {
-            "en", "cs", "da", "de", "es", "fi", "fr",
-            "it", "nl", "no", "pl", "pt", "sv",
+            "en",
+            "cs",
+            "da",
+            "de",
+            "es",
+            "fi",
+            "fr",
+            "it",
+            "nl",
+            "no",
+            "pl",
+            "pt",
+            "sv",
         },
         "contact_source": {
-            "inbound", "outbound", "referral", "event", "social", "other",
+            "inbound",
+            "outbound",
+            "referral",
+            "event",
+            "social",
+            "other",
         },
         "relationship_status": {
-            "prospect", "active", "dormant", "former", "partner", "internal",
+            "prospect",
+            "active",
+            "dormant",
+            "former",
+            "partner",
+            "internal",
         },
     }
     for field, value in fields.items():
-        if field in contact_enum_validators and value not in contact_enum_validators[field]:
-            return jsonify({
-                "error": f"Invalid value '{value}' for field '{field}'",
-                "field": field,
-                "allowed": sorted(contact_enum_validators[field]),
-            }), 400
+        if (
+            field in contact_enum_validators
+            and value not in contact_enum_validators[field]
+        ):
+            return jsonify(
+                {
+                    "error": f"Invalid value '{value}' for field '{field}'",
+                    "field": field,
+                    "allowed": sorted(contact_enum_validators[field]),
+                }
+            ), 400
 
     row = db.session.execute(
         db.text(
@@ -841,7 +888,7 @@ def filter_counts():
             jf_clauses = []
             for i, v in enumerate(jf_values):
                 params[f"{jf_key}_{i}"] = v.lower()
-                jf_clauses.append(f"LOWER(jfv.value::text) = :{jf_key}_{i}")
+                jf_clauses.append(f"LOWER(CAST(jfv.value AS TEXT)) = :{jf_key}_{i}")
             combined_jf = " OR ".join(jf_clauses)
             if jf_exclude:
                 where.append(

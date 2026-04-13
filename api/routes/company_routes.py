@@ -1111,35 +1111,65 @@ def update_company(company_id):
     # Enum validation for fields with finite allowed values
     company_enum_validators = {
         "status": {
-            "new", "enrichment_failed", "triage_passed", "triage_review",
-            "triage_disqualified", "enrichment_l2_failed", "enriched_l2",
-            "synced", "needs_review", "enriched", "error_pushing_lemlist",
+            "new",
+            "enrichment_failed",
+            "triage_passed",
+            "triage_review",
+            "triage_disqualified",
+            "enrichment_l2_failed",
+            "enriched_l2",
+            "synced",
+            "needs_review",
+            "enriched",
+            "error_pushing_lemlist",
         },
         "tier": {
-            "tier_1_platinum", "tier_2_gold", "tier_3_silver",
-            "tier_4_bronze", "tier_5_copper", "deprioritize",
+            "tier_1_platinum",
+            "tier_2_gold",
+            "tier_3_silver",
+            "tier_4_bronze",
+            "tier_5_copper",
+            "deprioritize",
         },
         "buying_stage": {
-            "unaware", "problem_aware", "exploring_ai",
-            "looking_for_partners", "in_discussion",
-            "proposal_sent", "won", "lost",
+            "unaware",
+            "problem_aware",
+            "exploring_ai",
+            "looking_for_partners",
+            "in_discussion",
+            "proposal_sent",
+            "won",
+            "lost",
         },
         "engagement_status": {
-            "cold", "approached", "prospect", "customer", "churned",
+            "cold",
+            "approached",
+            "prospect",
+            "customer",
+            "churned",
         },
         "crm_status": {
-            "cold", "scheduled_for_outreach", "outreach",
-            "prospect", "customer", "churn",
+            "cold",
+            "scheduled_for_outreach",
+            "outreach",
+            "prospect",
+            "customer",
+            "churn",
         },
         "cohort": {"a", "b"},
     }
     for field, value in fields.items():
-        if field in company_enum_validators and value not in company_enum_validators[field]:
-            return jsonify({
-                "error": f"Invalid value '{value}' for field '{field}'",
-                "field": field,
-                "allowed": sorted(company_enum_validators[field]),
-            }), 400
+        if (
+            field in company_enum_validators
+            and value not in company_enum_validators[field]
+        ):
+            return jsonify(
+                {
+                    "error": f"Invalid value '{value}' for field '{field}'",
+                    "field": field,
+                    "allowed": sorted(company_enum_validators[field]),
+                }
+            ), 400
 
     # Verify company belongs to tenant
     row = db.session.execute(
