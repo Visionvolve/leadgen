@@ -50,7 +50,8 @@ interface UseShareViewOptions {
   /** Setter for sort field */
   setSortField: (field: string) => void
   /** Setter for sort direction */
-  setSortDir: (dir: string) => void
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setSortDir: (dir: any) => void
   /** Toast function */
   toast: (message: string, variant?: 'success' | 'error' | 'info') => void
 }
