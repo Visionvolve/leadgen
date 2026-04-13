@@ -38,7 +38,17 @@ export function CreateContactModal({ onClose, onSuccess }: CreateContactModalPro
   const handleSubmit = async () => {
     if (!canSubmit) return
     try {
-      const body: Record<string, string> = {
+      const body: {
+        first_name: string
+        last_name: string
+        email_address?: string
+        job_title?: string
+        company_id?: string
+        seniority_level?: string
+        department?: string
+        phone_number?: string
+        notes?: string
+      } = {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
       }

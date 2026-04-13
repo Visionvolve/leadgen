@@ -14,7 +14,7 @@ function readStorage<T>(key: string, initial: T): T {
  * Falls back to `initial` if key is missing or JSON parse fails.
  * Reacts to key changes — re-reads value when key changes (e.g. namespace prefix).
  */
-export function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
+export function useLocalStorage<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
   // Store both key and value so we can detect key changes during render
   const [state, setState] = useState<{ key: string; value: T }>(() => ({
     key,
@@ -30,13 +30,16 @@ export function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void]
   }
 
   const set = useCallback(
-    (v: T) => {
-      setState((prev) => ({ ...prev, value: v }))
-      try {
-        localStorage.setItem(key, JSON.stringify(v))
-      } catch {
-        // localStorage full or blocked — silently ignore
-      }
+    (v: T | ((prev: T) => T)) => {
+      setState((prev) => {
+        const next = typeof v === 'function' ? (v as (prev: T) => T)(prev.value) : v
+        try {
+          localStorage.setItem(key, JSON.stringify(next))
+        } catch {
+          // localStorage full or blocked — silently ignore
+        }
+        return { ...prev, value: next }
+      })
     },
     [key],
   )
