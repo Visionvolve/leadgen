@@ -4,6 +4,7 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
 from .google_oauth import get_valid_token
+from .phone_normalize import normalize_phone
 
 
 def fetch_google_contacts(oauth_connection):
@@ -120,7 +121,7 @@ def parse_contacts_to_rows(raw_contacts):
             "last_name": last_name,
             "email_address": email,
             "job_title": job_title,
-            "phone_number": phone,
+            "phone_number": normalize_phone(phone),
             "contact_source": "google_contacts",
         }
 

@@ -17,6 +17,7 @@ from ..display import (
     display_tier,
 )
 from ..models import db
+from ..services.phone_normalize import normalize_phone
 
 contacts_bp = Blueprint("contacts", __name__)
 
@@ -167,6 +168,10 @@ def create_contact():
             columns.append(field)
             placeholders.append(f":{field}")
             params[field] = val_str
+
+    # Normalize phone number before saving
+    if "phone_number" in params:
+        params["phone_number"] = normalize_phone(params["phone_number"]) or params["phone_number"]
 
     # Validate company_id belongs to tenant
     if "company_id" in params:
@@ -779,8 +784,13 @@ def update_contact(contact_id):
         "last_name",
         "email_address",
         "job_title",
+        "phone_number",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
+
+    # Normalize phone number before saving
+    if "phone_number" in fields and fields["phone_number"] is not None:
+        fields["phone_number"] = normalize_phone(fields["phone_number"])
     custom_fields_update = body.get("custom_fields")
 
     if not fields and not custom_fields_update:

@@ -15,6 +15,7 @@ Companies always link to existing when matched (never duplicate).
 from sqlalchemy import func
 
 from ..models import Company, Contact, db
+from .phone_normalize import normalize_phone
 
 
 def normalize_domain(url):
@@ -303,6 +304,10 @@ def execute_import(
         contact_data = row.get("contact", {})
         company_data = row.get("company", {})
 
+        # Normalize phone number at import time
+        if contact_data.get("phone_number"):
+            contact_data["phone_number"] = normalize_phone(contact_data["phone_number"])
+
         contact_name = contact_data.get("full_name", "") or (
             f"{contact_data.get('first_name', '')} {contact_data.get('last_name', '')}".strip()
         )
@@ -487,7 +492,7 @@ def _create_contact(
         job_title=contact_data.get("job_title"),
         email_address=contact_data.get("email_address"),
         linkedin_url=contact_data.get("linkedin_url"),
-        phone_number=contact_data.get("phone_number"),
+        phone_number=normalize_phone(contact_data.get("phone_number")),
         location_city=contact_data.get("location_city"),
         location_country=contact_data.get("location_country"),
         seniority_level=contact_data.get("seniority_level"),

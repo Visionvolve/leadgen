@@ -272,3 +272,21 @@ export function reverseValue(map: Record<string, string>, v: string | null | und
 export function filterOptions(map: Record<string, string>): { value: string; label: string }[] {
   return Object.entries(map).map(([dbVal, label]) => ({ value: dbVal, label }))
 }
+
+/** Format a phone number for display: "+420602123456" -> "+420 602 123 456" */
+export function formatPhone(phone: string | null | undefined): string | null {
+  if (!phone) return null
+  // Strip trailing .0 (float artifact from imports)
+  let s = phone.replace(/\.0+$/, '')
+  // Czech numbers: +420 XXX XXX XXX
+  const czMatch = s.match(/^\+420(\d{3})(\d{3})(\d{3})$/)
+  if (czMatch) return `+420 ${czMatch[1]} ${czMatch[2]} ${czMatch[3]}`
+  // Generic international: space after country code, then groups of 3
+  const intlMatch = s.match(/^\+(\d{1,3})(\d+)$/)
+  if (intlMatch) {
+    const rest = intlMatch[2]
+    const groups = rest.match(/.{1,3}/g) || []
+    return `+${intlMatch[1]} ${groups.join(' ')}`
+  }
+  return s
+}

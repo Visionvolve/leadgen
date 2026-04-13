@@ -10,6 +10,7 @@ import {
   MESSAGE_STATUS_DISPLAY, MESSAGE_STATUS_REVERSE,
   LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
   CONTACT_SOURCE_DISPLAY, CONTACT_SOURCE_REVERSE,
+  formatPhone,
 } from '../lib/display'
 
 /** All available contact columns with visibility defaults. */
@@ -245,6 +246,7 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     label: 'Phone',
     minWidth: '100px',
     defaultVisible: false,
+    render: (row) => formatPhone(row.phone_number) || '-',
   },
   {
     key: 'ai_champion_score',
