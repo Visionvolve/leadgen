@@ -10,8 +10,10 @@ interface InlineEditCellProps {
   reverseMap?: Record<string, string>
   onSave: (newValue: string) => Promise<void>
   cellStatus?: CellStatus
-  /** Label shown next to checkbox (only for editType='checkbox') */
+  /** Label shown next to checkbox when checked (only for editType='checkbox') */
   checkboxLabel?: string
+  /** Label shown next to checkbox when unchecked (only for editType='checkbox') */
+  checkboxUncheckedLabel?: string
   /** DB value that means "checked" (default: 'tykat') */
   checkboxCheckedValue?: string
   /** DB value that means "unchecked" (default: 'vykat') */
@@ -27,6 +29,7 @@ export function InlineEditCell({
   onSave,
   cellStatus,
   checkboxLabel,
+  checkboxUncheckedLabel,
   checkboxCheckedValue = 'tykat',
   checkboxUncheckedValue = 'vykat',
 }: InlineEditCellProps) {
@@ -123,8 +126,10 @@ export function InlineEditCell({
             </svg>
           )}
         </button>
-        {checkboxLabel && (
-          <span className="text-xs text-text-muted select-none">{checkboxLabel}</span>
+        {(checkboxLabel || checkboxUncheckedLabel) && (
+          <span className="text-xs text-text-muted select-none">
+            {isChecked ? (checkboxLabel ?? checkboxUncheckedLabel) : (checkboxUncheckedLabel ?? checkboxLabel)}
+          </span>
         )}
         {statusIcon}
         {cellStatus === 'saving' && (

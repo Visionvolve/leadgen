@@ -17,8 +17,10 @@ export interface ColumnDef<T> extends Column<T> {
   editOptions?: Record<string, string>
   /** Reverse map for select edit options (display label → db value) */
   editReverse?: Record<string, string>
-  /** Label shown next to checkbox (only for editType='checkbox') */
+  /** Label shown next to checkbox when checked (only for editType='checkbox') */
   checkboxLabel?: string
+  /** Label shown next to checkbox when unchecked (only for editType='checkbox') */
+  checkboxUncheckedLabel?: string
   /** DB value that means "checked" (default: 'tykat') */
   checkboxCheckedValue?: string
   /** DB value that means "unchecked" (default: 'vykat') */
