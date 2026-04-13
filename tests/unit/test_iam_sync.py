@@ -1,6 +1,6 @@
 """Unit tests for IAM sync service."""
-import pytest
-from api.models import Tenant, User, UserTenantRole, db as _db
+
+from api.models import Tenant, User, UserTenantRole
 from api.services.iam_sync import (
     _normalize_permissions,
     find_or_create_local_user,
@@ -48,7 +48,11 @@ class TestFindOrCreateLocalUser:
         db.session.add(existing)
         db.session.commit()
 
-        iam_user = {"id": "iam-uuid-003", "email": "legacy@test.com", "name": "Legacy Updated"}
+        iam_user = {
+            "id": "iam-uuid-003",
+            "email": "legacy@test.com",
+            "name": "Legacy Updated",
+        }
         user = find_or_create_local_user(iam_user)
 
         assert user.id == existing.id
@@ -67,7 +71,11 @@ class TestFindOrCreateLocalUser:
         db.session.add(existing)
         db.session.commit()
 
-        iam_user = {"id": "iam-uuid-004", "email": "nameduser@test.com", "name": "New Name"}
+        iam_user = {
+            "id": "iam-uuid-004",
+            "email": "nameduser@test.com",
+            "name": "New Name",
+        }
         user = find_or_create_local_user(iam_user)
 
         assert user.display_name == "New Name"
@@ -122,7 +130,9 @@ class TestSyncIamRoles:
         ]
         sync_iam_roles(user, permissions)
 
-        updated = UserTenantRole.query.filter_by(user_id=user.id, tenant_id=seed_tenant.id).first()
+        updated = UserTenantRole.query.filter_by(
+            user_id=user.id, tenant_id=seed_tenant.id
+        ).first()
         assert updated.role == "admin"
 
     def test_downgrade_existing_role(self, client, db, seed_tenant):
@@ -145,7 +155,9 @@ class TestSyncIamRoles:
         ]
         sync_iam_roles(user, permissions)
 
-        updated = UserTenantRole.query.filter_by(user_id=user.id, tenant_id=seed_tenant.id).first()
+        updated = UserTenantRole.query.filter_by(
+            user_id=user.id, tenant_id=seed_tenant.id
+        ).first()
         assert updated.role == "viewer"
 
     def test_preserve_local_only_roles(self, client, db, seed_tenant):
@@ -269,24 +281,30 @@ class TestNormalizePermissions:
         assert _normalize_permissions({"app": "leadgen"}) == []
 
     def test_valid_permission_passes_through(self):
-        result = _normalize_permissions([{"app": "leadgen", "role": "admin", "scope": "*"}])
+        result = _normalize_permissions(
+            [{"app": "leadgen", "role": "admin", "scope": "*"}]
+        )
         assert len(result) == 1
         assert result[0] == {"app": "leadgen", "role": "admin", "scope": "*"}
 
     def test_string_entries_skipped(self):
         """If some entries are strings (e.g., 'leadgen:admin:*'), skip them."""
-        result = _normalize_permissions([
-            "leadgen:admin:*",
-            {"app": "leadgen", "role": "viewer", "scope": "test"},
-        ])
+        result = _normalize_permissions(
+            [
+                "leadgen:admin:*",
+                {"app": "leadgen", "role": "viewer", "scope": "test"},
+            ]
+        )
         assert len(result) == 1
         assert result[0]["role"] == "viewer"
 
     def test_non_string_values_coerced(self):
         """Numeric or boolean values for scope/role get coerced to strings."""
-        result = _normalize_permissions([
-            {"app": "leadgen", "role": 1, "scope": True},
-        ])
+        result = _normalize_permissions(
+            [
+                {"app": "leadgen", "role": 1, "scope": True},
+            ]
+        )
         assert result[0]["role"] == "1"
         assert result[0]["scope"] == "True"
 
@@ -297,9 +315,11 @@ class TestNormalizePermissions:
 
     def test_list_scope_coerced_to_string(self):
         """If scope is a list (e.g., ['visionvolve']), coerce to string."""
-        result = _normalize_permissions([
-            {"app": "leadgen", "role": "admin", "scope": ["visionvolve"]},
-        ])
+        result = _normalize_permissions(
+            [
+                {"app": "leadgen", "role": "admin", "scope": ["visionvolve"]},
+            ]
+        )
         assert result[0]["scope"] == "['visionvolve']"
 
 
@@ -397,8 +417,12 @@ class TestSyncIamRolesResilience:
         db.session.flush()
 
         # Pre-existing roles on both tenants
-        db.session.add(UserTenantRole(user_id=user.id, tenant_id=seed_tenant.id, role="admin"))
-        db.session.add(UserTenantRole(user_id=user.id, tenant_id=other_tenant.id, role="admin"))
+        db.session.add(
+            UserTenantRole(user_id=user.id, tenant_id=seed_tenant.id, role="admin")
+        )
+        db.session.add(
+            UserTenantRole(user_id=user.id, tenant_id=other_tenant.id, role="admin")
+        )
         db.session.commit()
 
         # IAM only mentions seed_tenant — other-corp should NOT be removed
@@ -422,7 +446,9 @@ class TestSyncIamRolesResilience:
         )
         db.session.add(user)
         db.session.flush()
-        db.session.add(UserTenantRole(user_id=user.id, tenant_id=seed_tenant.id, role="admin"))
+        db.session.add(
+            UserTenantRole(user_id=user.id, tenant_id=seed_tenant.id, role="admin")
+        )
         db.session.commit()
 
         permissions = [
