@@ -370,6 +370,28 @@ export function CompaniesPage() {
             onClick: () => setShowTagPicker(true),
             loading: bulkAddTags.isPending,
           },
+          {
+            label: 'Enrich Selected',
+            icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M5.5 1v4.5H3L7 10l4-4.5H8.5V1h-3z" /><path d="M2 12h10" /></svg>,
+            onClick: () => {
+              if (selectionMode === 'all-matching') {
+                const encoded = btoa(JSON.stringify(activeFilters))
+                navigate(`/${namespace}/enrich?entity_type=company&filters=${encoded}`)
+              } else {
+                const ids = Array.from(selectedIds)
+                if (ids.length > 100) {
+                  const key = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                  sessionStorage.setItem(`enrich_selection_${key}`, JSON.stringify({
+                    entity_type: 'company',
+                    ids,
+                  }))
+                  navigate(`/${namespace}/enrich?selection=${key}`)
+                } else {
+                  navigate(`/${namespace}/enrich?companies=${ids.join(',')}`)
+                }
+              }
+            },
+          },
         ]}
         onDeselectAll={handleDeselectAll}
       />
