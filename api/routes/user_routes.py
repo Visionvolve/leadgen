@@ -1,7 +1,11 @@
+import logging
+
 from flask import Blueprint, g, jsonify, request
 
 from ..auth import require_role
 from ..models import Tenant, User, UserTenantRole, db
+
+logger = logging.getLogger(__name__)
 
 users_bp = Blueprint("users", __name__, url_prefix="/api/users")
 
@@ -45,14 +49,45 @@ def create_user():
     tenant_id = data.get("tenant_id")
     role = data.get("role", "viewer")
 
-    if not email or not display_name:
-        return jsonify({"error": "email and display_name required"}), 400
+    if not email:
+        return jsonify({"error": "email is required"}), 400
 
     if role not in ("admin", "editor", "viewer"):
         return jsonify({"error": "Invalid role"}), 400
 
-    if User.query.filter_by(email=email).first():
-        return jsonify({"error": "Email already registered"}), 409
+    existing_user = User.query.filter_by(email=email).first()
+
+    if existing_user:
+        # User exists — grant access to the target tenant instead of rejecting
+        if not tenant_id:
+            return jsonify({"error": "Email already registered"}), 409
+
+        tenant = db.session.get(Tenant, tenant_id)
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
+
+        existing_role = UserTenantRole.query.filter_by(
+            user_id=existing_user.id, tenant_id=tenant_id
+        ).first()
+        if existing_role:
+            return jsonify({"error": "User already has access to this namespace"}), 409
+
+        utr = UserTenantRole(
+            user_id=existing_user.id,
+            tenant_id=tenant_id,
+            role=role,
+            granted_by=g.current_user.id,
+        )
+        db.session.add(utr)
+        db.session.commit()
+
+        # Ensure user exists in IAM (fire-and-forget)
+        _sync_user_to_iam(existing_user.email, existing_user.display_name, tenant, role)
+
+        return jsonify(existing_user.to_dict(include_roles=True)), 201
+
+    if not display_name:
+        return jsonify({"error": "email and display_name required"}), 400
 
     user = User(
         email=email,
@@ -63,6 +98,7 @@ def create_user():
     db.session.add(user)
     db.session.flush()
 
+    tenant = None
     if tenant_id:
         tenant = db.session.get(Tenant, tenant_id)
         if not tenant:
@@ -78,7 +114,25 @@ def create_user():
         db.session.add(utr)
 
     db.session.commit()
+
+    # Create user in IAM and grant basic leadgen access
+    _sync_user_to_iam(email, display_name, tenant, role)
+
     return jsonify(user.to_dict(include_roles=True)), 201
+
+
+def _sync_user_to_iam(email, display_name, tenant=None, role="viewer"):
+    """Best-effort sync: create user in IAM and log result. Never raises."""
+    try:
+        from ..services.iam_client import ensure_iam_user, grant_iam_access
+
+        result = ensure_iam_user(email, display_name)
+        if result and result.get("user"):
+            iam_user_id = result["user"]["id"]
+            scope = tenant.slug if tenant else None
+            grant_iam_access(iam_user_id, app="leadgen", role=role, scope=scope)
+    except Exception:
+        logger.warning("IAM sync failed for %s (non-fatal)", email, exc_info=True)
 
 
 @users_bp.route("/<user_id>", methods=["PUT"])

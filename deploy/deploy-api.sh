@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# DEPRECATED: Production deploys via GitHub Actions (merge to main).
+# This script is for emergency manual deploys only.
+#
 # Deploy the leadgen API to VPS
 # Usage: bash deploy/deploy-api.sh
 

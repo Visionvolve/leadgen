@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# DEPRECATED: Production deploys via GitHub Actions (merge to main).
+# This script is for emergency manual deploys only.
+#
 # Deploy the dashboard to VPS (React SPA only + standalone roadmap.html)
 # Usage: bash deploy/deploy-dashboard.sh
 

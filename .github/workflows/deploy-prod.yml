@@ -1,4 +1,4 @@
-name: Build Production Image
+name: Deploy to Production
 
 on:
   push:
@@ -9,7 +9,7 @@ env:
   IMAGE_NAME: ghcr.io/michallicko/leadgen-pipeline
 
 jobs:
-  build-and-push:
+  build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -46,3 +46,51 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:prod-${{ github.sha }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+          ssh-keyscan -H 52.58.119.191 >> ~/.ssh/known_hosts
+
+      - name: Upload frontend build
+        run: |
+          ssh -i ~/.ssh/prod.pem ec2-user@52.58.119.191 "mkdir -p /home/ec2-user/n8n-docker-caddy/dashboard/assets"
+          scp -i ~/.ssh/prod.pem -r frontend/dist/* ec2-user@52.58.119.191:/home/ec2-user/n8n-docker-caddy/dashboard/
+          if [ -f dashboard/roadmap.html ]; then
+            scp -i ~/.ssh/prod.pem dashboard/roadmap.html ec2-user@52.58.119.191:/home/ec2-user/n8n-docker-caddy/dashboard/
+          fi
+
+      - name: Deploy API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          ssh -i ~/.ssh/prod.pem ec2-user@52.58.119.191 "
+            echo '${GH_TOKEN}' | docker login ghcr.io -u '${GH_ACTOR}' --password-stdin
+            cd /home/ec2-user/n8n-docker-caddy
+            COMPOSE_FILES='-f docker-compose.yml -f docker-compose.mcp.yml -f docker-compose.airtable-mcp.yml -f docker-compose.dashboard.yml -f docker-compose.api.yml -f docker-compose.ds.yml'
+            docker compose \$COMPOSE_FILES pull leadgen-api
+            docker compose \$COMPOSE_FILES up -d --no-deps leadgen-api
+            docker system prune -f --filter 'until=1h'
+          "
+
+      - name: Health check
+        run: |
+          echo "Waiting 15s for container startup..."
+          sleep 15
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://leadgen.visionvolve.com/api/health)
+            echo "Health check attempt $attempt/3: HTTP $code"
+            if [[ "$code" =~ ^[23] ]]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Retrying in 5s..."
+              sleep 5
+            fi
+          done
+          echo "::error::Health check failed after 3 attempts (last status: $code)"
+          exit 1
