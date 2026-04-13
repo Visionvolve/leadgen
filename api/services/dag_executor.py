@@ -246,9 +246,22 @@ def build_eligibility_query(
     # Entity ID filter
     if entity_ids:
         eid_placeholders = ", ".join(f":eid_{i}" for i in range(len(entity_ids)))
-        where_clauses.append(f"{id_col} IN ({eid_placeholders})")
         for i, eid in enumerate(entity_ids):
             params[f"eid_{i}"] = str(eid)
+
+        if entity_type == "company":
+            # entity_ids may be company UUIDs or contact UUIDs (when user
+            # selects contacts for enrichment).  Match directly OR resolve
+            # contact UUIDs -> company_id so company stages find rows.
+            where_clauses.append(
+                f"({id_col} IN ({eid_placeholders})"
+                f" OR {id_col} IN ("
+                f"SELECT DISTINCT c_res.company_id FROM contacts c_res"
+                f" WHERE c_res.id IN ({eid_placeholders})"
+                f" AND c_res.company_id IS NOT NULL))"
+            )
+        else:
+            where_clauses.append(f"{id_col} IN ({eid_placeholders})")
 
     # Re-enrich horizon: allow entities whose last completion is older than horizon
     if re_enrich_horizon:
@@ -429,9 +442,22 @@ def count_eligible_for_estimate(
     # Entity ID filter
     if entity_ids:
         eid_placeholders = ", ".join(f":eid_{i}" for i in range(len(entity_ids)))
-        where_clauses.append(f"{id_col} IN ({eid_placeholders})")
         for i, eid in enumerate(entity_ids):
             params[f"eid_{i}"] = str(eid)
+
+        if entity_type == "company":
+            # entity_ids may be company UUIDs or contact UUIDs (when user
+            # selects contacts for enrichment).  Match directly OR resolve
+            # contact UUIDs -> company_id so company stages find rows.
+            where_clauses.append(
+                f"({id_col} IN ({eid_placeholders})"
+                f" OR {id_col} IN ("
+                f"SELECT DISTINCT c_res.company_id FROM contacts c_res"
+                f" WHERE c_res.id IN ({eid_placeholders})"
+                f" AND c_res.company_id IS NOT NULL))"
+            )
+        else:
+            where_clauses.append(f"{id_col} IN ({eid_placeholders})")
 
     # Re-enrich horizon: exclude entities with recent completions
     if re_enrich_horizon:
