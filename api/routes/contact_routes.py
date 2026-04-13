@@ -122,10 +122,12 @@ def create_contact():
         "department",
         "phone_number",
         "notes",
+        "address_style",
     }
 
     # Enum validation
     enum_validators = {
+        "address_style": {"tykat", "vykat"},
         "seniority_level": {
             "c_level",
             "vp",
@@ -785,6 +787,7 @@ def update_contact(contact_id):
         "email_address",
         "job_title",
         "phone_number",
+        "address_style",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
 
@@ -861,6 +864,7 @@ def update_contact(contact_id):
             "partner",
             "internal",
         },
+        "address_style": {"tykat", "vykat"},
     }
     for field, value in fields.items():
         if (
