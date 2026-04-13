@@ -434,6 +434,7 @@ def list_contacts():
                 ct.ai_champion_score, ct.authority_score,
                 ct.linkedin_activity_level, ct.language,
                 ct.contact_source,
+                ct.address_style,
                 co.tier AS company_tier,
                 co.status AS company_status_raw,
                 ct.processed_enrich,
@@ -505,8 +506,8 @@ def list_contacts():
         raw_ai_champion = int(r[17]) if r[17] is not None else None
         raw_authority = int(r[18]) if r[18] is not None else None
         has_enrichment = enrich_map.get(cid, False)
-        processed = bool(r[24]) if r[24] is not None else False
-        last_enriched = r[25]
+        processed = bool(r[25]) if r[25] is not None else False
+        last_enriched = r[26]
         contacts.append(
             {
                 "id": cid,
@@ -537,9 +538,10 @@ def list_contacts():
                 "linkedin_activity_level": display_linkedin_activity(r[19]),
                 "language": display_language(r[20]),
                 "contact_source": display_contact_source(r[21]),
-                "company_tier": display_tier(r[22]),
-                "company_status": display_status(r[23])
-                if r[23]
+                "address_style": r[22],
+                "company_tier": display_tier(r[23]),
+                "company_status": display_status(r[24])
+                if r[24]
                 else None,  # co.status raw
                 "enrichment_status": _enrichment_status(
                     processed, has_enrichment, last_enriched
