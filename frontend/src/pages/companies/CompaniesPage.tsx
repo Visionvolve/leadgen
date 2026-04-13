@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
+import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
 import { useCompanies, type CompanyFilters } from '../../api/queries/useCompanies'
@@ -73,6 +74,9 @@ export function CompaniesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('explicit')
   const [showTagPicker, setShowTagPicker] = useState(false)
+
+  // Inline editing
+  const inlineEdit = useInlineEdit('company')
 
   const { data: tagsData } = useTags()
   const bulkAddTags = useBulkAddTags()
@@ -294,6 +298,8 @@ export function CompaniesPage() {
         selectedIds={selectedIds}
         onSelectionChange={handleSelectionChange}
         totalMatching={total}
+        onCellEdit={(item, field, value) => inlineEdit.save(item.id, field, value)}
+        cellStates={inlineEdit.cellStates}
       />
 
       <SelectionActionBar

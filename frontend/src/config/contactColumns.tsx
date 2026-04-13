@@ -3,6 +3,14 @@ import { Badge } from '../components/ui/Badge'
 import type { ContactListItem } from '../api/queries/useContacts'
 import { defineColumns } from './columns'
 import { renderTagBadges } from './tagBadges'
+import {
+  ICP_FIT_DISPLAY, ICP_FIT_REVERSE,
+  SENIORITY_DISPLAY, SENIORITY_REVERSE,
+  DEPARTMENT_DISPLAY, DEPARTMENT_REVERSE,
+  MESSAGE_STATUS_DISPLAY, MESSAGE_STATUS_REVERSE,
+  LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
+  CONTACT_SOURCE_DISPLAY, CONTACT_SOURCE_REVERSE,
+} from '../lib/display'
 
 /** All available contact columns with visibility defaults. */
 export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
@@ -19,12 +27,42 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     sortKey: 'job_title',
     minWidth: '120px',
     defaultVisible: true,
+    editable: true,
+    editType: 'text',
   },
   {
     key: 'company_name',
     label: 'Company',
     minWidth: '120px',
     defaultVisible: true,
+    render: (c) =>
+      c.company_name ? (
+        <span className="inline-flex items-center gap-1 min-w-0">
+          <span className="truncate">{c.company_name}</span>
+          {c.company_id && (
+            <a
+              href={`companies/${c.company_id}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                // Navigate via relative path — the page component handles routing
+                const ns = window.location.pathname.split('/')[1]
+                window.location.href = `/${ns}/companies/${c.company_id}`
+              }}
+              className="flex-shrink-0 text-text-dim hover:text-accent-cyan transition-colors"
+              title="Open company"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 9v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h4" />
+                <path d="M9 2h5v5" />
+                <path d="M14 2L7 9" />
+              </svg>
+            </a>
+          )}
+        </span>
+      ) : (
+        <span className="text-text-dim">-</span>
+      ),
   },
   {
     key: 'email_address',
@@ -32,6 +70,8 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     sortKey: 'email_address',
     minWidth: '140px',
     defaultVisible: true,
+    editable: true,
+    editType: 'text',
     render: (c) =>
       c.email_address ? (
         <a
@@ -51,6 +91,10 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     sortKey: 'seniority_level',
     minWidth: '90px',
     defaultVisible: true,
+    editable: true,
+    editType: 'select',
+    editOptions: SENIORITY_DISPLAY,
+    editReverse: SENIORITY_REVERSE,
   },
   {
     key: 'icp_fit',
@@ -59,6 +103,10 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     minWidth: '100px',
     shrink: false,
     defaultVisible: true,
+    editable: true,
+    editType: 'select',
+    editOptions: ICP_FIT_DISPLAY,
+    editReverse: ICP_FIT_REVERSE,
     render: (c) => <Badge variant="icp" value={c.icp_fit} />,
   },
   {
@@ -90,6 +138,10 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     minWidth: '100px',
     shrink: false,
     defaultVisible: true,
+    editable: true,
+    editType: 'select',
+    editOptions: MESSAGE_STATUS_DISPLAY,
+    editReverse: MESSAGE_STATUS_REVERSE,
     render: (c) => <Badge variant="msgStatus" value={c.message_status} />,
   },
   {
@@ -136,6 +188,10 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     sortKey: 'department',
     minWidth: '90px',
     defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: DEPARTMENT_DISPLAY,
+    editReverse: DEPARTMENT_REVERSE,
   },
   {
     key: 'location_city',
@@ -201,12 +257,20 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     label: 'Language',
     minWidth: '70px',
     defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: LANGUAGE_DISPLAY,
+    editReverse: LANGUAGE_REVERSE,
   },
   {
     key: 'contact_source',
     label: 'Source',
     minWidth: '70px',
     defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: CONTACT_SOURCE_DISPLAY,
+    editReverse: CONTACT_SOURCE_REVERSE,
   },
   {
     key: 'company_status',

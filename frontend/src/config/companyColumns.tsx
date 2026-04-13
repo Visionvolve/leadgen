@@ -3,6 +3,12 @@ import { Badge } from '../components/ui/Badge'
 import type { CompanyListItem } from '../api/queries/useCompanies'
 import { defineColumns } from './columns'
 import { renderTagBadges } from './tagBadges'
+import {
+  TIER_DISPLAY, TIER_REVERSE,
+  STATUS_DISPLAY, STATUS_REVERSE,
+  BUYING_STAGE_DISPLAY, BUYING_STAGE_REVERSE,
+  ENGAGEMENT_STATUS_DISPLAY, ENGAGEMENT_STATUS_REVERSE,
+} from '../lib/display'
 
 /** Enrichment stage dot/icon colors */
 const STAGE_DOT: Record<string, { dot: string; label: string }> = {
@@ -23,6 +29,8 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     sortKey: 'name',
     minWidth: '140px',
     defaultVisible: true,
+    editable: true,
+    editType: 'text',
   },
   {
     key: 'domain',
@@ -30,6 +38,8 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     sortKey: 'domain',
     minWidth: '100px',
     defaultVisible: true,
+    editable: true,
+    editType: 'text',
     render: (c) =>
       c.domain ? (
         <a
@@ -88,6 +98,10 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     minWidth: '110px',
     shrink: false,
     defaultVisible: true,
+    editable: true,
+    editType: 'select',
+    editOptions: TIER_DISPLAY,
+    editReverse: TIER_REVERSE,
     render: (c) => <Badge variant="tier" value={c.tier} />,
   },
   {
@@ -130,6 +144,10 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     minWidth: '110px',
     shrink: false,
     defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: STATUS_DISPLAY,
+    editReverse: STATUS_REVERSE,
     render: (c) => <Badge variant="status" value={c.status} />,
   },
   {
@@ -184,12 +202,20 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     label: 'Buying Stage',
     minWidth: '100px',
     defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: BUYING_STAGE_DISPLAY,
+    editReverse: BUYING_STAGE_REVERSE,
   },
   {
     key: 'engagement_status',
     label: 'Engagement',
     minWidth: '90px',
     defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: ENGAGEMENT_STATUS_DISPLAY,
+    editReverse: ENGAGEMENT_STATUS_REVERSE,
   },
   {
     key: 'ai_adoption',

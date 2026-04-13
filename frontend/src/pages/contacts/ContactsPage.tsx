@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
+import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
 import { useContacts, type ContactFilters } from '../../api/queries/useContacts'
@@ -20,6 +21,10 @@ import { ChatFilterSyncBar } from '../../components/ui/ChatFilterSyncBar'
 import { ContactsEmptyState } from '../../components/onboarding/SmartEmptyState'
 import { EntrySignpost } from '../../components/onboarding/EntrySignpost'
 import { useToast } from '../../components/ui/Toast'
+import { useCampaigns } from '../../api/queries/useCampaigns'
+import { useCampaignColumns } from '../../hooks/useCampaignColumns'
+import { useCampaignMemberships } from '../../hooks/useCampaignMemberships'
+import { buildCampaignColumns } from '../../config/campaignColumnBuilder'
 import { CONTACT_COLUMNS, CONTACT_ALWAYS_VISIBLE } from '../../config/contactColumns'
 import {
   ICP_FIT_DISPLAY,
@@ -91,11 +96,27 @@ export function ContactsPage() {
     CONTACT_COLUMNS,
   )
 
+  // Campaign columns
+  const { data: campaignsData } = useCampaigns()
+  const { campaignColumnIds, toggle: toggleCampaignColumn } = useCampaignColumns(namespace)
+  const { membershipMap, toggle: toggleMembership } = useCampaignMemberships(campaignColumnIds)
+  const activeCampaigns = useMemo(
+    () => (campaignsData?.campaigns ?? []).filter((c) => campaignColumnIds.includes(c.id)),
+    [campaignsData, campaignColumnIds],
+  )
+  const campaignCols = useMemo(
+    () => buildCampaignColumns(activeCampaigns, membershipMap, toggleMembership),
+    [activeCampaigns, membershipMap, toggleMembership],
+  )
+
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('explicit')
   const [showTagPicker, setShowTagPicker] = useState(false)
   const [showCampaignModal, setShowCampaignModal] = useState(false)
+
+  // Inline editing
+  const inlineEdit = useInlineEdit('contact')
 
   const { data: tagsData } = useTags()
   const { data: onboardingStatus } = useOnboardingStatus()
@@ -210,12 +231,12 @@ export function ContactsPage() {
     ? (matchingCount.data?.count ?? total)
     : selectedIds.size
 
-  // Filter columns by visibility
+  // Filter columns by visibility + append campaign columns
   const visibleSet = new Set(visibleKeys)
   const columns = useMemo(
-    () => CONTACT_COLUMNS.filter((c) => visibleSet.has(c.key)),
+    () => [...CONTACT_COLUMNS.filter((c) => visibleSet.has(c.key)), ...campaignCols],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleKeys],
+    [visibleKeys, campaignCols],
   )
 
   const facets = countsData?.facets
@@ -408,6 +429,9 @@ export function ContactsPage() {
               onChange={setVisibleKeys}
               onReset={resetColumns}
               alwaysVisible={CONTACT_ALWAYS_VISIBLE}
+              campaigns={(campaignsData?.campaigns ?? []).map((c) => ({ id: c.id, name: c.name }))}
+              activeCampaignIds={campaignColumnIds}
+              onToggleCampaign={toggleCampaignColumn}
             />
           </div>
         </div>
@@ -434,6 +458,8 @@ export function ContactsPage() {
           selectedIds={selectedIds}
           onSelectionChange={handleSelectionChange}
           totalMatching={total}
+          onCellEdit={(item, field, value) => inlineEdit.save(item.id, field, value)}
+          cellStates={inlineEdit.cellStates}
         />
       </div>
 

@@ -1,12 +1,23 @@
 import { useState, useRef, useEffect } from 'react'
 import type { ColumnDef } from '../../config/columns'
 
+interface CampaignColumnOption {
+  id: string
+  name: string
+}
+
 interface ColumnPickerProps<T> {
   allColumns: ColumnDef<T>[]
   visibleKeys: string[]
   onChange: (keys: string[]) => void
   onReset: () => void
   alwaysVisible?: string[]
+  /** Campaign columns section — available campaigns with toggle state */
+  campaigns?: CampaignColumnOption[]
+  /** Which campaign IDs are currently shown as columns */
+  activeCampaignIds?: string[]
+  /** Toggle a campaign column on/off */
+  onToggleCampaign?: (id: string) => void
 }
 
 export function ColumnPicker<T>({
@@ -15,6 +26,9 @@ export function ColumnPicker<T>({
   onChange,
   onReset,
   alwaysVisible = [],
+  campaigns,
+  activeCampaignIds,
+  onToggleCampaign,
 }: ColumnPickerProps<T>) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -105,6 +119,33 @@ export function ColumnPicker<T>({
               </label>
             )
           })}
+          {/* Campaign columns section */}
+          {campaigns && campaigns.length > 0 && onToggleCampaign && (
+            <>
+              <div className="px-3 py-1.5 text-xs font-medium text-text-muted border-t border-border/30 mt-1">
+                Campaign Columns
+              </div>
+              {campaigns.map((campaign) => {
+                const isActive = activeCampaignIds?.includes(campaign.id) ?? false
+                return (
+                  <label
+                    key={campaign.id}
+                    className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-surface-alt/50 ${
+                      isActive ? 'text-text' : 'text-text-muted'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isActive}
+                      onChange={() => onToggleCampaign(campaign.id)}
+                      className="w-3.5 h-3.5 accent-accent cursor-pointer"
+                    />
+                    <span className="truncate">{campaign.name}</span>
+                  </label>
+                )
+              })}
+            </>
+          )}
           {isCustomised && (
             <div className="border-t border-border/30 mt-1 pt-1">
               <button
