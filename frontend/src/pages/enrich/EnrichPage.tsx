@@ -54,6 +54,10 @@ export function EnrichPage() {
     toggleReEnrich,
     setFreshness,
     reEnrichPayload,
+    reEnrichAll,
+    reEnrichAllHorizon,
+    handleReEnrichAllToggle,
+    handleReEnrichAllHorizon,
     boostStages,
     toggleBoost,
     boostPayload,
@@ -243,9 +247,49 @@ export function EnrichPage() {
           {/* Estimate summary */}
           {selectionSummary && (
             <div className="mt-2 px-4 text-xs text-text-muted">
-              {selectionSummary.eligible} need enrichment
-              {selectionSummary.skipped > 0 && (
-                <>, {selectionSummary.skipped} already enriched (will be skipped)</>
+              {reEnrichAll ? (
+                <>
+                  {selectionSummary.total} selected
+                  {selectionSummary.skipped > 0 && (
+                    <> ({selectionSummary.eligible} new + {selectionSummary.skipped} re-enrich)</>
+                  )}
+                </>
+              ) : (
+                <>
+                  {selectionSummary.eligible} need enrichment
+                  {selectionSummary.skipped > 0 && (
+                    <>, {selectionSummary.skipped} already enriched (will be skipped)</>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Re-enrich all toggle */}
+          {dagMode === 'configure' && (
+            <div className="mt-2 px-4 flex items-center gap-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={reEnrichAll}
+                  onChange={(e) => handleReEnrichAllToggle(e.target.checked)}
+                  className="rounded border-border text-accent focus:ring-accent/30 h-3.5 w-3.5"
+                />
+                <span className="text-xs font-medium text-text">Re-enrich all</span>
+              </label>
+              {reEnrichAll && (
+                <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                  Only if older than
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={reEnrichAllHorizon}
+                    onChange={(e) => handleReEnrichAllHorizon(Math.max(1, Number(e.target.value) || 90))}
+                    className="w-14 px-1.5 py-0.5 text-xs rounded border border-border bg-surface text-text text-center focus:outline-none focus:ring-1 focus:ring-accent/30"
+                  />
+                  days
+                </span>
               )}
             </div>
           )}

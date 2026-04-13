@@ -55,6 +55,10 @@ export function useEnrichState() {
   // Re-enrich config per stage
   const [reEnrichConfig, setReEnrichConfig] = useState<Record<string, ReEnrichConfig>>({})
 
+  // Re-enrich all toggle (selected entities mode)
+  const [reEnrichAll, setReEnrichAll] = useState(false)
+  const [reEnrichAllHorizon, setReEnrichAllHorizon] = useState(90)
+
   // Boost mode per stage
   const [boostStages, setBoostStages] = useLocalStorage<Record<string, boolean>>(
     nsKey('boost_stages'),
@@ -72,6 +76,7 @@ export function useEnrichState() {
     setPrevNs(ns)
     setDagMode('configure')
     setReEnrichConfig({})
+    setReEnrichAll(false)
     setPipelineRunId(null)
   }
 
@@ -193,6 +198,42 @@ export function useEnrichState() {
     [],
   )
 
+  // Re-enrich all: bulk toggle for selected entities mode
+  const handleReEnrichAllToggle = useCallback(
+    (enabled: boolean) => {
+      setReEnrichAll(enabled)
+      const horizonStr = String(reEnrichAllHorizon)
+      setReEnrichConfig((prev) => {
+        const next = { ...prev }
+        for (const code of Object.keys(enabledStages)) {
+          if (enabledStages[code]) {
+            next[code] = { enabled, horizon: enabled ? horizonStr : null }
+          }
+        }
+        return next
+      })
+    },
+    [enabledStages, reEnrichAllHorizon],
+  )
+
+  const handleReEnrichAllHorizon = useCallback(
+    (days: number) => {
+      setReEnrichAllHorizon(days)
+      if (!reEnrichAll) return
+      const horizonStr = String(days)
+      setReEnrichConfig((prev) => {
+        const next = { ...prev }
+        for (const code of Object.keys(enabledStages)) {
+          if (enabledStages[code]) {
+            next[code] = { ...next[code], enabled: true, horizon: horizonStr }
+          }
+        }
+        return next
+      })
+    },
+    [enabledStages, reEnrichAll],
+  )
+
   // Boost toggle handler
   const toggleBoost = useCallback(
     (stageCode: string, enabled: boolean) => {
@@ -272,6 +313,12 @@ export function useEnrichState() {
     toggleReEnrich,
     setFreshness,
     reEnrichPayload,
+
+    // Re-enrich all (selected entities mode)
+    reEnrichAll,
+    reEnrichAllHorizon,
+    handleReEnrichAllToggle,
+    handleReEnrichAllHorizon,
 
     // Boost
     boostStages,
