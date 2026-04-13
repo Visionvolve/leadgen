@@ -28,7 +28,15 @@ export function CreateCompanyModal({ onClose, onSuccess }: CreateCompanyModalPro
   const handleSubmit = async () => {
     if (!canSubmit) return
     try {
-      const body: Record<string, string> = { name: name.trim() }
+      const body: {
+        name: string
+        domain?: string
+        website_url?: string
+        industry?: string
+        company_size?: string
+        geo_region?: string
+        notes?: string
+      } = { name: name.trim() }
       if (domain.trim()) body.domain = domain.trim()
       if (websiteUrl.trim()) body.website_url = websiteUrl.trim()
       if (industry) body.industry = industry
