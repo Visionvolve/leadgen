@@ -272,7 +272,7 @@ export function DataTable<T extends { id?: string }>({
             return (
               <tr
                 key={item.id ?? globalIndex}
-                className={`border-b border-border/30 ${isSelected ? 'bg-accent/5' : ''} ${onRowClick ? 'cursor-pointer hover:bg-surface-alt/50' : selectable ? 'hover:bg-surface-alt/30' : ''}`}
+                className={`border-b border-border/30 ${isSelected ? 'bg-accent/5' : ''} ${!onCellEdit && onRowClick ? 'cursor-pointer hover:bg-surface-alt/50' : selectable ? 'hover:bg-surface-alt/30' : ''}`}
                 style={{ height: ROW_HEIGHT }}
               >
                 {selectable && (
@@ -316,19 +316,19 @@ export function DataTable<T extends { id?: string }>({
                           reverseMap={colDef.editReverse}
                           onSave={(newValue) => onCellEdit(item, editField, newValue)}
                           cellStatus={cellStatus}
-                          onRowClick={() => onRowClick?.(item)}
                         />
                       </td>
                     )
                   }
 
+                  // When inline editing is active, navigation is via name column render.
+                  // When no inline editing (e.g. CampaignsPage), onRowClick applies.
+                  const useRowClick = !onCellEdit && onRowClick
                   return (
                     <td
                       key={col.key}
-                      onClick={() => {
-                        onRowClick?.(item)
-                      }}
-                      className={`px-3 py-0 text-text ${col.shrink !== false ? 'truncate' : ''} ${onRowClick ? 'cursor-pointer' : ''}`}
+                      onClick={useRowClick ? () => onRowClick(item) : undefined}
+                      className={`px-3 py-0 text-text ${col.shrink !== false ? 'truncate' : ''} ${useRowClick ? 'cursor-pointer' : ''}`}
                       style={{
                         maxWidth: col.width ?? '200px',
                         minWidth: col.minWidth,

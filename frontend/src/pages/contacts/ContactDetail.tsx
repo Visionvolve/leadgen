@@ -21,6 +21,7 @@ import {
   LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
   MESSAGE_STATUS_REVERSE,
   filterOptions,
+  formatPhone,
 } from '../../lib/display'
 
 /** Renders a markdown string with proper heading/bold/list formatting. */
@@ -125,7 +126,7 @@ export function ContactDetail({ contact, onNavigate }: Props) {
         <SectionDivider title="Contact Info" />
         <FieldGrid cols={3}>
           <FieldLink label="Email" value={contact.email_address} href={contact.email_address ? `mailto:${contact.email_address}` : null} />
-          <Field label="Phone" value={contact.phone_number} />
+          <FieldLink label="Phone" value={formatPhone(contact.phone_number)} href={contact.phone_number ? `tel:${contact.phone_number}` : null} />
           <Field label="City" value={contact.location_city} />
           <Field label="Country" value={contact.location_country} />
           <Field label="Employment Status" value={contact.employment_status} />

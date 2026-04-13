@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
@@ -83,6 +83,16 @@ export function CompaniesPage() {
   const { data: tagsData } = useTags()
   const bulkAddTags = useBulkAddTags()
   const matchingCount = useCompaniesMatchingCount()
+
+  // Listen for custom navigation events from column renderers
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent<string>).detail
+      if (path) navigate(withRev(path), { state: { origin: withRev(`/${namespace}/companies`) } })
+    }
+    window.addEventListener('leadgen:navigate', handler)
+    return () => window.removeEventListener('leadgen:navigate', handler)
+  }, [navigate, namespace])
 
   // Build CompanyFilters from advanced state + sort
   const filters: CompanyFilters = useMemo(() => ({
@@ -301,7 +311,6 @@ export function CompaniesPage() {
         data={allCompanies}
         sort={{ field: sortField, dir: sortDir }}
         onSort={handleSort}
-        onRowClick={(c) => navigate(withRev(`/${namespace}/companies/${c.id}`), { state: { origin: withRev(`/${namespace}/companies`) } })}
         onLoadMore={() => fetchNextPage()}
         hasMore={hasNextPage}
         isLoading={isLoading || isFetchingNextPage}

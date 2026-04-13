@@ -19,6 +19,7 @@ from googleapiclient.discovery import build
 
 from ..models import ImportJob, OAuthConnection, db
 from .google_oauth import get_valid_token
+from .phone_normalize import normalize_phone
 
 logger = logging.getLogger(__name__)
 
@@ -443,7 +444,7 @@ class GmailScanner:
             if c.get("job_title"):
                 contact_data["job_title"] = c["job_title"]
             if c.get("phone"):
-                contact_data["phone_number"] = c["phone"]
+                contact_data["phone_number"] = normalize_phone(c["phone"])
             if c.get("linkedin_url"):
                 contact_data["linkedin_url"] = c["linkedin_url"]
 

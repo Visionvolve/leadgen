@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from ..models import db
 from .perplexity_client import PerplexityClient
+from .phone_normalize import normalize_phone
 from .stage_registry import get_model_for_stage
 
 try:
@@ -318,8 +319,10 @@ def _update_contact_details(contact_id, existing, research_data):
     # Phone — only if currently empty
     new_phone = research_data.get("phone_number")
     if new_phone and new_phone != "null" and not existing.get("phone"):
-        updates["phone_number"] = ":phone_number"
-        params["phone_number"] = new_phone
+        normalized = normalize_phone(new_phone)
+        if normalized:
+            updates["phone_number"] = ":phone_number"
+            params["phone_number"] = normalized
 
     # LinkedIn — update if found and existing is empty or lower confidence
     new_linkedin = research_data.get("linkedin_url")

@@ -10,6 +10,7 @@ import {
   MESSAGE_STATUS_DISPLAY, MESSAGE_STATUS_REVERSE,
   LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
   CONTACT_SOURCE_DISPLAY, CONTACT_SOURCE_REVERSE,
+  formatPhone,
 } from '../lib/display'
 
 /** All available contact columns with visibility defaults. */
@@ -20,6 +21,21 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     sortKey: 'last_name',
     minWidth: '130px',
     defaultVisible: true,
+    render: (c) => {
+      const ns = window.location.pathname.split('/')[1]
+      return (
+        <a
+          href={`/${ns}/contacts/${c.id}`}
+          onClick={(e) => {
+            e.preventDefault()
+            window.dispatchEvent(new CustomEvent('leadgen:navigate', { detail: `/${ns}/contacts/${c.id}` }))
+          }}
+          className="text-accent-cyan hover:underline cursor-pointer truncate block"
+        >
+          {c.full_name || '-'}
+        </a>
+      )
+    },
   },
   {
     key: 'job_title',
@@ -230,6 +246,7 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     label: 'Phone',
     minWidth: '100px',
     defaultVisible: false,
+    render: (row) => formatPhone(row.phone_number) || '-',
   },
   {
     key: 'ai_champion_score',
