@@ -113,7 +113,7 @@ def bulk_add_tags():
         return jsonify({"error": "entity_type must be 'contact' or 'company'"}), 400
     if not tag_ids:
         return jsonify({"error": "tag_ids is required"}), 400
-    if not ids and not filters:
+    if not ids and filters is None:
         return jsonify({"error": "ids or filters required"}), 400
 
     # Validate tag_ids belong to tenant
@@ -202,7 +202,7 @@ def bulk_remove_tags():
         return jsonify({"error": "entity_type must be 'contact' or 'company'"}), 400
     if not tag_ids:
         return jsonify({"error": "tag_ids is required"}), 400
-    if not ids and not filters:
+    if not ids and filters is None:
         return jsonify({"error": "ids or filters required"}), 400
 
     # Get entity IDs
@@ -274,7 +274,7 @@ def bulk_assign_campaign():
         return jsonify({"error": "campaign_id is required"}), 400
     if entity_type != "contact":
         return jsonify({"error": "Only contacts can be assigned to campaigns"}), 400
-    if not ids and not filters:
+    if not ids and filters is None:
         return jsonify({"error": "ids or filters required"}), 400
 
     # Validate campaign belongs to tenant
