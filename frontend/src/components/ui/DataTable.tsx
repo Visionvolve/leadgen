@@ -313,6 +313,7 @@ export function DataTable<T extends { id?: string }>({
                           onSave={(newValue) => onCellEdit(item, editField, newValue)}
                           cellStatus={cellStatus}
                           checkboxLabel={colDef.checkboxLabel}
+                          checkboxUncheckedLabel={colDef.checkboxUncheckedLabel}
                           checkboxCheckedValue={colDef.checkboxCheckedValue}
                           checkboxUncheckedValue={colDef.checkboxUncheckedValue}
                         />

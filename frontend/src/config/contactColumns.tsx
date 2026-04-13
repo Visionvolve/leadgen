@@ -287,6 +287,7 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     editable: true,
     editType: 'checkbox',
     checkboxLabel: 'Tykání',
+    checkboxUncheckedLabel: 'Vykání',
     checkboxCheckedValue: 'tykat',
     checkboxUncheckedValue: 'vykat',
   },
