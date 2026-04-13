@@ -25,6 +25,7 @@ import { useToast } from '../../components/ui/Toast'
 import { useScrollRestore } from '../../hooks/useScrollRestore'
 import { useCampaigns } from '../../api/queries/useCampaigns'
 import { useCampaignColumns } from '../../hooks/useCampaignColumns'
+import { useShareView } from '../../hooks/useShareView'
 import { useCampaignMemberships } from '../../hooks/useCampaignMemberships'
 import { buildCampaignColumns } from '../../config/campaignColumnBuilder'
 import { CONTACT_COLUMNS, CONTACT_ALWAYS_VISIBLE } from '../../config/contactColumns'
@@ -73,8 +74,8 @@ export function ContactsPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
 
-  // Layout toggle: sidebar vs inline
-  const [sidebarLayout, setSidebarLayout] = useLocalStorage('ct_sidebar_layout', true)
+  // Sidebar collapse state (persisted)
+  const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorage('filters_sidebar_collapsed', false)
 
   // Advanced filters (persisted to localStorage)
   const {
@@ -83,6 +84,7 @@ export function ContactsPage() {
     setMultiFilter,
     toggleExclude,
     clearAll,
+    replaceAll,
     activeFilterCount,
     getMulti,
     toQueryParams,
@@ -100,7 +102,7 @@ export function ContactsPage() {
 
   // Campaign columns
   const { data: campaignsData } = useCampaigns()
-  const { campaignColumnIds, toggle: toggleCampaignColumn } = useCampaignColumns(namespace)
+  const { campaignColumnIds, toggle: toggleCampaignColumn, set: setCampaignColumnIds } = useCampaignColumns(namespace)
   const { membershipMap, toggle: toggleMembership } = useCampaignMemberships(campaignColumnIds)
   const activeCampaigns = useMemo(
     () => (campaignsData?.campaigns ?? []).filter((c) => campaignColumnIds.includes(c.id)),
@@ -110,6 +112,21 @@ export function ContactsPage() {
     () => buildCampaignColumns(activeCampaigns, membershipMap, toggleMembership),
     [activeCampaigns, membershipMap, toggleMembership],
   )
+
+  // Share view
+  const { shareView } = useShareView({
+    visibleKeys,
+    campaignColumnIds,
+    filters: advFilters,
+    sortField,
+    sortDir,
+    setVisibleKeys,
+    setCampaignColumnIds,
+    replaceAllFilters: replaceAll,
+    setSortField,
+    setSortDir,
+    toast,
+  })
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -402,16 +419,16 @@ export function ContactsPage() {
   return (
     <div className="flex h-full min-h-0">
       {/* Sidebar */}
-      {sidebarLayout && (
-        <FilterSidebar
-          groups={filterGroups}
-          activeFilterCount={activeFilterCount}
-          onClearAll={() => { clearAll(); handleDeselectAll() }}
-          search={(advFilters.search as string) || ''}
-          onSearchChange={(v) => handleFilterChange('search', v)}
-          headerSlot={headerSlot}
-        />
-      )}
+      <FilterSidebar
+        groups={filterGroups}
+        activeFilterCount={activeFilterCount}
+        onClearAll={() => { clearAll(); handleDeselectAll() }}
+        search={(advFilters.search as string) || ''}
+        onSearchChange={(v) => handleFilterChange('search', v)}
+        headerSlot={headerSlot}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
 
       {/* Main content */}
       <div className="flex-1 min-w-0 flex flex-col h-full min-h-0 px-3 py-2">
@@ -432,26 +449,19 @@ export function ContactsPage() {
               </svg>
               New Contact
             </button>
-            {/* Sidebar layout toggle */}
             <button
               type="button"
-              onClick={() => setSidebarLayout(!sidebarLayout)}
-              className="px-2 py-1.5 text-xs rounded-md border border-border-solid bg-surface-alt text-text-muted hover:text-text hover:border-accent transition-colors flex items-center gap-1.5"
-              title={sidebarLayout ? 'Hide filter sidebar' : 'Show filter sidebar'}
+              onClick={shareView}
+              className="px-2.5 py-1.5 text-xs rounded-md border border-border-solid bg-surface-alt text-text-muted hover:text-text hover:border-accent transition-colors flex items-center gap-1.5"
+              title="Copy a link that shares your current columns, filters, and sort with your team"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                {sidebarLayout ? (
-                  <><rect x="1" y="2" width="4" height="10" rx="1" /><path d="M7 4h6M7 7h6M7 10h4" /></>
-                ) : (
-                  <path d="M1.5 3.5h11M3.5 7h7M5.5 10.5h3" />
-                )}
+                <circle cx="3" cy="7" r="1.5" />
+                <circle cx="11" cy="3" r="1.5" />
+                <circle cx="11" cy="11" r="1.5" />
+                <path d="M4.5 6.2l5 -2.4M4.5 7.8l5 2.4" />
               </svg>
-              {sidebarLayout ? 'Hide Filters' : 'Filters'}
-              {!sidebarLayout && activeFilterCount > 0 && (
-                <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold rounded-full bg-accent-cyan text-bg">
-                  {activeFilterCount}
-                </span>
-              )}
+              Share View
             </button>
             <ColumnPicker
               allColumns={CONTACT_COLUMNS}

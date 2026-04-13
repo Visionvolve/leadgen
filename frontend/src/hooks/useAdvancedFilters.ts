@@ -130,6 +130,19 @@ export function useAdvancedFilters(storageKey: string, multiKeys: readonly strin
     setFilters(next)
   }, [storageKey, multiKeys])
 
+  /** Replace all filters at once (used by share-view import) */
+  const replaceAll = useCallback((newState: AdvancedFilterState) => {
+    // Ensure multi-keys have correct shape
+    const merged = { ...buildDefaultState(multiKeys), ...newState }
+    for (const key of multiKeys) {
+      if (!isMultiFilter(merged[key])) {
+        merged[key] = { values: [], exclude: false }
+      }
+    }
+    saveState(storageKey, merged)
+    setFilters(merged)
+  }, [storageKey, multiKeys])
+
   const activeFilterCount = useMemo(() => {
     let count = 0
     for (const key of multiKeys) {
@@ -186,6 +199,7 @@ export function useAdvancedFilters(storageKey: string, multiKeys: readonly strin
     toggleExclude,
     clearFilter,
     clearAll,
+    replaceAll,
     activeFilterCount,
     getMulti,
     toQueryParams,

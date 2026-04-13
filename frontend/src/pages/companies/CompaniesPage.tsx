@@ -9,10 +9,10 @@ import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useAdvancedFilters, COMPANY_MULTI_KEYS } from '../../hooks/useAdvancedFilters'
 import { useFilterCounts } from '../../hooks/useFilterCounts'
 import { useColumnVisibility } from '../../hooks/useColumnVisibility'
+import { useShareView } from '../../hooks/useShareView'
 import { DataTable, type SelectionMode } from '../../components/ui/DataTable'
-import { FilterBar, type FilterConfig } from '../../components/ui/FilterBar'
+import { FilterSidebar, type FilterGroup } from '../../components/ui/FilterSidebar'
 import { ColumnPicker } from '../../components/ui/ColumnPicker'
-import { MultiSelectFilter } from '../../components/ui/MultiSelectFilter'
 import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
 import { CreateCompanyModal } from '../../components/ui/CreateCompanyModal'
@@ -56,6 +56,7 @@ export function CompaniesPage() {
     setMultiFilter,
     toggleExclude,
     clearAll,
+    replaceAll,
     activeFilterCount,
     getMulti,
     toQueryParams,
@@ -64,13 +65,26 @@ export function CompaniesPage() {
 
   const [sortField, setSortField] = useLocalStorage('co_sort_field', 'name')
   const [sortDir, setSortDir] = useLocalStorage<'asc' | 'desc'>('co_sort_dir', 'asc')
-  const [showAdvanced, setShowAdvanced] = useLocalStorage('co_show_advanced', false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorage('co_filters_sidebar_collapsed', false)
 
   // Column visibility
   const [visibleKeys, setVisibleKeys, resetColumns] = useColumnVisibility(
     'co_visible_cols',
     COMPANY_COLUMNS,
   )
+
+  // Share view
+  const { shareView } = useShareView({
+    visibleKeys,
+    filters: advFilters,
+    sortField,
+    sortDir,
+    setVisibleKeys,
+    replaceAllFilters: replaceAll,
+    setSortField,
+    setSortDir,
+    toast,
+  })
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -177,12 +191,6 @@ export function CompaniesPage() {
     ? (matchingCount.data?.count ?? total)
     : selectedIds.size
 
-  const filterConfigs: FilterConfig[] = useMemo(() => [
-    { key: 'search', label: 'companies', type: 'search' as const, placeholder: 'Search name or domain...' },
-    { key: 'tag_name', label: 'Tag', type: 'select' as const, options: (tagsData?.tags ?? []).map((b) => ({ value: b.name, label: b.name })) },
-    { key: 'owner_name', label: 'Owner', type: 'select' as const, options: (tagsData?.owners ?? []).map((o) => ({ value: o.name, label: o.name })) },
-  ], [tagsData])
-
   // Filter columns by visibility
   const visibleSet = new Set(visibleKeys)
   const columns = useMemo(
@@ -193,19 +201,104 @@ export function CompaniesPage() {
 
   const facets = countsData?.facets
 
+  // Build filter groups for sidebar
+  const filterGroups: FilterGroup[] = useMemo(() => [
+    {
+      key: 'enrichment_stage',
+      label: 'Stage',
+      options: buildMultiOptions(ENRICHMENT_STAGE_DISPLAY, facets?.enrichment_stage),
+      selected: getMulti('enrichment_stage').values,
+      exclude: getMulti('enrichment_stage').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('enrichment_stage', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('enrichment_stage'); handleDeselectAll() },
+    },
+    {
+      key: 'tier',
+      label: 'Tier',
+      options: buildMultiOptions(TIER_DISPLAY, facets?.tier),
+      selected: getMulti('tier').values,
+      exclude: getMulti('tier').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('tier', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('tier'); handleDeselectAll() },
+    },
+    {
+      key: 'industry',
+      label: 'Industry',
+      options: buildMultiOptions(INDUSTRY_DISPLAY, facets?.industry),
+      selected: getMulti('industry').values,
+      exclude: getMulti('industry').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('industry', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('industry'); handleDeselectAll() },
+    },
+    {
+      key: 'company_size',
+      label: 'Company Size',
+      options: buildMultiOptions(COMPANY_SIZE_DISPLAY, facets?.company_size),
+      selected: getMulti('company_size').values,
+      exclude: getMulti('company_size').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('company_size', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('company_size'); handleDeselectAll() },
+    },
+    {
+      key: 'geo_region',
+      label: 'Region',
+      options: buildMultiOptions(GEO_REGION_DISPLAY, facets?.geo_region),
+      selected: getMulti('geo_region').values,
+      exclude: getMulti('geo_region').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('geo_region', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('geo_region'); handleDeselectAll() },
+    },
+    {
+      key: 'revenue_range',
+      label: 'Revenue',
+      options: buildMultiOptions(REVENUE_RANGE_DISPLAY, facets?.revenue_range),
+      selected: getMulti('revenue_range').values,
+      exclude: getMulti('revenue_range').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('revenue_range', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('revenue_range'); handleDeselectAll() },
+    },
+  ], [facets, getMulti, setMultiFilter, toggleExclude, handleDeselectAll])
+
+  // Sidebar header slot: simple selects for tag, owner
+  const headerSlot = (
+    <div className="space-y-2">
+      <SidebarSelect
+        label="Tag"
+        value={(advFilters.tag_name as string) || ''}
+        options={(tagsData?.tags ?? []).map((b) => ({ value: b.name, label: b.name }))}
+        onChange={(v) => handleFilterChange('tag_name', v)}
+      />
+      <SidebarSelect
+        label="Owner"
+        value={(advFilters.owner_name as string) || ''}
+        options={(tagsData?.owners ?? []).map((o) => ({ value: o.name, label: o.name }))}
+        onChange={(v) => handleFilterChange('owner_name', v)}
+      />
+    </div>
+  )
+
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <FilterBar
-        filters={filterConfigs}
-        values={{
-          search: advFilters.search as string,
-          tag_name: advFilters.tag_name as string,
-          owner_name: advFilters.owner_name as string,
-        }}
-        onChange={handleFilterChange}
-        total={total}
-        action={
-          <div className="flex items-center gap-2">
+    <div className="flex h-full min-h-0">
+      {/* Sidebar */}
+      <FilterSidebar
+        groups={filterGroups}
+        activeFilterCount={activeFilterCount}
+        onClearAll={() => { clearAll(); handleDeselectAll() }}
+        search={(advFilters.search as string) || ''}
+        onSearchChange={(v) => handleFilterChange('search', v)}
+        headerSlot={headerSlot}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
+
+      {/* Main content */}
+      <div className="flex-1 min-w-0 flex flex-col h-full min-h-0 px-3 py-2">
+        {/* Top bar: result count + actions */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-sm text-text-muted">
+            {total.toLocaleString()} compan{total !== 1 ? 'ies' : 'y'}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
               onClick={() => setShowCreateCompany(true)}
@@ -218,18 +311,17 @@ export function CompaniesPage() {
             </button>
             <button
               type="button"
+              onClick={shareView}
               className="px-2.5 py-1.5 text-xs rounded-md border border-border-solid bg-surface-alt text-text-muted hover:text-text hover:border-accent transition-colors flex items-center gap-1.5"
-              onClick={() => setShowAdvanced(!showAdvanced)}
+              title="Copy a link that shares your current columns, filters, and sort with your team"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M1.5 3.5h11M3.5 7h7M5.5 10.5h3" />
+                <circle cx="3" cy="7" r="1.5" />
+                <circle cx="11" cy="3" r="1.5" />
+                <circle cx="11" cy="11" r="1.5" />
+                <path d="M4.5 6.2l5 -2.4M4.5 7.8l5 2.4" />
               </svg>
-              Advanced Filters
-              {activeFilterCount > 0 && (
-                <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold rounded-full bg-accent-cyan text-bg">
-                  {activeFilterCount}
-                </span>
-              )}
+              Share View
             </button>
             {namespace && (
               <a
@@ -247,88 +339,25 @@ export function CompaniesPage() {
               alwaysVisible={COMPANY_ALWAYS_VISIBLE}
             />
           </div>
-        }
-      />
-
-      {/* Advanced filter row */}
-      {showAdvanced && (
-        <div className="flex flex-wrap items-center gap-2 mb-3 px-0.5">
-          <MultiSelectFilter
-            label="Stage"
-            options={buildMultiOptions(ENRICHMENT_STAGE_DISPLAY, facets?.enrichment_stage)}
-            selected={getMulti('enrichment_stage').values}
-            exclude={getMulti('enrichment_stage').exclude}
-            onSelectionChange={(v) => setMultiFilter('enrichment_stage', v)}
-            onExcludeToggle={() => toggleExclude('enrichment_stage')}
-          />
-          <MultiSelectFilter
-            label="Tier"
-            options={buildMultiOptions(TIER_DISPLAY, facets?.tier)}
-            selected={getMulti('tier').values}
-            exclude={getMulti('tier').exclude}
-            onSelectionChange={(v) => setMultiFilter('tier', v)}
-            onExcludeToggle={() => toggleExclude('tier')}
-          />
-          <MultiSelectFilter
-            label="Industry"
-            options={buildMultiOptions(INDUSTRY_DISPLAY, facets?.industry)}
-            selected={getMulti('industry').values}
-            exclude={getMulti('industry').exclude}
-            onSelectionChange={(v) => setMultiFilter('industry', v)}
-            onExcludeToggle={() => toggleExclude('industry')}
-          />
-          <MultiSelectFilter
-            label="Company Size"
-            options={buildMultiOptions(COMPANY_SIZE_DISPLAY, facets?.company_size)}
-            selected={getMulti('company_size').values}
-            exclude={getMulti('company_size').exclude}
-            onSelectionChange={(v) => setMultiFilter('company_size', v)}
-            onExcludeToggle={() => toggleExclude('company_size')}
-          />
-          <MultiSelectFilter
-            label="Region"
-            options={buildMultiOptions(GEO_REGION_DISPLAY, facets?.geo_region)}
-            selected={getMulti('geo_region').values}
-            exclude={getMulti('geo_region').exclude}
-            onSelectionChange={(v) => setMultiFilter('geo_region', v)}
-            onExcludeToggle={() => toggleExclude('geo_region')}
-          />
-          <MultiSelectFilter
-            label="Revenue"
-            options={buildMultiOptions(REVENUE_RANGE_DISPLAY, facets?.revenue_range)}
-            selected={getMulti('revenue_range').values}
-            exclude={getMulti('revenue_range').exclude}
-            onSelectionChange={(v) => setMultiFilter('revenue_range', v)}
-            onExcludeToggle={() => toggleExclude('revenue_range')}
-          />
-          {activeFilterCount > 0 && (
-            <button
-              type="button"
-              className="px-2 py-1 text-xs text-text-muted hover:text-error transition-colors"
-              onClick={() => { clearAll(); setSelectedIds(new Set()); setSelectionMode('explicit') }}
-            >
-              Clear all
-            </button>
-          )}
         </div>
-      )}
 
-      <DataTable
-        columns={columns}
-        data={allCompanies}
-        sort={{ field: sortField, dir: sortDir }}
-        onSort={handleSort}
-        onLoadMore={() => fetchNextPage()}
-        hasMore={hasNextPage}
-        isLoading={isLoading || isFetchingNextPage}
-        emptyText="No companies match your filters."
-        selectable
-        selectedIds={selectedIds}
-        onSelectionChange={handleSelectionChange}
-        totalMatching={total}
-        onCellEdit={(item, field, value) => inlineEdit.save(item.id, field, value)}
-        cellStates={inlineEdit.cellStates}
-      />
+        <DataTable
+          columns={columns}
+          data={allCompanies}
+          sort={{ field: sortField, dir: sortDir }}
+          onSort={handleSort}
+          onLoadMore={() => fetchNextPage()}
+          hasMore={hasNextPage}
+          isLoading={isLoading || isFetchingNextPage}
+          emptyText="No companies match your filters."
+          selectable
+          selectedIds={selectedIds}
+          onSelectionChange={handleSelectionChange}
+          totalMatching={total}
+          onCellEdit={(item, field, value) => inlineEdit.save(item.id, field, value)}
+          cellStates={inlineEdit.cellStates}
+        />
+      </div>
 
       <SelectionActionBar
         count={selectionCount}
@@ -363,6 +392,36 @@ export function CompaniesPage() {
           }}
         />
       )}
+    </div>
+  )
+}
+
+/* ── Sidebar simple select ──────────────────────────────── */
+
+function SidebarSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] text-text-dim w-16 flex-shrink-0">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 min-w-0 px-1.5 py-1 text-[11px] bg-surface-alt border border-border-solid rounded text-text focus:outline-none focus:border-accent"
+      >
+        <option value="">All</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
     </div>
   )
 }

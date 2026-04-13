@@ -28,6 +28,10 @@ interface FilterSidebarProps {
   onSearchChange: (v: string) => void
   /** Optional extra content above filters (e.g. owner/tag selects) */
   headerSlot?: ReactNode
+  /** Whether the sidebar is collapsed */
+  collapsed?: boolean
+  /** Callback to toggle collapsed state */
+  onToggleCollapse?: () => void
 }
 
 /* ── Component ──────────────────────────────────────────── */
@@ -39,6 +43,8 @@ export function FilterSidebar({
   search,
   onSearchChange,
   headerSlot,
+  collapsed = false,
+  onToggleCollapse,
 }: FilterSidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -69,66 +75,114 @@ export function FilterSidebar({
         />
       )}
 
-      {/* Sidebar panel */}
-      <aside
-        className={`
-          w-[280px] flex-shrink-0 bg-surface border-r border-border-solid overflow-y-auto
-          md:relative md:block
-          ${mobileOpen
-            ? 'fixed inset-y-0 left-0 z-50 block shadow-xl'
-            : 'hidden md:block'
-          }
-        `}
+      {/* Sidebar wrapper — handles collapse transition */}
+      <div
+        className="hidden md:flex flex-shrink-0 transition-[width] duration-250 ease-in-out overflow-hidden"
+        style={{ width: collapsed ? '36px' : '280px' }}
       >
-        {/* Header */}
-        <div className="sticky top-0 z-10 bg-surface px-3 pt-3 pb-2 border-b border-border-solid">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">Filters</span>
-            <div className="flex items-center gap-2">
-              {activeFilterCount > 0 && (
-                <button
-                  type="button"
-                  onClick={onClearAll}
-                  className="text-[11px] text-text-muted hover:text-error transition-colors bg-transparent border-none cursor-pointer p-0"
-                >
-                  Clear all
-                </button>
-              )}
-              {/* Mobile close */}
-              <button
-                type="button"
-                onClick={() => setMobileOpen(false)}
-                className="md:hidden w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text bg-transparent border-none cursor-pointer"
-                aria-label="Close filters"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Search */}
-          <SearchInput value={search} onChange={onSearchChange} />
-        </div>
-
-        {/* Optional header slot (owner, tag selects) */}
-        {headerSlot && (
-          <div className="px-3 py-2 border-b border-border-solid">
-            {headerSlot}
-          </div>
+        {/* Collapsed strip — small toggle button */}
+        {collapsed && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="w-[36px] h-full flex flex-col items-center pt-3 gap-2 bg-surface border-r border-border-solid cursor-pointer border-l-0 border-t-0 border-b-0 hover:bg-surface-alt transition-colors"
+            title="Show filters"
+          >
+            {/* Chevron pointing right */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-text-muted">
+              <path d="M5 2.5l4.5 4.5L5 11.5" />
+            </svg>
+            {activeFilterCount > 0 && (
+              <span className="inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-accent-cyan/20 text-accent-cyan">
+                {activeFilterCount}
+              </span>
+            )}
+            {/* Vertical "Filters" text */}
+            <span
+              className="text-[10px] text-text-dim uppercase tracking-widest"
+              style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
+            >
+              Filters
+            </span>
+          </button>
         )}
 
-        {/* Active filter pills */}
-        <ActiveFilterPills groups={groups} />
+        {/* Sidebar panel */}
+        <aside
+          className={`
+            w-[280px] flex-shrink-0 bg-surface border-r border-border-solid overflow-y-auto
+            md:relative md:block
+            ${collapsed ? 'hidden' : ''}
+            ${mobileOpen
+              ? 'fixed inset-y-0 left-0 z-50 block shadow-xl'
+              : 'hidden md:block'
+            }
+          `}
+        >
+          {/* Header */}
+          <div className="sticky top-0 z-10 bg-surface px-3 pt-3 pb-2 border-b border-border-solid">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">Filters</span>
+              <div className="flex items-center gap-2">
+                {activeFilterCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={onClearAll}
+                    className="text-[11px] text-text-muted hover:text-error transition-colors bg-transparent border-none cursor-pointer p-0"
+                  >
+                    Clear all
+                  </button>
+                )}
+                {/* Collapse toggle (desktop) */}
+                {onToggleCollapse && (
+                  <button
+                    type="button"
+                    onClick={onToggleCollapse}
+                    className="hidden md:flex w-6 h-6 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface-alt bg-transparent border-none cursor-pointer transition-colors"
+                    aria-label="Collapse filters"
+                    title="Collapse filters"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M9 2.5L4.5 7 9 11.5" />
+                    </svg>
+                  </button>
+                )}
+                {/* Mobile close */}
+                <button
+                  type="button"
+                  onClick={() => setMobileOpen(false)}
+                  className="md:hidden w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text bg-transparent border-none cursor-pointer"
+                  aria-label="Close filters"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                  </svg>
+                </button>
+              </div>
+            </div>
 
-        {/* Filter groups */}
-        <div className="px-1 py-1">
-          {groups.map((group) => (
-            <FilterGroupSection key={group.key} group={group} />
-          ))}
-        </div>
-      </aside>
+            {/* Search */}
+            <SearchInput value={search} onChange={onSearchChange} />
+          </div>
+
+          {/* Optional header slot (owner, tag selects) */}
+          {headerSlot && (
+            <div className="px-3 py-2 border-b border-border-solid">
+              {headerSlot}
+            </div>
+          )}
+
+          {/* Active filter pills */}
+          <ActiveFilterPills groups={groups} />
+
+          {/* Filter groups */}
+          <div className="px-1 py-1">
+            {groups.map((group) => (
+              <FilterGroupSection key={group.key} group={group} />
+            ))}
+          </div>
+        </aside>
+      </div>
     </>
   )
 }
