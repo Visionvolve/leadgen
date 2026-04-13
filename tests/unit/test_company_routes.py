@@ -215,7 +215,7 @@ class TestPatchCompany:
         company_id = seed_companies_contacts["companies"][0].id
         resp = client.patch(
             f"/api/companies/{company_id}",
-            json={"name": "Hacked Name"},
+            json={"tenant_id": "hacked"},
             headers=headers,
         )
         assert resp.status_code == 400

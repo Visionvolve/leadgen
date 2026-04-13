@@ -314,11 +314,11 @@ def list_contacts():
                 co.id AS company_id, co.name AS company_name,
                 ct.email_address,
                 COALESCE(ct.contact_score, ce.contact_score) AS contact_score,
-                COALESCE(ct.icp_fit, ce.icp_fit) AS icp_fit,
+                COALESCE(ct.icp_fit::text, ce.icp_fit) AS icp_fit,
                 ct.message_status,
                 o.name AS owner_name,
-                COALESCE(ct.seniority_level, ce.seniority) AS seniority_level,
-                COALESCE(ct.department, ce.department) AS department,
+                COALESCE(ct.seniority_level::text, ce.seniority) AS seniority_level,
+                COALESCE(ct.department::text, ce.department) AS department,
                 ct.location_city, ct.location_country,
                 ct.linkedin_url, ct.phone_number,
                 ct.ai_champion_score, ct.authority_score,
@@ -462,10 +462,10 @@ def get_contact(contact_id):
                 ct.id, ct.first_name, ct.last_name, ct.job_title,
                 ct.email_address, ct.linkedin_url, ct.phone_number,
                 ct.profile_photo_url,
-                COALESCE(ct.seniority_level, ce.seniority) AS seniority_level,
-                COALESCE(ct.department, ce.department) AS department,
+                COALESCE(ct.seniority_level::text, ce.seniority) AS seniority_level,
+                COALESCE(ct.department::text, ce.department) AS department,
                 ct.location_city, ct.location_country,
-                COALESCE(ct.icp_fit, ce.icp_fit) AS icp_fit,
+                COALESCE(ct.icp_fit::text, ce.icp_fit) AS icp_fit,
                 ct.relationship_status,
                 ct.contact_source, ct.language, ct.message_status,
                 ct.ai_champion, ct.ai_champion_score,
@@ -672,12 +672,50 @@ def update_contact(contact_id):
         "department",
         "contact_source",
         "language",
+        "first_name",
+        "last_name",
+        "email_address",
+        "job_title",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     custom_fields_update = body.get("custom_fields")
 
     if not fields and not custom_fields_update:
         return jsonify({"error": "No valid fields to update"}), 400
+
+    # Enum validation for fields with finite allowed values
+    contact_enum_validators = {
+        "icp_fit": {"strong_fit", "moderate_fit", "weak_fit", "unknown"},
+        "seniority_level": {
+            "c_level", "vp", "director", "manager",
+            "individual_contributor", "founder", "other",
+        },
+        "department": {
+            "executive", "engineering", "product", "sales", "marketing",
+            "customer_success", "finance", "hr", "operations", "other",
+        },
+        "message_status": {
+            "not_started", "generating", "pending_review", "approved",
+            "sent", "replied", "no_channel", "generation_failed",
+        },
+        "language": {
+            "en", "cs", "da", "de", "es", "fi", "fr",
+            "it", "nl", "no", "pl", "pt", "sv",
+        },
+        "contact_source": {
+            "inbound", "outbound", "referral", "event", "social", "other",
+        },
+        "relationship_status": {
+            "prospect", "active", "dormant", "former", "partner", "internal",
+        },
+    }
+    for field, value in fields.items():
+        if field in contact_enum_validators and value not in contact_enum_validators[field]:
+            return jsonify({
+                "error": f"Invalid value '{value}' for field '{field}'",
+                "field": field,
+                "allowed": sorted(contact_enum_validators[field]),
+            }), 400
 
     row = db.session.execute(
         db.text(

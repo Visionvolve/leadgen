@@ -1097,12 +1097,49 @@ def update_company(company_id):
         "engagement_status",
         "crm_status",
         "cohort",
+        "name",
+        "domain",
+        "website_url",
+        "linkedin_url",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     custom_fields_update = body.get("custom_fields")
 
     if not fields and not custom_fields_update:
         return jsonify({"error": "No valid fields to update"}), 400
+
+    # Enum validation for fields with finite allowed values
+    company_enum_validators = {
+        "status": {
+            "new", "enrichment_failed", "triage_passed", "triage_review",
+            "triage_disqualified", "enrichment_l2_failed", "enriched_l2",
+            "synced", "needs_review", "enriched", "error_pushing_lemlist",
+        },
+        "tier": {
+            "tier_1_platinum", "tier_2_gold", "tier_3_silver",
+            "tier_4_bronze", "tier_5_copper", "deprioritize",
+        },
+        "buying_stage": {
+            "unaware", "problem_aware", "exploring_ai",
+            "looking_for_partners", "in_discussion",
+            "proposal_sent", "won", "lost",
+        },
+        "engagement_status": {
+            "cold", "approached", "prospect", "customer", "churned",
+        },
+        "crm_status": {
+            "cold", "scheduled_for_outreach", "outreach",
+            "prospect", "customer", "churn",
+        },
+        "cohort": {"a", "b"},
+    }
+    for field, value in fields.items():
+        if field in company_enum_validators and value not in company_enum_validators[field]:
+            return jsonify({
+                "error": f"Invalid value '{value}' for field '{field}'",
+                "field": field,
+                "allowed": sorted(company_enum_validators[field]),
+            }), 400
 
     # Verify company belongs to tenant
     row = db.session.execute(
