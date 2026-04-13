@@ -18,14 +18,18 @@ export function InlineEditCell({
   displayValue,
   editType,
   options,
-  reverseMap: _reverseMap,
+  reverseMap,
   onSave,
   cellStatus,
   onRowClick,
 }: InlineEditCellProps) {
   const [isEditing, setIsEditing] = useState(false)
-  const [editValue, setEditValue] = useState(value ?? '')
+  const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement | HTMLSelectElement>(null)
+
+  // API returns display values (e.g. "Moderate Fit") but select options
+  // are keyed by DB values (e.g. "moderate_fit"). Resolve via reverseMap.
+  const resolvedValue = (reverseMap && value) ? (reverseMap[value] ?? value) : (value ?? '')
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -39,25 +43,24 @@ export function InlineEditCell({
 
   const startEditing = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
-    // For select: find display value's db key as starting value
-    setEditValue(value ?? '')
+    setEditValue(resolvedValue)
     setIsEditing(true)
-  }, [value])
+  }, [resolvedValue])
 
   const cancelEditing = useCallback(() => {
     setIsEditing(false)
-    setEditValue(value ?? '')
-  }, [value])
+    setEditValue(resolvedValue)
+  }, [resolvedValue])
 
   const handleSave = useCallback(async (newVal: string) => {
     setIsEditing(false)
-    if (newVal === (value ?? '')) return
+    if (newVal === resolvedValue) return
     try {
       await onSave(newVal)
     } catch {
       // Error state handled by cellStatus
     }
-  }, [value, onSave])
+  }, [resolvedValue, onSave])
 
   const handleSelectChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     e.stopPropagation()
