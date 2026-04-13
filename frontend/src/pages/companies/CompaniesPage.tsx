@@ -15,6 +15,7 @@ import { ColumnPicker } from '../../components/ui/ColumnPicker'
 import { MultiSelectFilter } from '../../components/ui/MultiSelectFilter'
 import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
+import { CreateCompanyModal } from '../../components/ui/CreateCompanyModal'
 import { useToast } from '../../components/ui/Toast'
 import { COMPANY_COLUMNS, COMPANY_ALWAYS_VISIBLE } from '../../config/companyColumns'
 import {
@@ -74,6 +75,7 @@ export function CompaniesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('explicit')
   const [showTagPicker, setShowTagPicker] = useState(false)
+  const [showCreateCompany, setShowCreateCompany] = useState(false)
 
   // Inline editing
   const inlineEdit = useInlineEdit('company')
@@ -187,6 +189,16 @@ export function CompaniesPage() {
         total={total}
         action={
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreateCompany(true)}
+              className="px-2.5 py-1.5 text-xs rounded-md border border-accent bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M7 2v10M2 7h10" />
+              </svg>
+              New Company
+            </button>
             <button
               type="button"
               className="px-2.5 py-1.5 text-xs rounded-md border border-border-solid bg-surface-alt text-text-muted hover:text-text hover:border-accent transition-colors flex items-center gap-1.5"
@@ -322,6 +334,17 @@ export function CompaniesPage() {
           onConfirm={handleAddTags}
           onClose={() => setShowTagPicker(false)}
           isLoading={bulkAddTags.isPending}
+        />
+      )}
+
+      {/* Create Company modal */}
+      {showCreateCompany && (
+        <CreateCompanyModal
+          onClose={() => setShowCreateCompany(false)}
+          onSuccess={() => {
+            setShowCreateCompany(false)
+            toast('Company created', 'success')
+          }}
         />
       )}
     </div>

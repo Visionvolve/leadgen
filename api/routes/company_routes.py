@@ -137,6 +137,96 @@ ALLOWED_SORT = {
 }
 
 
+@companies_bp.route("/api/companies", methods=["POST"])
+@require_role("editor")
+def create_company():
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    allowed_fields = {
+        "domain",
+        "website_url",
+        "industry",
+        "company_size",
+        "geo_region",
+        "notes",
+    }
+
+    # Enum validation
+    enum_validators = {
+        "industry": {
+            "software_saas",
+            "it",
+            "professional_services",
+            "financial_services",
+            "healthcare",
+            "manufacturing",
+            "retail",
+            "media",
+            "energy",
+            "telecom",
+            "transport",
+            "construction",
+            "education",
+            "public_sector",
+            "other",
+        },
+        "company_size": {"micro", "startup", "smb", "mid_market", "enterprise"},
+        "geo_region": {
+            "dach",
+            "nordics",
+            "benelux",
+            "cee",
+            "uk_ireland",
+            "southern_europe",
+            "us",
+            "other",
+        },
+    }
+
+    columns = ["tenant_id", "name"]
+    placeholders = [":tenant_id", ":name"]
+    params = {"tenant_id": tenant_id, "name": name}
+
+    for field in allowed_fields:
+        val = body.get(field)
+        if val is not None:
+            val_str = str(val).strip()
+            if not val_str:
+                continue
+            if field in enum_validators and val_str not in enum_validators[field]:
+                return jsonify({"error": f"Invalid value for {field}"}), 400
+            columns.append(field)
+            placeholders.append(f":{field}")
+            params[field] = val_str
+
+    col_str = ", ".join(columns)
+    val_str = ", ".join(placeholders)
+    sql = f"INSERT INTO companies ({col_str}) VALUES ({val_str}) RETURNING id, name, domain, website_url, industry, company_size, geo_region, notes, created_at"
+    row = db.session.execute(db.text(sql), params).fetchone()
+    db.session.commit()
+
+    return jsonify(
+        {
+            "id": row.id,
+            "name": row.name,
+            "domain": row.domain,
+            "website_url": row.website_url,
+            "industry": row.industry,
+            "company_size": row.company_size,
+            "geo_region": row.geo_region,
+            "notes": row.notes,
+            "created_at": _iso(row.created_at),
+        }
+    ), 201
+
+
 @companies_bp.route("/api/companies", methods=["GET"])
 @require_auth
 def list_companies():

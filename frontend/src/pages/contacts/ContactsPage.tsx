@@ -17,6 +17,7 @@ import { ColumnPicker } from '../../components/ui/ColumnPicker'
 import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
 import { AddToCampaignModal } from '../../components/ui/AddToCampaignModal'
+import { CreateContactModal } from '../../components/ui/CreateContactModal'
 import { ChatFilterSyncBar } from '../../components/ui/ChatFilterSyncBar'
 import { ContactsEmptyState } from '../../components/onboarding/SmartEmptyState'
 import { EntrySignpost } from '../../components/onboarding/EntrySignpost'
@@ -114,6 +115,7 @@ export function ContactsPage() {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('explicit')
   const [showTagPicker, setShowTagPicker] = useState(false)
   const [showCampaignModal, setShowCampaignModal] = useState(false)
+  const [showCreateContact, setShowCreateContact] = useState(false)
 
   // Inline editing
   const inlineEdit = useInlineEdit('contact')
@@ -402,6 +404,17 @@ export function ContactsPage() {
             {total.toLocaleString()} contact{total !== 1 ? 's' : ''}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {/* New Contact button */}
+            <button
+              type="button"
+              onClick={() => setShowCreateContact(true)}
+              className="px-2.5 py-1.5 text-xs rounded-md border border-accent bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M7 2v10M2 7h10" />
+              </svg>
+              New Contact
+            </button>
             {/* Sidebar layout toggle */}
             <button
               type="button"
@@ -502,6 +515,17 @@ export function ContactsPage() {
           onConfirm={handleAssignCampaign}
           onClose={() => setShowCampaignModal(false)}
           isLoading={bulkAssignCampaign.isPending}
+        />
+      )}
+
+      {/* Create Contact modal */}
+      {showCreateContact && (
+        <CreateContactModal
+          onClose={() => setShowCreateContact(false)}
+          onSuccess={() => {
+            setShowCreateContact(false)
+            toast('Contact created', 'success')
+          }}
         />
       )}
     </div>

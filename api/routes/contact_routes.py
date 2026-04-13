@@ -100,6 +100,107 @@ ALLOWED_SORT = {
 }
 
 
+@contacts_bp.route("/api/contacts", methods=["POST"])
+@require_role("editor")
+def create_contact():
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    first_name = (body.get("first_name") or "").strip()
+    last_name = (body.get("last_name") or "").strip()
+    if not first_name or not last_name:
+        return jsonify({"error": "first_name and last_name are required"}), 400
+
+    allowed_fields = {
+        "email_address",
+        "job_title",
+        "company_id",
+        "seniority_level",
+        "department",
+        "phone_number",
+        "notes",
+    }
+
+    # Enum validation
+    enum_validators = {
+        "seniority_level": {
+            "c_level",
+            "vp",
+            "director",
+            "manager",
+            "individual_contributor",
+            "founder",
+            "other",
+        },
+        "department": {
+            "executive",
+            "engineering",
+            "product",
+            "sales",
+            "marketing",
+            "customer_success",
+            "finance",
+            "hr",
+            "operations",
+            "other",
+        },
+    }
+
+    columns = ["tenant_id", "first_name", "last_name"]
+    placeholders = [":tenant_id", ":first_name", ":last_name"]
+    params = {
+        "tenant_id": tenant_id,
+        "first_name": first_name,
+        "last_name": last_name,
+    }
+
+    for field in allowed_fields:
+        val = body.get(field)
+        if val is not None:
+            val_str = str(val).strip()
+            if not val_str:
+                continue
+            if field in enum_validators and val_str not in enum_validators[field]:
+                return jsonify({"error": f"Invalid value for {field}"}), 400
+            columns.append(field)
+            placeholders.append(f":{field}")
+            params[field] = val_str
+
+    # Validate company_id belongs to tenant
+    if "company_id" in params:
+        check = db.session.execute(
+            db.text("SELECT id FROM companies WHERE id = :cid AND tenant_id = :tid"),
+            {"cid": params["company_id"], "tid": tenant_id},
+        ).fetchone()
+        if not check:
+            return jsonify({"error": "Company not found"}), 404
+
+    col_str = ", ".join(columns)
+    val_str = ", ".join(placeholders)
+    sql = f"INSERT INTO contacts ({col_str}) VALUES ({val_str}) RETURNING id, first_name, last_name, email_address, job_title, company_id, seniority_level, department, phone_number, notes, created_at"
+    row = db.session.execute(db.text(sql), params).fetchone()
+    db.session.commit()
+
+    return jsonify(
+        {
+            "id": row.id,
+            "first_name": row.first_name,
+            "last_name": row.last_name,
+            "full_name": f"{row.first_name} {row.last_name}".strip(),
+            "email_address": row.email_address,
+            "job_title": row.job_title,
+            "company_id": row.company_id,
+            "seniority_level": row.seniority_level,
+            "department": row.department,
+            "phone_number": row.phone_number,
+            "notes": row.notes,
+            "created_at": _iso(row.created_at),
+        }
+    ), 201
+
+
 @contacts_bp.route("/api/contacts", methods=["GET"])
 @require_auth
 def list_contacts():
