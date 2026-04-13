@@ -10,7 +10,6 @@ import {
   MESSAGE_STATUS_DISPLAY, MESSAGE_STATUS_REVERSE,
   LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
   CONTACT_SOURCE_DISPLAY, CONTACT_SOURCE_REVERSE,
-  ADDRESS_STYLE_DISPLAY, ADDRESS_STYLE_REVERSE,
   formatPhone,
 } from '../lib/display'
 
@@ -282,14 +281,14 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
   },
   {
     key: 'address_style',
-    label: 'Tykání/Vykání',
-    minWidth: '100px',
+    label: 'Tykání',
+    minWidth: '80px',
     defaultVisible: true,
     editable: true,
-    editType: 'select',
-    editOptions: ADDRESS_STYLE_DISPLAY,
-    editReverse: ADDRESS_STYLE_REVERSE,
-    render: (c) => ADDRESS_STYLE_DISPLAY[c.address_style ?? 'vykat'] || 'Vykání',
+    editType: 'checkbox',
+    checkboxLabel: 'Tykání',
+    checkboxCheckedValue: 'tykat',
+    checkboxUncheckedValue: 'vykat',
   },
   {
     key: 'contact_source',

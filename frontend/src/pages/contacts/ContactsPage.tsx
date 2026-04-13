@@ -22,6 +22,7 @@ import { ChatFilterSyncBar } from '../../components/ui/ChatFilterSyncBar'
 import { ContactsEmptyState } from '../../components/onboarding/SmartEmptyState'
 import { EntrySignpost } from '../../components/onboarding/EntrySignpost'
 import { useToast } from '../../components/ui/Toast'
+import { useScrollRestore } from '../../hooks/useScrollRestore'
 import { useCampaigns } from '../../api/queries/useCampaigns'
 import { useCampaignColumns } from '../../hooks/useCampaignColumns'
 import { useCampaignMemberships } from '../../hooks/useCampaignMemberships'
@@ -129,15 +130,21 @@ export function ContactsPage() {
   // Chat filter sync
   const { pending: chatFilterPending, dismiss: dismissChatFilter } = useChatFilterSync()
 
+  // Scroll position restore (saves before navigating to detail, restores on mount)
+  const { saveScrollPosition } = useScrollRestore('contacts_scroll')
+
   // Listen for custom navigation events from column renderers
   useEffect(() => {
     const handler = (e: Event) => {
       const path = (e as CustomEvent<string>).detail
-      if (path) navigate(withRev(path), { state: { origin: withRev(`/${namespace}/contacts`) } })
+      if (path) {
+        saveScrollPosition()
+        navigate(withRev(path), { state: { origin: withRev(`/${namespace}/contacts`) } })
+      }
     }
     window.addEventListener('leadgen:navigate', handler)
     return () => window.removeEventListener('leadgen:navigate', handler)
-  }, [navigate, namespace])
+  }, [navigate, namespace, saveScrollPosition])
 
   // Build ContactFilters from advanced state + sort
   const filters: ContactFilters = useMemo(() => ({

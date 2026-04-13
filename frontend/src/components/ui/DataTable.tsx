@@ -75,14 +75,10 @@ export function DataTable<T extends { id?: string }>({
     return () => ro.disconnect()
   }, [])
 
-  const rafId = useRef(0)
   const handleScroll = useCallback(() => {
-    cancelAnimationFrame(rafId.current)
-    rafId.current = requestAnimationFrame(() => {
-      if (containerRef.current) {
-        setScrollTop(containerRef.current.scrollTop)
-      }
-    })
+    if (containerRef.current) {
+      setScrollTop(containerRef.current.scrollTop)
+    }
   }, [])
 
   // Escape key clears selection
@@ -205,7 +201,7 @@ export function DataTable<T extends { id?: string }>({
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 min-h-0 overflow-auto border border-border-solid rounded-lg bg-surface"
+      className="flex-1 min-h-0 overflow-auto border border-border-solid rounded-lg bg-surface scrollbar-thin"
     >
       {/* Select all matching banner */}
       {showSelectAllBanner && (
@@ -271,7 +267,7 @@ export function DataTable<T extends { id?: string }>({
             const isSelected = selectable && item.id ? selected.has(item.id) : false
             return (
               <tr
-                key={item.id ?? globalIndex}
+                key={item.id ?? `vrow-${globalIndex}`}
                 className={`border-b border-border/30 ${isSelected ? 'bg-accent/5' : ''} ${!onCellEdit && onRowClick ? 'cursor-pointer hover:bg-surface-alt/50' : selectable ? 'hover:bg-surface-alt/30' : ''}`}
                 style={{ height: ROW_HEIGHT }}
               >
@@ -316,6 +312,9 @@ export function DataTable<T extends { id?: string }>({
                           reverseMap={colDef.editReverse}
                           onSave={(newValue) => onCellEdit(item, editField, newValue)}
                           cellStatus={cellStatus}
+                          checkboxLabel={colDef.checkboxLabel}
+                          checkboxCheckedValue={colDef.checkboxCheckedValue}
+                          checkboxUncheckedValue={colDef.checkboxUncheckedValue}
                         />
                       </td>
                     )

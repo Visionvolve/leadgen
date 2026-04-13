@@ -9,14 +9,20 @@ export interface ColumnDef<T> extends Column<T> {
   defaultVisible?: boolean
   /** Whether this column supports inline editing */
   editable?: boolean
-  /** Edit input type: 'select' for dropdowns, 'text' for free text */
-  editType?: 'select' | 'text'
+  /** Edit input type: 'select' for dropdowns, 'text' for free text, 'checkbox' for boolean toggle */
+  editType?: 'select' | 'text' | 'checkbox'
   /** API field key to use when saving (defaults to column key) */
   editField?: string
   /** Display map for select edit options (db value → display label) */
   editOptions?: Record<string, string>
   /** Reverse map for select edit options (display label → db value) */
   editReverse?: Record<string, string>
+  /** Label shown next to checkbox (only for editType='checkbox') */
+  checkboxLabel?: string
+  /** DB value that means "checked" (default: 'tykat') */
+  checkboxCheckedValue?: string
+  /** DB value that means "unchecked" (default: 'vykat') */
+  checkboxUncheckedValue?: string
 }
 
 /**
