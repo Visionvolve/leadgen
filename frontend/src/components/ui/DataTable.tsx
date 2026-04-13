@@ -203,19 +203,6 @@ export function DataTable<T extends { id?: string }>({
       onScroll={handleScroll}
       className="flex-1 min-h-0 overflow-auto border border-border-solid rounded-lg bg-surface scrollbar-thin"
     >
-      {/* Select all matching banner */}
-      {showSelectAllBanner && (
-        <div className="sticky top-[37px] z-20 flex items-center justify-center gap-2 py-1.5 px-3 bg-accent/10 border-b border-accent/20 text-xs text-text">
-          All {data.length} loaded rows selected.
-          <button
-            onClick={handleSelectAllMatching}
-            className="text-accent-cyan hover:underline font-medium bg-transparent border-none cursor-pointer p-0"
-          >
-            Select all {totalMatching?.toLocaleString()} matching filters
-          </button>
-        </div>
-      )}
-
       <table className="w-full text-sm border-collapse" style={{ minWidth: 700 }}>
         <thead className="sticky top-0 z-10 bg-surface-alt">
           <tr>
@@ -257,6 +244,23 @@ export function DataTable<T extends { id?: string }>({
               </th>
             ))}
           </tr>
+          {/* Select all matching banner — separate header row below column names */}
+          {showSelectAllBanner && (
+            <tr>
+              <th
+                colSpan={columns.length + (selectable ? 1 : 0)}
+                className="py-1.5 px-3 bg-accent/10 border-b border-accent/20 text-xs text-text font-normal text-center"
+              >
+                All {data.length} loaded rows selected.{' '}
+                <button
+                  onClick={handleSelectAllMatching}
+                  className="text-accent-cyan hover:underline font-medium bg-transparent border-none cursor-pointer p-0"
+                >
+                  Select all {totalMatching?.toLocaleString()} matching filters
+                </button>
+              </th>
+            </tr>
+          )}
         </thead>
         <tbody>
           {offsetY > 0 && (
