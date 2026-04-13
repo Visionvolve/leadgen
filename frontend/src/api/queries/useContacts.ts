@@ -214,3 +214,23 @@ export function useUpdateContact() {
     },
   })
 }
+
+export function useCreateContact() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      first_name: string
+      last_name: string
+      email_address?: string
+      job_title?: string
+      company_id?: string
+      seniority_level?: string
+      department?: string
+      phone_number?: string
+      notes?: string
+    }) => apiFetch<ContactDetail>('/contacts', { method: 'POST', body: data }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['contacts'] })
+    },
+  })
+}

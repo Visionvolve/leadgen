@@ -137,6 +137,96 @@ ALLOWED_SORT = {
 }
 
 
+@companies_bp.route("/api/companies", methods=["POST"])
+@require_role("editor")
+def create_company():
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    allowed_fields = {
+        "domain",
+        "website_url",
+        "industry",
+        "company_size",
+        "geo_region",
+        "notes",
+    }
+
+    # Enum validation
+    enum_validators = {
+        "industry": {
+            "software_saas",
+            "it",
+            "professional_services",
+            "financial_services",
+            "healthcare",
+            "manufacturing",
+            "retail",
+            "media",
+            "energy",
+            "telecom",
+            "transport",
+            "construction",
+            "education",
+            "public_sector",
+            "other",
+        },
+        "company_size": {"micro", "startup", "smb", "mid_market", "enterprise"},
+        "geo_region": {
+            "dach",
+            "nordics",
+            "benelux",
+            "cee",
+            "uk_ireland",
+            "southern_europe",
+            "us",
+            "other",
+        },
+    }
+
+    columns = ["tenant_id", "name"]
+    placeholders = [":tenant_id", ":name"]
+    params = {"tenant_id": tenant_id, "name": name}
+
+    for field in allowed_fields:
+        val = body.get(field)
+        if val is not None:
+            val_str = str(val).strip()
+            if not val_str:
+                continue
+            if field in enum_validators and val_str not in enum_validators[field]:
+                return jsonify({"error": f"Invalid value for {field}"}), 400
+            columns.append(field)
+            placeholders.append(f":{field}")
+            params[field] = val_str
+
+    col_str = ", ".join(columns)
+    val_str = ", ".join(placeholders)
+    sql = f"INSERT INTO companies ({col_str}) VALUES ({val_str}) RETURNING id, name, domain, website_url, industry, company_size, geo_region, notes, created_at"
+    row = db.session.execute(db.text(sql), params).fetchone()
+    db.session.commit()
+
+    return jsonify(
+        {
+            "id": row.id,
+            "name": row.name,
+            "domain": row.domain,
+            "website_url": row.website_url,
+            "industry": row.industry,
+            "company_size": row.company_size,
+            "geo_region": row.geo_region,
+            "notes": row.notes,
+            "created_at": _iso(row.created_at),
+        }
+    ), 201
+
+
 @companies_bp.route("/api/companies", methods=["GET"])
 @require_auth
 def list_companies():
@@ -1097,12 +1187,79 @@ def update_company(company_id):
         "engagement_status",
         "crm_status",
         "cohort",
+        "name",
+        "domain",
+        "website_url",
+        "linkedin_url",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     custom_fields_update = body.get("custom_fields")
 
     if not fields and not custom_fields_update:
         return jsonify({"error": "No valid fields to update"}), 400
+
+    # Enum validation for fields with finite allowed values
+    company_enum_validators = {
+        "status": {
+            "new",
+            "enrichment_failed",
+            "triage_passed",
+            "triage_review",
+            "triage_disqualified",
+            "enrichment_l2_failed",
+            "enriched_l2",
+            "synced",
+            "needs_review",
+            "enriched",
+            "error_pushing_lemlist",
+        },
+        "tier": {
+            "tier_1_platinum",
+            "tier_2_gold",
+            "tier_3_silver",
+            "tier_4_bronze",
+            "tier_5_copper",
+            "deprioritize",
+        },
+        "buying_stage": {
+            "unaware",
+            "problem_aware",
+            "exploring_ai",
+            "looking_for_partners",
+            "in_discussion",
+            "proposal_sent",
+            "won",
+            "lost",
+        },
+        "engagement_status": {
+            "cold",
+            "approached",
+            "prospect",
+            "customer",
+            "churned",
+        },
+        "crm_status": {
+            "cold",
+            "scheduled_for_outreach",
+            "outreach",
+            "prospect",
+            "customer",
+            "churn",
+        },
+        "cohort": {"a", "b"},
+    }
+    for field, value in fields.items():
+        if (
+            field in company_enum_validators
+            and value not in company_enum_validators[field]
+        ):
+            return jsonify(
+                {
+                    "error": f"Invalid value '{value}' for field '{field}'",
+                    "field": field,
+                    "allowed": sorted(company_enum_validators[field]),
+                }
+            ), 400
 
     # Verify company belongs to tenant
     row = db.session.execute(

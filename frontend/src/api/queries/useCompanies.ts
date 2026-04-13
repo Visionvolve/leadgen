@@ -284,6 +284,24 @@ export function useUpdateCompany() {
   })
 }
 
+export function useCreateCompany() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      name: string
+      domain?: string
+      website_url?: string
+      industry?: string
+      company_size?: string
+      geo_region?: string
+      notes?: string
+    }) => apiFetch<CompanyDetail>('/companies', { method: 'POST', body: data }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['companies'] })
+    },
+  })
+}
+
 // ── Triage Review (BL-176) ────────────────────────────────
 
 export interface TriageQueueItem {

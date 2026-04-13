@@ -1,4 +1,5 @@
 """Unit tests for company routes."""
+
 from tests.conftest import auth_header
 
 
@@ -77,7 +78,9 @@ class TestListCompanies:
     def test_sort_by_triage_score_desc(self, client, seed_companies_contacts):
         headers = auth_header(client)
         headers["X-Namespace"] = "test-corp"
-        resp = client.get("/api/companies?sort=triage_score&sort_dir=desc", headers=headers)
+        resp = client.get(
+            "/api/companies?sort=triage_score&sort_dir=desc", headers=headers
+        )
         data = resp.get_json()
         scores = [c["triage_score"] for c in data["companies"]]
         assert scores == sorted(scores, reverse=True)
@@ -120,6 +123,7 @@ class TestListCompanies:
     def test_tenant_isolation(self, client, db, seed_companies_contacts):
         """Companies from another tenant should not be visible."""
         from api.models import Company, Tenant
+
         other = Tenant(name="Other Corp", slug="other-corp", is_active=True)
         db.session.add(other)
         db.session.flush()
@@ -166,7 +170,10 @@ class TestGetCompany:
         resp = client.get(f"/api/companies/{company_id}", headers=headers)
         data = resp.get_json()
         assert data["enrichment_l2"] is not None
-        assert data["enrichment_l2"]["modules"]["profile"]["company_intel"] == "Leading manufacturer in DACH region"
+        assert (
+            data["enrichment_l2"]["modules"]["profile"]["company_intel"]
+            == "Leading manufacturer in DACH region"
+        )
 
     def test_get_with_tags(self, client, seed_companies_contacts):
         headers = auth_header(client)
@@ -181,7 +188,9 @@ class TestGetCompany:
     def test_get_not_found(self, client, seed_companies_contacts):
         headers = auth_header(client)
         headers["X-Namespace"] = "test-corp"
-        resp = client.get("/api/companies/00000000-0000-0000-0000-000000000000", headers=headers)
+        resp = client.get(
+            "/api/companies/00000000-0000-0000-0000-000000000000", headers=headers
+        )
         assert resp.status_code == 404
 
 
@@ -215,7 +224,7 @@ class TestPatchCompany:
         company_id = seed_companies_contacts["companies"][0].id
         resp = client.patch(
             f"/api/companies/{company_id}",
-            json={"name": "Hacked Name"},
+            json={"tenant_id": "hacked"},
             headers=headers,
         )
         assert resp.status_code == 400

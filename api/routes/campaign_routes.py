@@ -840,6 +840,32 @@ def list_campaign_contacts(campaign_id):
     return jsonify({"contacts": contacts, "total": len(contacts)})
 
 
+@campaigns_bp.route("/api/campaigns/<campaign_id>/contact-ids", methods=["GET"])
+@require_auth
+def campaign_contact_ids(campaign_id):
+    """Lightweight endpoint returning just the contact IDs in a campaign."""
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    campaign = db.session.execute(
+        db.text("SELECT id FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    rows = db.session.execute(
+        db.text(
+            "SELECT contact_id FROM campaign_contacts "
+            "WHERE campaign_id = :cid AND tenant_id = :t"
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+
+    return jsonify({"contact_ids": [str(r[0]) for r in rows]})
+
+
 def _resolve_contacts_by_filters(tenant_id, owner_id, icp_filters, company_ids):
     """Resolve contact IDs from owner_id, ICP filters, and company_ids.
 

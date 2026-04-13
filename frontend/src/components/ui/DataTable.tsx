@@ -1,4 +1,6 @@
 import { useRef, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { InlineEditCell } from './InlineEditCell'
+import type { ColumnDef } from '../../config/columns'
 
 const ROW_HEIGHT = 41
 const BUFFER = 20
@@ -30,6 +32,9 @@ interface DataTableProps<T> {
   selectedIds?: Set<string>
   onSelectionChange?: (ids: Set<string>, mode: SelectionMode) => void
   totalMatching?: number
+  // Inline editing props
+  onCellEdit?: (item: T, field: string, value: string) => Promise<void>
+  cellStates?: Map<string, string>
 }
 
 export function DataTable<T extends { id?: string }>({
@@ -46,6 +51,8 @@ export function DataTable<T extends { id?: string }>({
   selectedIds,
   onSelectionChange,
   totalMatching,
+  onCellEdit,
+  cellStates,
 }: DataTableProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -283,23 +290,56 @@ export function DataTable<T extends { id?: string }>({
                     />
                   </td>
                 )}
-                {columns.map((col) => (
-                  <td
-                    key={col.key}
-                    onClick={() => {
-                      onRowClick?.(item)
-                    }}
-                    className={`px-3 py-0 text-text ${col.shrink !== false ? 'truncate' : ''} ${onRowClick ? 'cursor-pointer' : ''}`}
-                    style={{
-                      maxWidth: col.width ?? '200px',
-                      minWidth: col.minWidth,
-                    }}
-                  >
-                    {col.render
-                      ? col.render(item)
-                      : (item as Record<string, unknown>)[col.key] as ReactNode ?? '-'}
-                  </td>
-                ))}
+                {columns.map((col) => {
+                  const colDef = col as ColumnDef<T>
+                  const editField = colDef.editField ?? col.key
+                  const isEditable = colDef.editable && onCellEdit
+                  const cellKey = item.id ? `${item.id}:${editField}` : undefined
+                  const cellStatus = cellKey && cellStates ? cellStates.get(cellKey) as 'saving' | 'saved' | 'error' | undefined : undefined
+                  const rawValue = (item as Record<string, unknown>)[col.key]
+
+                  if (isEditable && colDef.editType && item.id) {
+                    return (
+                      <td
+                        key={col.key}
+                        className={`px-3 py-0 text-text ${col.shrink !== false ? 'truncate' : ''}`}
+                        style={{
+                          maxWidth: col.width ?? '200px',
+                          minWidth: col.minWidth,
+                        }}
+                      >
+                        <InlineEditCell
+                          value={(rawValue as string) ?? null}
+                          displayValue={col.render ? col.render(item) : undefined}
+                          editType={colDef.editType}
+                          options={colDef.editOptions}
+                          reverseMap={colDef.editReverse}
+                          onSave={(newValue) => onCellEdit(item, editField, newValue)}
+                          cellStatus={cellStatus}
+                          onRowClick={() => onRowClick?.(item)}
+                        />
+                      </td>
+                    )
+                  }
+
+                  return (
+                    <td
+                      key={col.key}
+                      onClick={() => {
+                        onRowClick?.(item)
+                      }}
+                      className={`px-3 py-0 text-text ${col.shrink !== false ? 'truncate' : ''} ${onRowClick ? 'cursor-pointer' : ''}`}
+                      style={{
+                        maxWidth: col.width ?? '200px',
+                        minWidth: col.minWidth,
+                      }}
+                    >
+                      {col.render
+                        ? col.render(item)
+                        : rawValue as ReactNode ?? '-'}
+                    </td>
+                  )
+                })}
               </tr>
             )
           })}

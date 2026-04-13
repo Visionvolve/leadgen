@@ -100,6 +100,107 @@ ALLOWED_SORT = {
 }
 
 
+@contacts_bp.route("/api/contacts", methods=["POST"])
+@require_role("editor")
+def create_contact():
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    first_name = (body.get("first_name") or "").strip()
+    last_name = (body.get("last_name") or "").strip()
+    if not first_name or not last_name:
+        return jsonify({"error": "first_name and last_name are required"}), 400
+
+    allowed_fields = {
+        "email_address",
+        "job_title",
+        "company_id",
+        "seniority_level",
+        "department",
+        "phone_number",
+        "notes",
+    }
+
+    # Enum validation
+    enum_validators = {
+        "seniority_level": {
+            "c_level",
+            "vp",
+            "director",
+            "manager",
+            "individual_contributor",
+            "founder",
+            "other",
+        },
+        "department": {
+            "executive",
+            "engineering",
+            "product",
+            "sales",
+            "marketing",
+            "customer_success",
+            "finance",
+            "hr",
+            "operations",
+            "other",
+        },
+    }
+
+    columns = ["tenant_id", "first_name", "last_name"]
+    placeholders = [":tenant_id", ":first_name", ":last_name"]
+    params = {
+        "tenant_id": tenant_id,
+        "first_name": first_name,
+        "last_name": last_name,
+    }
+
+    for field in allowed_fields:
+        val = body.get(field)
+        if val is not None:
+            val_str = str(val).strip()
+            if not val_str:
+                continue
+            if field in enum_validators and val_str not in enum_validators[field]:
+                return jsonify({"error": f"Invalid value for {field}"}), 400
+            columns.append(field)
+            placeholders.append(f":{field}")
+            params[field] = val_str
+
+    # Validate company_id belongs to tenant
+    if "company_id" in params:
+        check = db.session.execute(
+            db.text("SELECT id FROM companies WHERE id = :cid AND tenant_id = :tid"),
+            {"cid": params["company_id"], "tid": tenant_id},
+        ).fetchone()
+        if not check:
+            return jsonify({"error": "Company not found"}), 404
+
+    col_str = ", ".join(columns)
+    val_str = ", ".join(placeholders)
+    sql = f"INSERT INTO contacts ({col_str}) VALUES ({val_str}) RETURNING id, first_name, last_name, email_address, job_title, company_id, seniority_level, department, phone_number, notes, created_at"
+    row = db.session.execute(db.text(sql), params).fetchone()
+    db.session.commit()
+
+    return jsonify(
+        {
+            "id": row.id,
+            "first_name": row.first_name,
+            "last_name": row.last_name,
+            "full_name": f"{row.first_name} {row.last_name}".strip(),
+            "email_address": row.email_address,
+            "job_title": row.job_title,
+            "company_id": row.company_id,
+            "seniority_level": row.seniority_level,
+            "department": row.department,
+            "phone_number": row.phone_number,
+            "notes": row.notes,
+            "created_at": _iso(row.created_at),
+        }
+    ), 201
+
+
 @contacts_bp.route("/api/contacts", methods=["GET"])
 @require_auth
 def list_contacts():
@@ -201,7 +302,7 @@ def list_contacts():
             skills_clauses = []
             for i, v in enumerate(skills_vals):
                 params[f"skill_{i}"] = v.lower()
-                skills_clauses.append(f"LOWER(sk.value::text) = :skill_{i}")
+                skills_clauses.append(f"LOWER(CAST(sk.value AS TEXT)) = :skill_{i}")
             combined_skills = " OR ".join(skills_clauses)
             if skills_exclude:
                 where.append(
@@ -230,7 +331,9 @@ def list_contacts():
             interests_clauses = []
             for i, v in enumerate(interests_vals):
                 params[f"interest_{i}"] = v.lower()
-                interests_clauses.append(f"LOWER(ti.value::text) = :interest_{i}")
+                interests_clauses.append(
+                    f"LOWER(CAST(ti.value AS TEXT)) = :interest_{i}"
+                )
             combined_interests = " OR ".join(interests_clauses)
             if interests_exclude:
                 where.append(
@@ -314,11 +417,11 @@ def list_contacts():
                 co.id AS company_id, co.name AS company_name,
                 ct.email_address,
                 COALESCE(ct.contact_score, ce.contact_score) AS contact_score,
-                COALESCE(ct.icp_fit, ce.icp_fit) AS icp_fit,
+                COALESCE(CAST(ct.icp_fit AS TEXT), ce.icp_fit) AS icp_fit,
                 ct.message_status,
                 o.name AS owner_name,
-                COALESCE(ct.seniority_level, ce.seniority) AS seniority_level,
-                COALESCE(ct.department, ce.department) AS department,
+                COALESCE(CAST(ct.seniority_level AS TEXT), ce.seniority) AS seniority_level,
+                COALESCE(CAST(ct.department AS TEXT), ce.department) AS department,
                 ct.location_city, ct.location_country,
                 ct.linkedin_url, ct.phone_number,
                 ct.ai_champion_score, ct.authority_score,
@@ -462,10 +565,10 @@ def get_contact(contact_id):
                 ct.id, ct.first_name, ct.last_name, ct.job_title,
                 ct.email_address, ct.linkedin_url, ct.phone_number,
                 ct.profile_photo_url,
-                COALESCE(ct.seniority_level, ce.seniority) AS seniority_level,
-                COALESCE(ct.department, ce.department) AS department,
+                COALESCE(CAST(ct.seniority_level AS TEXT), ce.seniority) AS seniority_level,
+                COALESCE(CAST(ct.department AS TEXT), ce.department) AS department,
                 ct.location_city, ct.location_country,
-                COALESCE(ct.icp_fit, ce.icp_fit) AS icp_fit,
+                COALESCE(CAST(ct.icp_fit AS TEXT), ce.icp_fit) AS icp_fit,
                 ct.relationship_status,
                 ct.contact_source, ct.language, ct.message_status,
                 ct.ai_champion, ct.ai_champion_score,
@@ -672,12 +775,95 @@ def update_contact(contact_id):
         "department",
         "contact_source",
         "language",
+        "first_name",
+        "last_name",
+        "email_address",
+        "job_title",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     custom_fields_update = body.get("custom_fields")
 
     if not fields and not custom_fields_update:
         return jsonify({"error": "No valid fields to update"}), 400
+
+    # Enum validation for fields with finite allowed values
+    contact_enum_validators = {
+        "icp_fit": {"strong_fit", "moderate_fit", "weak_fit", "unknown"},
+        "seniority_level": {
+            "c_level",
+            "vp",
+            "director",
+            "manager",
+            "individual_contributor",
+            "founder",
+            "other",
+        },
+        "department": {
+            "executive",
+            "engineering",
+            "product",
+            "sales",
+            "marketing",
+            "customer_success",
+            "finance",
+            "hr",
+            "operations",
+            "other",
+        },
+        "message_status": {
+            "not_started",
+            "generating",
+            "pending_review",
+            "approved",
+            "sent",
+            "replied",
+            "no_channel",
+            "generation_failed",
+        },
+        "language": {
+            "en",
+            "cs",
+            "da",
+            "de",
+            "es",
+            "fi",
+            "fr",
+            "it",
+            "nl",
+            "no",
+            "pl",
+            "pt",
+            "sv",
+        },
+        "contact_source": {
+            "inbound",
+            "outbound",
+            "referral",
+            "event",
+            "social",
+            "other",
+        },
+        "relationship_status": {
+            "prospect",
+            "active",
+            "dormant",
+            "former",
+            "partner",
+            "internal",
+        },
+    }
+    for field, value in fields.items():
+        if (
+            field in contact_enum_validators
+            and value not in contact_enum_validators[field]
+        ):
+            return jsonify(
+                {
+                    "error": f"Invalid value '{value}' for field '{field}'",
+                    "field": field,
+                    "allowed": sorted(contact_enum_validators[field]),
+                }
+            ), 400
 
     row = db.session.execute(
         db.text(
@@ -803,7 +989,7 @@ def filter_counts():
             jf_clauses = []
             for i, v in enumerate(jf_values):
                 params[f"{jf_key}_{i}"] = v.lower()
-                jf_clauses.append(f"LOWER(jfv.value::text) = :{jf_key}_{i}")
+                jf_clauses.append(f"LOWER(CAST(jfv.value AS TEXT)) = :{jf_key}_{i}")
             combined_jf = " OR ".join(jf_clauses)
             if jf_exclude:
                 where.append(
