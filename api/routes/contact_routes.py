@@ -98,6 +98,12 @@ ALLOWED_SORT = {
     "authority_score",
     "linkedin_activity_level",
     "last_enriched_at",
+    "company_name",
+}
+
+# Map sort keys that don't live on the contacts table
+_SORT_COL_MAP = {
+    "company_name": "co.name",
 }
 
 
@@ -415,7 +421,8 @@ def list_contacts():
     pages = max(1, math.ceil(total / page_size))
     offset = (page - 1) * page_size
 
-    order = f"ct.{sort} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST"
+    sort_col = _SORT_COL_MAP.get(sort, f"ct.{sort}")
+    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST"
 
     rows = db.session.execute(
         db.text(f"""

@@ -49,6 +49,7 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
   {
     key: 'company_name',
     label: 'Company',
+    sortKey: 'company_name',
     minWidth: '120px',
     defaultVisible: true,
     render: (c) =>
