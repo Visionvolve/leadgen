@@ -16,6 +16,7 @@ from flask import current_app
 from sqlalchemy import text
 
 from ..models import db
+from .dag_executor import get_dag_eligible_ids
 
 logger = logging.getLogger(__name__)
 
@@ -939,6 +940,10 @@ def run_stage_reactive(
     tier_filter=None,
     predecessor_run_ids=None,
     sample_size=None,
+    entity_ids=None,
+    re_enrich=None,
+    re_enrich_horizon_days=None,
+    boost=None,
 ):
     """Background thread: reactive stage that polls for new eligible IDs.
 
@@ -947,6 +952,10 @@ def run_stage_reactive(
     - Terminates when predecessors are all terminal AND no new eligible IDs
     - L1 has no predecessors: processes initial set, then finishes
     - sample_size: limit total entities processed across all polls
+    - entity_ids: when provided, only process these specific entities
+    - re_enrich: per-stage re-enrich config dict
+    - re_enrich_horizon_days: global re-enrich horizon in days
+    - boost: per-stage boost model selection dict
     """
     with app.app_context():
         skip_hours = current_app.config.get("ENRICHMENT_SKIP_RECENT_HOURS", 24)
@@ -993,10 +1002,66 @@ def run_stage_reactive(
                 return
 
             # Query for eligible IDs
+            # When entity_ids are provided, use DAG-based eligibility which
+            # supports entity_ids filtering and re-enrich horizon.
             try:
-                all_eligible = get_eligible_ids(
-                    tenant_id, tag_id, stage, owner_id, tier_filter
-                )
+                if entity_ids:
+                    # Compute re-enrich horizon for this stage
+                    _re_enrich_horizon = None
+                    if re_enrich:
+                        stage_re = re_enrich.get(stage, {})
+                        if stage_re.get("enabled"):
+                            horizon_days = (
+                                stage_re.get("horizon") or re_enrich_horizon_days
+                            )
+                            if horizon_days:
+                                from datetime import timedelta
+
+                                _re_enrich_horizon = (
+                                    datetime.now(timezone.utc)
+                                    - timedelta(days=int(horizon_days))
+                                ).isoformat()
+                    elif re_enrich_horizon_days:
+                        from datetime import timedelta
+
+                        _re_enrich_horizon = (
+                            datetime.now(timezone.utc)
+                            - timedelta(days=int(re_enrich_horizon_days))
+                        ).isoformat()
+
+                    # Look up pipeline_run_id from stage_run config
+                    _pr_row = db.session.execute(
+                        text("SELECT config FROM stage_runs WHERE id = :id"),
+                        {"id": str(run_id)},
+                    ).fetchone()
+                    _pipeline_run_id = None
+                    if _pr_row and _pr_row[0]:
+                        import json as _json
+
+                        try:
+                            _cfg = (
+                                _json.loads(_pr_row[0])
+                                if isinstance(_pr_row[0], str)
+                                else _pr_row[0]
+                            )
+                            _pipeline_run_id = _cfg.get("pipeline_run_id")
+                        except Exception:
+                            pass
+
+                    all_eligible = get_dag_eligible_ids(
+                        stage,
+                        _pipeline_run_id,
+                        tenant_id,
+                        tag_id,
+                        owner_id=owner_id,
+                        tier_filter=tier_filter,
+                        entity_ids=entity_ids,
+                        re_enrich_horizon=_re_enrich_horizon,
+                    )
+                else:
+                    all_eligible = get_eligible_ids(
+                        tenant_id, tag_id, stage, owner_id, tier_filter
+                    )
             except Exception as e:
                 logger.error("Reactive stage %s eligibility query failed: %s", stage, e)
                 time.sleep(REACTIVE_POLL_INTERVAL)
@@ -1004,15 +1069,22 @@ def run_stage_reactive(
 
             new_ids = [eid for eid in all_eligible if eid not in processed_ids]
 
-            # Safe resume: filter out recently enriched
-            filtered_ids = []
-            for eid in new_ids:
-                if _is_recently_enriched(eid, stage, hours=skip_hours):
-                    processed_ids.add(eid)
-                    skipped_count += 1
-                else:
-                    filtered_ids.append(eid)
-            new_ids = filtered_ids
+            # Safe resume: filter out recently enriched (skip when re-enrich is active)
+            stage_re_enrich_active = False
+            if re_enrich and re_enrich.get(stage, {}).get("enabled"):
+                stage_re_enrich_active = True
+            if re_enrich_horizon_days and not re_enrich:
+                stage_re_enrich_active = True
+
+            if not stage_re_enrich_active:
+                filtered_ids = []
+                for eid in new_ids:
+                    if _is_recently_enriched(eid, stage, hours=skip_hours):
+                        processed_ids.add(eid)
+                        skipped_count += 1
+                    else:
+                        filtered_ids.append(eid)
+                new_ids = filtered_ids
 
             # Trim to sample limit
             if sample_remaining is not None and len(new_ids) > sample_remaining:
@@ -1235,6 +1307,10 @@ def start_pipeline_threads(
     tier_filter=None,
     stage_run_ids=None,
     sample_size=None,
+    entity_ids=None,
+    re_enrich=None,
+    re_enrich_horizon_days=None,
+    boost=None,
 ):
     """Spawn reactive stage threads for all stages + coordinator thread.
 
@@ -1242,6 +1318,10 @@ def start_pipeline_threads(
         stages_to_run: list of stage names to run (e.g. ["l1", "l2", "person"])
         stage_run_ids: dict of stage_name → stage_run_id (pre-created)
         sample_size: optional limit on how many entities to process per stage
+        entity_ids: optional list of specific entity UUIDs to process
+        re_enrich: optional dict of per-stage re-enrich config
+        re_enrich_horizon_days: optional global re-enrich horizon in days
+        boost: optional dict of per-stage boost model selection
     """
     threads = {}
 
@@ -1260,6 +1340,10 @@ def start_pipeline_threads(
                 "tier_filter": tier_filter,
                 "predecessor_run_ids": predecessor_run_ids,
                 "sample_size": sample_size,
+                "entity_ids": entity_ids,
+                "re_enrich": re_enrich,
+                "re_enrich_horizon_days": re_enrich_horizon_days,
+                "boost": boost,
             },
             daemon=True,
             name=f"reactive-{stage}-{run_id}",

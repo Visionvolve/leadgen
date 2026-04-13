@@ -410,6 +410,200 @@ class TestEnrichStart:
         )
         assert resp.status_code == 401
 
+    def test_start_with_entity_ids(self, client, db, seed_enrich_data):
+        """entity_ids should be validated, stored in config, and passed to threads."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        company_ids = [str(c.id) for c in seed_enrich_data["companies_new"][:2]]
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "stages": ["l1"],
+                    "entity_ids": company_ids,
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert "pipeline_run_id" in data
+
+        # Verify entity_ids stored in config
+        import json
+
+        row = db.session.execute(
+            db.text("SELECT config FROM pipeline_runs WHERE id = :id"),
+            {"id": data["pipeline_run_id"]},
+        ).fetchone()
+        config = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        assert sorted(config["entity_ids"]) == sorted(company_ids)
+
+        # Verify entity_ids passed to start_pipeline_threads
+        mock_threads.assert_called_once()
+        call_kwargs = mock_threads.call_args
+        assert sorted(call_kwargs.kwargs["entity_ids"]) == sorted(company_ids)
+
+    def test_start_entity_ids_tenant_validation(self, client, db, seed_enrich_data):
+        """entity_ids from another tenant should be silently excluded."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        real_id = str(seed_enrich_data["companies_new"][0].id)
+        fake_id = _uuid()  # does not exist in any tenant
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "stages": ["l1"],
+                    "entity_ids": [real_id, fake_id],
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        # Only the real ID should be in the config
+        import json
+
+        row = db.session.execute(
+            db.text("SELECT config FROM pipeline_runs WHERE id = :id"),
+            {"id": resp.get_json()["pipeline_run_id"]},
+        ).fetchone()
+        config = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        assert config["entity_ids"] == [real_id]
+        assert mock_threads.call_args.kwargs["entity_ids"] == [real_id]
+
+    def test_start_entity_ids_with_re_enrich(self, client, db, seed_enrich_data):
+        """re_enrich config should be parsed and forwarded."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        company_ids = [str(c.id) for c in seed_enrich_data["companies_new"][:1]]
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "stages": ["l1"],
+                    "entity_ids": company_ids,
+                    "re_enrich": {"l1": {"enabled": True, "horizon": "30"}},
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        call_kwargs = mock_threads.call_args.kwargs
+        assert call_kwargs["re_enrich"] == {"l1": {"enabled": True, "horizon": "30"}}
+
+    def test_start_entity_ids_with_boost(self, client, db, seed_enrich_data):
+        """boost config should be parsed and forwarded."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        company_ids = [str(c.id) for c in seed_enrich_data["companies_new"][:1]]
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "stages": ["l1"],
+                    "entity_ids": company_ids,
+                    "boost": {"l1": True},
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        import json
+
+        row = db.session.execute(
+            db.text("SELECT config FROM pipeline_runs WHERE id = :id"),
+            {"id": resp.get_json()["pipeline_run_id"]},
+        ).fetchone()
+        config = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        assert config["boost"] == {"l1": True}
+        assert mock_threads.call_args.kwargs["boost"] == {"l1": True}
+
+    def test_start_empty_entity_ids_ignored(self, client, db, seed_enrich_data):
+        """Empty entity_ids array should fall back to tag/owner mode."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "tag_name": "enrich-batch",
+                    "stages": ["l1"],
+                    "entity_ids": [],
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        # entity_ids should not be in config or call kwargs
+        import json
+
+        row = db.session.execute(
+            db.text("SELECT config FROM pipeline_runs WHERE id = :id"),
+            {"id": resp.get_json()["pipeline_run_id"]},
+        ).fetchone()
+        config = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        assert "entity_ids" not in config
+        assert mock_threads.call_args.kwargs["entity_ids"] is None
+
+    def test_start_invalid_uuid_entity_ids_dropped(self, client, seed_enrich_data):
+        """Non-UUID entity_ids should be silently dropped."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        real_id = str(seed_enrich_data["companies_new"][0].id)
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "stages": ["l1"],
+                    "entity_ids": [real_id, "not-a-uuid", "also-bad"],
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        assert mock_threads.call_args.kwargs["entity_ids"] == [real_id]
+
+    def test_start_with_re_enrich_horizon_days(self, client, db, seed_enrich_data):
+        """re_enrich_horizon_days should be stored in config."""
+        headers = auth_header(client)
+        headers["X-Namespace"] = seed_enrich_data["tenant"].slug
+
+        company_ids = [str(c.id) for c in seed_enrich_data["companies_new"][:1]]
+
+        with patch("api.routes.enrich_routes.start_pipeline_threads") as mock_threads:
+            resp = client.post(
+                "/api/enrich/start",
+                json={
+                    "stages": ["l1"],
+                    "entity_ids": company_ids,
+                    "re_enrich_horizon_days": 30,
+                },
+                headers=headers,
+            )
+
+        assert resp.status_code == 201
+        import json
+
+        row = db.session.execute(
+            db.text("SELECT config FROM pipeline_runs WHERE id = :id"),
+            {"id": resp.get_json()["pipeline_run_id"]},
+        ).fetchone()
+        config = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        assert config["re_enrich_horizon_days"] == 30
+        assert mock_threads.call_args.kwargs["re_enrich_horizon_days"] == 30
+
 
 @pytest.fixture
 def seed_review_data(db, seed_tenant, seed_super_admin):

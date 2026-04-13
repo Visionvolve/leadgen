@@ -201,6 +201,10 @@ def enrich_start():
     tier_filter = body.get("tier_filter", [])
     stages = body.get("stages", [])
     sample_size = body.get("sample_size")
+    entity_ids = body.get("entity_ids", [])
+    re_enrich = body.get("re_enrich", {})
+    re_enrich_horizon_days = body.get("re_enrich_horizon_days")
+    boost = body.get("boost", {})
 
     if not stages:
         return jsonify({"error": "stages is required"}), 400
@@ -214,6 +218,44 @@ def enrich_start():
     if invalid:
         return jsonify({"error": f"Invalid stages: {', '.join(invalid)}"}), 400
 
+    # Sanitise entity_ids: validate UUIDs and filter to tenant-owned entities
+    import uuid as _uuid_mod
+
+    validated_entity_ids = None
+    if entity_ids:
+        valid_uuids = []
+        for eid in entity_ids:
+            try:
+                _uuid_mod.UUID(str(eid))
+                valid_uuids.append(str(eid))
+            except (ValueError, AttributeError):
+                pass  # silently drop non-UUID values
+        if valid_uuids:
+            # Security: verify all entity_ids belong to the calling tenant
+            # Check both companies and contacts tables
+            eid_placeholders = ", ".join(f":eid_{i}" for i in range(len(valid_uuids)))
+            eid_params = {f"eid_{i}": v for i, v in enumerate(valid_uuids)}
+            eid_params["t"] = str(tenant_id)
+
+            company_rows = db.session.execute(
+                text(
+                    f"SELECT id FROM companies WHERE tenant_id = :t AND id IN ({eid_placeholders})"
+                ),
+                eid_params,
+            ).fetchall()
+            contact_rows = db.session.execute(
+                text(
+                    f"SELECT id FROM contacts WHERE tenant_id = :t AND id IN ({eid_placeholders})"
+                ),
+                eid_params,
+            ).fetchall()
+            tenant_owned = {str(r[0]) for r in company_rows} | {
+                str(r[0]) for r in contact_rows
+            }
+            validated_entity_ids = [eid for eid in valid_uuids if eid in tenant_owned]
+            if not validated_entity_ids:
+                validated_entity_ids = None
+
     # Tag is optional — when omitted, run across all entities in tenant
     tag_id = None
     if tag_name:
@@ -223,8 +265,19 @@ def enrich_start():
 
     owner_id = _resolve_owner(tenant_id, owner_name)
 
-    # Check no pipeline already running for this tag (or tenant-wide if no tag)
-    if tag_id:
+    # Check no pipeline already running for this selection.
+    # When entity_ids are provided, check by tenant_id only (tag-independent).
+    if validated_entity_ids:
+        existing = db.session.execute(
+            text("""
+                SELECT id FROM pipeline_runs
+                WHERE tenant_id = :t
+                  AND status IN ('running', 'stopping')
+                LIMIT 1
+            """),
+            {"t": str(tenant_id)},
+        ).fetchone()
+    elif tag_id:
         existing = db.session.execute(
             text("""
                 SELECT id FROM pipeline_runs
@@ -257,6 +310,17 @@ def enrich_start():
         config["owner"] = owner_name
     if sample_size:
         config["sample_size"] = int(sample_size)
+    if validated_entity_ids:
+        config["entity_ids"] = validated_entity_ids
+    if re_enrich:
+        config["re_enrich"] = re_enrich
+    if re_enrich_horizon_days is not None:
+        try:
+            config["re_enrich_horizon_days"] = int(re_enrich_horizon_days)
+        except (TypeError, ValueError):
+            pass
+    if boost:
+        config["boost"] = boost
 
     # Create pipeline_run record
     pipeline_run = PipelineRun(
@@ -304,6 +368,10 @@ def enrich_start():
         tier_filter=tier_filter,
         stage_run_ids=stage_run_ids,
         sample_size=int(sample_size) if sample_size else None,
+        entity_ids=validated_entity_ids,
+        re_enrich=re_enrich,
+        re_enrich_horizon_days=config.get("re_enrich_horizon_days"),
+        boost=boost,
     )
 
     return jsonify(

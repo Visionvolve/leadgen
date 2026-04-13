@@ -251,6 +251,7 @@ export function useEnrichState() {
     filters,
     filterConfigs,
     handleFilterChange,
+    setEntityIds,
 
     // DAG mode
     dagMode,
