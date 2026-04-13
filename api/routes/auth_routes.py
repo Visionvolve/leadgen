@@ -173,8 +173,11 @@ def iam_callback():
 
         local_user.last_login_at = datetime.now(timezone.utc)
         db.session.commit()
-    except Exception as e:
-        logger.error("Failed to sync IAM user locally: %s", e)
+    except Exception:
+        logger.error(
+            "Failed to sync IAM user locally — full traceback:\n%s",
+            __import__("traceback").format_exc(),
+        )
         return redirect("/?error=user_sync_failed")
 
     # Serialize user data for frontend
