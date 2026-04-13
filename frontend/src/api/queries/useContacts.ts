@@ -28,6 +28,7 @@ export interface ContactListItem {
   linkedin_activity_level: string | null
   language: string | null
   contact_source: string | null
+  address_style: string | null
   // Enrichment summary fields (BL-180)
   company_tier: string | null
   company_status: string | null
@@ -109,6 +110,7 @@ export interface ContactDetail {
   relationship_status: string | null
   contact_source: string | null
   language: string | null
+  address_style: string | null
   message_status: string | null
   ai_champion: string | null
   ai_champion_score: number | null

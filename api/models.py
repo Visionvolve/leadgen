@@ -710,6 +710,8 @@ class Contact(db.Model):
     import_source = db.Column(db.Text)
     # UA campaign features (migration 054)
     last_collaboration_at = db.Column(db.DateTime(timezone=True))
+    # Address style: tykat (informal) or vykat (formal) — migration 057
+    address_style = db.Column(db.Text, default="vykat")
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 

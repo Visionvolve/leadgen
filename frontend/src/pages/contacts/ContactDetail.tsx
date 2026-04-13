@@ -19,6 +19,7 @@ import {
   RELATIONSHIP_STATUS_DISPLAY, RELATIONSHIP_STATUS_REVERSE,
   CONTACT_SOURCE_DISPLAY, CONTACT_SOURCE_REVERSE,
   LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
+  ADDRESS_STYLE_DISPLAY, ADDRESS_STYLE_REVERSE,
   MESSAGE_STATUS_REVERSE,
   filterOptions,
   formatPhone,
@@ -144,6 +145,7 @@ export function ContactDetail({ contact, onNavigate }: Props) {
           <EditableSelect label="Relationship" name="relationship_status" value={getEditableValue('relationship_status', contact.relationship_status)} options={filterOptions(RELATIONSHIP_STATUS_DISPLAY)} onChange={handleFieldChange} />
           <EditableSelect label="Source" name="contact_source" value={getEditableValue('contact_source', contact.contact_source)} options={filterOptions(CONTACT_SOURCE_DISPLAY)} onChange={handleFieldChange} />
           <EditableSelect label="Language" name="language" value={getEditableValue('language', contact.language)} options={filterOptions(LANGUAGE_DISPLAY)} onChange={handleFieldChange} />
+          <EditableSelect label="Tykání/Vykání" name="address_style" value={getEditableValue('address_style', contact.address_style ?? 'vykat')} options={filterOptions(ADDRESS_STYLE_DISPLAY)} onChange={handleFieldChange} />
         </FieldGrid>
 
         {/* Notes (editable) */}

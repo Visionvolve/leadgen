@@ -215,6 +215,11 @@ export const CONTACT_SOURCE_DISPLAY: Record<string, string> = {
   other: 'Other',
 }
 
+export const ADDRESS_STYLE_DISPLAY: Record<string, string> = {
+  tykat: 'Tykání',
+  vykat: 'Vykání',
+}
+
 export const LANGUAGE_DISPLAY: Record<string, string> = {
   en: 'English',
   cs: 'Czech',
@@ -254,6 +259,7 @@ export const LANGUAGE_REVERSE = buildReverse(LANGUAGE_DISPLAY)
 export const BUYING_STAGE_REVERSE = buildReverse(BUYING_STAGE_DISPLAY)
 export const ENGAGEMENT_STATUS_REVERSE = buildReverse(ENGAGEMENT_STATUS_DISPLAY)
 export const CRM_STATUS_REVERSE = buildReverse(CRM_STATUS_DISPLAY)
+export const ADDRESS_STYLE_REVERSE = buildReverse(ADDRESS_STYLE_DISPLAY)
 export const COHORT_REVERSE = buildReverse(COHORT_DISPLAY)
 
 /** Look up display value from a map, returning raw value as fallback. */
