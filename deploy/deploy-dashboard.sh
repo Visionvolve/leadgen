@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VPS_KEY="/Users/michal/git/visionvolve-vps/LightsailDefaultKey-eu-central-1.pem"
+VPS_KEY="/Users/michal/git/visionvolve-vps/vps-deploy-key"
 VPS_HOST="ec2-user@52.58.119.191"
 VPS_DIR="/home/ec2-user/n8n-docker-caddy"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -68,6 +68,54 @@ COMPOSE_FILES="-f docker-compose.yml -f docker-compose.mcp.yml -f docker-compose
 docker compose $COMPOSE_FILES up -d caddy
 echo "    Caddy restarted"
 REMOTE
+
+# 6. Post-deploy health checks (verify API is still healthy after Caddy restart)
+HEALTH_URL="https://leadgen.visionvolve.com/api/health"
+LIVENESS_URL="https://leadgen.visionvolve.com/api/health/liveness"
+
+echo "==> Waiting for API liveness after Caddy restart..."
+LIVE=0
+for i in 1 2 3 4 5 6; do
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$LIVENESS_URL" || true)
+  if [ "$HTTP_CODE" = "200" ]; then
+    LIVE=1
+    echo "    Liveness OK (attempt $i)"
+    break
+  fi
+  echo "    Liveness not ready (HTTP $HTTP_CODE), retrying in 5s... (attempt $i/6)"
+  sleep 5
+done
+
+if [ "$LIVE" -ne 1 ]; then
+  echo "DEPLOY WARNING: API liveness check failed after Caddy restart"
+  echo "    Dashboard is deployed but API may be down"
+  exit 1
+fi
+
+echo "==> Checking API readiness (DB connectivity)..."
+READY=0
+for i in 1 2 3; do
+  BODY=$(curl -s "$HEALTH_URL" || true)
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+  echo "    Attempt $i/3: HTTP $HTTP_CODE — $BODY"
+  if [ "$HTTP_CODE" = "200" ]; then
+    READY=1
+    break
+  fi
+  if [ "$i" -lt 3 ]; then
+    echo "    Retrying in 5s..."
+    sleep 5
+  fi
+done
+
+if [ "$READY" -ne 1 ]; then
+  echo ""
+  echo "========================================="
+  echo "DEPLOY FAILED: API is up but cannot reach database"
+  echo "Last health response: $BODY"
+  echo "========================================="
+  exit 1
+fi
 
 echo "==> Dashboard deployed to https://leadgen.visionvolve.com/"
 echo "    React SPA handles all pages"

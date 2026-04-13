@@ -72,6 +72,21 @@ def create_app():
             db.session.rollback()
             app.logger.warning("Could not clean orphaned runs (likely first boot)")
 
+    # Verify DB connectivity at startup (non-fatal — health endpoint surfaces it)
+    with app.app_context():
+        try:
+            from sqlalchemy import text as _text
+
+            db.session.execute(_text("SELECT 1"))
+            db.session.rollback()
+            app.logger.info("Startup DB connectivity check: OK")
+        except Exception as exc:
+            app.logger.critical(
+                "Startup DB connectivity check FAILED: %s — "
+                "the /api/health endpoint will report unhealthy until DB is reachable",
+                exc,
+            )
+
     @app.errorhandler(500)
     def handle_500(e):
         app.logger.error("Unhandled 500:\n%s", traceback.format_exc())
