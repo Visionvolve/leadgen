@@ -29,8 +29,22 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     sortKey: 'name',
     minWidth: '140px',
     defaultVisible: true,
-    editable: true,
-    editType: 'text',
+    render: (c) => {
+      const ns = window.location.pathname.split('/')[1]
+      return (
+        <a
+          href={`/${ns}/companies/${c.id}`}
+          onClick={(e) => {
+            e.preventDefault()
+            // Navigation handled by click — push to history
+            window.dispatchEvent(new CustomEvent('leadgen:navigate', { detail: `/${ns}/companies/${c.id}` }))
+          }}
+          className="text-accent-cyan hover:underline cursor-pointer truncate block"
+        >
+          {c.name || '-'}
+        </a>
+      )
+    },
   },
   {
     key: 'domain',

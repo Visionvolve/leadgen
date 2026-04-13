@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
@@ -128,6 +128,16 @@ export function ContactsPage() {
 
   // Chat filter sync
   const { pending: chatFilterPending, dismiss: dismissChatFilter } = useChatFilterSync()
+
+  // Listen for custom navigation events from column renderers
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent<string>).detail
+      if (path) navigate(withRev(path), { state: { origin: withRev(`/${namespace}/contacts`) } })
+    }
+    window.addEventListener('leadgen:navigate', handler)
+    return () => window.removeEventListener('leadgen:navigate', handler)
+  }, [navigate, namespace])
 
   // Build ContactFilters from advanced state + sort
   const filters: ContactFilters = useMemo(() => ({
@@ -462,7 +472,6 @@ export function ContactsPage() {
           data={allContacts}
           sort={{ field: sortField, dir: sortDir }}
           onSort={handleSort}
-          onRowClick={(c) => navigate(withRev(`/${namespace}/contacts/${c.id}`), { state: { origin: withRev(`/${namespace}/contacts`) } })}
           onLoadMore={() => fetchNextPage()}
           hasMore={hasNextPage}
           isLoading={isLoading || isFetchingNextPage}

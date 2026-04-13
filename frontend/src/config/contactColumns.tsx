@@ -20,6 +20,21 @@ export const CONTACT_COLUMNS = defineColumns<ContactListItem>([
     sortKey: 'last_name',
     minWidth: '130px',
     defaultVisible: true,
+    render: (c) => {
+      const ns = window.location.pathname.split('/')[1]
+      return (
+        <a
+          href={`/${ns}/contacts/${c.id}`}
+          onClick={(e) => {
+            e.preventDefault()
+            window.dispatchEvent(new CustomEvent('leadgen:navigate', { detail: `/${ns}/contacts/${c.id}` }))
+          }}
+          className="text-accent-cyan hover:underline cursor-pointer truncate block"
+        >
+          {c.full_name || '-'}
+        </a>
+      )
+    },
   },
   {
     key: 'job_title',
