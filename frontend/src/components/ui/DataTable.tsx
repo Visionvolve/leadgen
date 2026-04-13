@@ -312,6 +312,9 @@ export function DataTable<T extends { id?: string }>({
                           reverseMap={colDef.editReverse}
                           onSave={(newValue) => onCellEdit(item, editField, newValue)}
                           cellStatus={cellStatus}
+                          checkboxLabel={colDef.checkboxLabel}
+                          checkboxCheckedValue={colDef.checkboxCheckedValue}
+                          checkboxUncheckedValue={colDef.checkboxUncheckedValue}
                         />
                       </td>
                     )

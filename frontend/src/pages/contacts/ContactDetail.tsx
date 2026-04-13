@@ -19,7 +19,6 @@ import {
   RELATIONSHIP_STATUS_DISPLAY, RELATIONSHIP_STATUS_REVERSE,
   CONTACT_SOURCE_DISPLAY, CONTACT_SOURCE_REVERSE,
   LANGUAGE_DISPLAY, LANGUAGE_REVERSE,
-  ADDRESS_STYLE_DISPLAY,
   MESSAGE_STATUS_REVERSE,
   filterOptions,
   formatPhone,
@@ -145,7 +144,35 @@ export function ContactDetail({ contact, onNavigate }: Props) {
           <EditableSelect label="Relationship" name="relationship_status" value={getEditableValue('relationship_status', contact.relationship_status)} options={filterOptions(RELATIONSHIP_STATUS_DISPLAY)} onChange={handleFieldChange} />
           <EditableSelect label="Source" name="contact_source" value={getEditableValue('contact_source', contact.contact_source)} options={filterOptions(CONTACT_SOURCE_DISPLAY)} onChange={handleFieldChange} />
           <EditableSelect label="Language" name="language" value={getEditableValue('language', contact.language)} options={filterOptions(LANGUAGE_DISPLAY)} onChange={handleFieldChange} />
-          <EditableSelect label="Tykání/Vykání" name="address_style" value={getEditableValue('address_style', contact.address_style ?? 'vykat')} options={filterOptions(ADDRESS_STYLE_DISPLAY)} onChange={handleFieldChange} />
+          {/* Tykání checkbox toggle */}
+          {(() => {
+            const currentVal = getEditableValue('address_style', contact.address_style ?? 'vykat')
+            const isChecked = currentVal === 'tykat'
+            return (
+              <div>
+                <span className="text-xs font-medium text-text-muted block mb-1">Tykání</span>
+                <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                  <button
+                    type="button"
+                    onClick={() => handleFieldChange('address_style', isChecked ? 'vykat' : 'tykat')}
+                    className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
+                      isChecked
+                        ? 'bg-accent border-accent text-white'
+                        : 'bg-transparent border-text-dim/40 hover:border-text-muted'
+                    }`}
+                    aria-label="Toggle tykání"
+                  >
+                    {isChecked && (
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13 4L6 11L3 8" />
+                      </svg>
+                    )}
+                  </button>
+                  <span className="text-sm text-text">{isChecked ? 'Tykání' : 'Vykání'}</span>
+                </label>
+              </div>
+            )
+          })()}
         </FieldGrid>
 
         {/* Notes (editable) */}

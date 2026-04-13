@@ -5,11 +5,17 @@ type CellStatus = 'saving' | 'saved' | 'error' | undefined
 interface InlineEditCellProps {
   value: string | null
   displayValue?: ReactNode
-  editType: 'select' | 'text'
+  editType: 'select' | 'text' | 'checkbox'
   options?: Record<string, string>
   reverseMap?: Record<string, string>
   onSave: (newValue: string) => Promise<void>
   cellStatus?: CellStatus
+  /** Label shown next to checkbox (only for editType='checkbox') */
+  checkboxLabel?: string
+  /** DB value that means "checked" (default: 'tykat') */
+  checkboxCheckedValue?: string
+  /** DB value that means "unchecked" (default: 'vykat') */
+  checkboxUncheckedValue?: string
 }
 
 export function InlineEditCell({
@@ -20,6 +26,9 @@ export function InlineEditCell({
   reverseMap,
   onSave,
   cellStatus,
+  checkboxLabel,
+  checkboxCheckedValue = 'tykat',
+  checkboxUncheckedValue = 'vykat',
 }: InlineEditCellProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
@@ -87,6 +96,43 @@ export function InlineEditCell({
       <path d="M4 4l8 8M12 4l-8 8" />
     </svg>
   ) : null
+
+  // Checkbox type: simple toggle, no edit mode needed
+  if (editType === 'checkbox') {
+    const isChecked = resolvedValue === checkboxCheckedValue
+    const handleToggle = (e: React.MouseEvent) => {
+      e.stopPropagation()
+      const newVal = isChecked ? checkboxUncheckedValue : checkboxCheckedValue
+      onSave(newVal)
+    }
+    return (
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={handleToggle}
+          className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
+            isChecked
+              ? 'bg-accent border-accent text-white'
+              : 'bg-transparent border-text-dim/40 hover:border-text-muted'
+          }`}
+          aria-label={checkboxLabel ?? 'Toggle'}
+        >
+          {isChecked && (
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13 4L6 11L3 8" />
+            </svg>
+          )}
+        </button>
+        {checkboxLabel && (
+          <span className="text-xs text-text-muted select-none">{checkboxLabel}</span>
+        )}
+        {statusIcon}
+        {cellStatus === 'saving' && (
+          <span className="ml-1 flex-shrink-0 w-3 h-3 border border-border border-t-accent rounded-full animate-spin" />
+        )}
+      </div>
+    )
+  }
 
   if (isEditing) {
     if (editType === 'select' && options) {
