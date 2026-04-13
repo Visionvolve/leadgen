@@ -65,7 +65,8 @@ export function AddToCampaignModal({
 
   const campaigns = useMemo(() => {
     const all = campaignsData?.campaigns ?? []
-    const assignable = all.filter((c) => c.status === 'draft' || c.status === 'ready')
+    const s = (c: { status: string }) => c.status.toLowerCase()
+    const assignable = all.filter((c) => s(c) === 'draft' || s(c) === 'ready')
     const q = campaignSearch.toLowerCase()
     if (!q) return assignable
     return assignable.filter((c) => c.name.toLowerCase().includes(q))

@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile.api
     container_name: leadgen-api
     environment:
-      - DATABASE_URL=postgresql://${DB_POSTGRESDB_USER}:${DB_POSTGRESDB_PASSWORD}@${DB_POSTGRESDB_HOST}:${DB_POSTGRESDB_PORT}/leadgen?sslmode=require
+      - DATABASE_URL=${LEADGEN_DATABASE_URL}
       - JWT_SECRET_KEY=${LEADGEN_JWT_SECRET}
       - CORS_ORIGINS=https://leadgen.visionvolve.com
       - N8N_BASE_URL=http://n8n:5678
