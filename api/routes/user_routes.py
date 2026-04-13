@@ -1,7 +1,11 @@
+import logging
+
 from flask import Blueprint, g, jsonify, request
 
 from ..auth import require_role
 from ..models import Tenant, User, UserTenantRole, db
+
+logger = logging.getLogger(__name__)
 
 users_bp = Blueprint("users", __name__, url_prefix="/api/users")
 
@@ -76,6 +80,10 @@ def create_user():
         )
         db.session.add(utr)
         db.session.commit()
+
+        # Ensure user exists in IAM (fire-and-forget)
+        _sync_user_to_iam(existing_user.email, existing_user.display_name, tenant, role)
+
         return jsonify(existing_user.to_dict(include_roles=True)), 201
 
     if not display_name:
@@ -90,6 +98,7 @@ def create_user():
     db.session.add(user)
     db.session.flush()
 
+    tenant = None
     if tenant_id:
         tenant = db.session.get(Tenant, tenant_id)
         if not tenant:
@@ -105,7 +114,25 @@ def create_user():
         db.session.add(utr)
 
     db.session.commit()
+
+    # Create user in IAM and grant basic leadgen access
+    _sync_user_to_iam(email, display_name, tenant, role)
+
     return jsonify(user.to_dict(include_roles=True)), 201
+
+
+def _sync_user_to_iam(email, display_name, tenant=None, role="viewer"):
+    """Best-effort sync: create user in IAM and log result. Never raises."""
+    try:
+        from ..services.iam_client import ensure_iam_user, grant_iam_access
+
+        result = ensure_iam_user(email, display_name)
+        if result and result.get("user"):
+            iam_user_id = result["user"]["id"]
+            scope = tenant.slug if tenant else None
+            grant_iam_access(iam_user_id, app="leadgen", role=role, scope=scope)
+    except Exception:
+        logger.warning("IAM sync failed for %s (non-fatal)", email, exc_info=True)
 
 
 @users_bp.route("/<user_id>", methods=["PUT"])

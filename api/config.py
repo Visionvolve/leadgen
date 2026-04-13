@@ -41,6 +41,7 @@ class Config:
         + "/.well-known/jwks.json",
     )
     IAM_AUDIENCE = os.environ.get("IAM_AUDIENCE", "leadgen")
+    IAM_SERVICE_API_KEY = os.environ.get("IAM_SERVICE_API_KEY", "")
 
     # SQLAlchemy connection pool — sized for parallel enrichment workers
     # Only set pool options for PostgreSQL; SQLite uses StaticPool (no pool_size)
