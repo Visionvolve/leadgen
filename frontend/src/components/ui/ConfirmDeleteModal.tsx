@@ -8,6 +8,8 @@ interface ConfirmDeleteModalProps {
   onConfirm: () => void
   onClose: () => void
   isLoading?: boolean
+  /** Optional entity name for single-record delete (e.g. "Matyáš Omasta") */
+  entityName?: string
 }
 
 export function ConfirmDeleteModal({
@@ -17,6 +19,7 @@ export function ConfirmDeleteModal({
   onConfirm,
   onClose,
   isLoading,
+  entityName,
 }: ConfirmDeleteModalProps) {
   const [confirmed, setConfirmed] = useState(false)
 
@@ -24,7 +27,9 @@ export function ConfirmDeleteModal({
     ? count === 1 ? 'contact' : 'contacts'
     : count === 1 ? 'company' : 'companies'
 
-  const title = `Delete ${count.toLocaleString()} ${entityLabel}?`
+  const title = entityName
+    ? `Delete ${entityLabel} ${entityName}?`
+    : `Delete ${count.toLocaleString()} ${entityLabel}?`
 
   return (
     <Modal
@@ -58,7 +63,9 @@ export function ConfirmDeleteModal({
             <path d="M10 8v4M10 14v.5" />
           </svg>
           <div className="text-sm text-text">
-            {isAllMatching ? (
+            {entityName ? (
+              <p>This will permanently delete <strong>{entityName}</strong>. This action cannot be undone.</p>
+            ) : isAllMatching ? (
               <p>This will permanently delete <strong>all {count.toLocaleString()} matching {entityLabel}</strong>. This action cannot be undone.</p>
             ) : (
               <p>This will permanently delete <strong>{count.toLocaleString()} {entityLabel}</strong>. This action cannot be undone.</p>

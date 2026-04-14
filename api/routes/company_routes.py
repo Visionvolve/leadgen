@@ -1170,6 +1170,45 @@ def get_company(company_id):
     return jsonify(company)
 
 
+@companies_bp.route("/api/companies/<company_id>", methods=["DELETE"])
+@require_role("editor")
+def delete_company(company_id):
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify company belongs to tenant
+    row = db.session.execute(
+        db.text(
+            "SELECT id FROM companies WHERE id = :id AND tenant_id = :tid"
+        ),
+        {"id": company_id, "tid": str(tenant_id)},
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "Company not found"}), 404
+
+    params = {"id": company_id, "tid": str(tenant_id)}
+
+    # Delete junction records first
+    db.session.execute(
+        db.text(
+            "DELETE FROM company_tag_assignments WHERE company_id = :id AND tenant_id = :tid"
+        ),
+        params,
+    )
+
+    # Delete the company
+    db.session.execute(
+        db.text(
+            "DELETE FROM companies WHERE id = :id AND tenant_id = :tid"
+        ),
+        params,
+    )
+    db.session.commit()
+
+    return jsonify({"deleted": True})
+
+
 @companies_bp.route("/api/companies/<company_id>", methods=["PATCH"])
 @require_role("editor")
 def update_company(company_id):

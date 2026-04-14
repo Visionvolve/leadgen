@@ -302,6 +302,17 @@ export function useCreateCompany() {
   })
 }
 
+export function useDeleteCompany() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ deleted: boolean }>(`/companies/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['companies'] })
+    },
+  })
+}
+
 // ── Triage Review (BL-176) ────────────────────────────────
 
 export interface TriageQueueItem {
