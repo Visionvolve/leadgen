@@ -2,7 +2,7 @@
 # DEPRECATED: Production deploys via GitHub Actions (merge to main).
 # This script is for emergency manual deploys only.
 #
-# Deploy the leadgen API to VPS
+# Pulls the GHCR image and restarts the container — no local build.
 # Usage: bash deploy/deploy-api.sh
 
 set -euo pipefail
@@ -10,39 +10,31 @@ set -euo pipefail
 VPS_KEY="/Users/michal/git/visionvolve-vps/vps-deploy-key"
 VPS_HOST="ec2-user@52.58.119.191"
 VPS_DIR="/home/ec2-user/n8n-docker-caddy"
-API_DIR="/home/ec2-user/leadgen-api"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "==> Deploying leadgen API to VPS..."
+echo "==> Deploying leadgen API to VPS (GHCR image pull)..."
 
-# 1. Copy Dockerfile
-scp -i "$VPS_KEY" "${PROJECT_DIR}/Dockerfile.api" "${VPS_HOST}:${API_DIR}/"
-
-# 2. Rsync entire api/ directory (includes agents/, tools/, services/memory/, services/multimodal/, services/registries/)
-rsync -avz --delete \
-  -e "ssh -i $VPS_KEY" \
-  --exclude '__pycache__' --exclude '*.pyc' \
-  "${PROJECT_DIR}/api/" "${VPS_HOST}:${API_DIR}/api/"
-echo "    Synced API source files"
-
-# 3. Copy compose overlay
+# 1. Copy compose overlay (uses image: directive, no build:)
 scp -i "$VPS_KEY" "${PROJECT_DIR}/deploy/docker-compose.api.yml" "${VPS_HOST}:${VPS_DIR}/"
 echo "    Copied docker-compose.api.yml"
 
-# 4. Build and start the API container
+# 2. Pull image and restart container (no local build)
 ssh -i "$VPS_KEY" "$VPS_HOST" bash <<'REMOTE'
 cd /home/ec2-user/n8n-docker-caddy
-docker compose -f docker-compose.yml -f docker-compose.api.yml up -d --no-deps --build leadgen-api
-echo "    leadgen-api container started"
+COMPOSE_FILES='-f docker-compose.yml -f docker-compose.mcp.yml -f docker-compose.airtable-mcp.yml -f docker-compose.dashboard.yml -f docker-compose.api.yml -f docker-compose.ds.yml'
+docker compose $COMPOSE_FILES pull leadgen-api
+docker compose $COMPOSE_FILES up -d --no-deps leadgen-api
+docker system prune -f --filter 'until=1h'
+echo "    leadgen-api container started (from GHCR image)"
 REMOTE
 
-# 5. Deploy Caddy snippet
+# 3. Deploy Caddy snippet
 echo "==> Deploying Caddy snippet..."
 scp -i "$VPS_KEY" "${PROJECT_DIR}/deploy/prod.caddy" "${VPS_HOST}:/home/ec2-user/n8n-docker-caddy/caddy_config/conf.d/leadgen.caddy"
 ssh -i "$VPS_KEY" "$VPS_HOST" "docker exec n8n-docker-caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile"
 
-# 6. Post-deploy health checks
+# 4. Post-deploy health checks
 HEALTH_URL="https://leadgen.visionvolve.com/api/health"
 LIVENESS_URL="https://leadgen.visionvolve.com/api/health/liveness"
 

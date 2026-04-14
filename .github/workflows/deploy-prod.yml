@@ -62,6 +62,10 @@ jobs:
             scp -i ~/.ssh/prod.pem dashboard/roadmap.html ec2-user@52.58.119.191:/home/ec2-user/n8n-docker-caddy/dashboard/
           fi
 
+      - name: Upload compose overlay
+        run: |
+          scp -i ~/.ssh/prod.pem deploy/docker-compose.api.yml ec2-user@52.58.119.191:/home/ec2-user/n8n-docker-caddy/docker-compose.api.yml
+
       - name: Deploy API
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
