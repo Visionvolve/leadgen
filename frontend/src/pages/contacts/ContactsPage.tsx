@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
 import { useContacts, type ContactFilters } from '../../api/queries/useContacts'
 import { useTags } from '../../api/queries/useTags'
-import { useBulkAddTags, useBulkAssignCampaign, useContactsMatchingCount } from '../../api/queries/useBulkActions'
+import { useBulkAddTags, useBulkAssignCampaign, useBulkDelete, useContactsMatchingCount } from '../../api/queries/useBulkActions'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useAdvancedFilters, CONTACT_MULTI_KEYS } from '../../hooks/useAdvancedFilters'
 import { useFilterCounts } from '../../hooks/useFilterCounts'
@@ -17,6 +17,7 @@ import { ColumnPicker } from '../../components/ui/ColumnPicker'
 import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
 import { AddToCampaignModal } from '../../components/ui/AddToCampaignModal'
+import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal'
 import { CreateContactModal } from '../../components/ui/CreateContactModal'
 import { ChatFilterSyncBar } from '../../components/ui/ChatFilterSyncBar'
 import { ContactsEmptyState } from '../../components/onboarding/SmartEmptyState'
@@ -134,6 +135,7 @@ export function ContactsPage() {
   const [showTagPicker, setShowTagPicker] = useState(false)
   const [showCampaignModal, setShowCampaignModal] = useState(false)
   const [showCreateContact, setShowCreateContact] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   // Inline editing
   const inlineEdit = useInlineEdit('contact')
@@ -142,6 +144,7 @@ export function ContactsPage() {
   const { data: onboardingStatus } = useOnboardingStatus()
   const bulkAddTags = useBulkAddTags()
   const bulkAssignCampaign = useBulkAssignCampaign()
+  const bulkDelete = useBulkDelete()
   const matchingCount = useContactsMatchingCount()
 
   // Chat filter sync
@@ -233,6 +236,20 @@ export function ContactsPage() {
       toast('Failed to add tags', 'error')
     }
   }, [selectionMode, activeFilters, selectedIds, bulkAddTags, toast, handleDeselectAll])
+
+  const handleBulkDelete = useCallback(async () => {
+    try {
+      const payload = selectionMode === 'all-matching'
+        ? { entity_type: 'contact' as const, filters: activeFilters }
+        : { entity_type: 'contact' as const, ids: Array.from(selectedIds) }
+      const result = await bulkDelete.mutateAsync(payload)
+      toast(`Deleted ${result.deleted} contact${result.deleted !== 1 ? 's' : ''}`, 'success')
+      setShowDeleteConfirm(false)
+      handleDeselectAll()
+    } catch {
+      toast('Failed to delete contacts', 'error')
+    }
+  }, [selectionMode, activeFilters, selectedIds, bulkDelete, toast, handleDeselectAll])
 
   const handleAssignCampaign = useCallback(async (campaignId: string) => {
     try {
@@ -542,6 +559,13 @@ export function ContactsPage() {
               }
             },
           },
+          {
+            label: 'Delete',
+            icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1V4M5.5 6.5v3M8.5 6.5v3" /></svg>,
+            onClick: () => setShowDeleteConfirm(true),
+            loading: bulkDelete.isPending,
+            destructive: true,
+          },
         ]}
         onDeselectAll={handleDeselectAll}
       />
@@ -563,6 +587,18 @@ export function ContactsPage() {
           onConfirm={handleAssignCampaign}
           onClose={() => setShowCampaignModal(false)}
           isLoading={bulkAssignCampaign.isPending}
+        />
+      )}
+
+      {/* Confirm Delete modal */}
+      {showDeleteConfirm && (
+        <ConfirmDeleteModal
+          entityType="contact"
+          count={selectionCount}
+          isAllMatching={selectionMode === 'all-matching'}
+          onConfirm={handleBulkDelete}
+          onClose={() => setShowDeleteConfirm(false)}
+          isLoading={bulkDelete.isPending}
         />
       )}
 

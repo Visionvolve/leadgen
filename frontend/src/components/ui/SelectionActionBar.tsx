@@ -10,6 +10,7 @@ interface SelectionActionBarProps {
     onClick: () => void
     disabled?: boolean
     loading?: boolean
+    destructive?: boolean
   }>
   onDeselectAll: () => void
 }
@@ -48,7 +49,11 @@ export function SelectionActionBar({
           key={action.label}
           onClick={action.onClick}
           disabled={action.disabled || action.loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-alt hover:bg-accent/10 text-text border border-border-solid cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ${
+            action.destructive
+              ? 'bg-error/10 hover:bg-error/20 text-error border-error/30'
+              : 'bg-surface-alt hover:bg-accent/10 text-text border-border-solid'
+          }`}
         >
           {action.loading ? (
             <div className="w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin" />

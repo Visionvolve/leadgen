@@ -73,6 +73,29 @@ export function useBulkAssignCampaign() {
   })
 }
 
+interface BulkDeleteRequest {
+  entity_type: 'contact' | 'company'
+  ids?: string[]
+  filters?: Record<string, string>
+}
+
+interface BulkDeleteResponse {
+  deleted: number
+}
+
+export function useBulkDelete() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: BulkDeleteRequest) =>
+      apiFetch<BulkDeleteResponse>('/bulk/delete', { method: 'POST', body: data }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: [vars.entity_type === 'contact' ? 'contacts' : 'companies'] })
+      qc.invalidateQueries({ queryKey: ['campaigns'] })
+      qc.invalidateQueries({ queryKey: ['campaign-contacts'] })
+    },
+  })
+}
+
 export function useContactsMatchingCount() {
   return useMutation({
     mutationFn: (filters: Record<string, string>) =>
