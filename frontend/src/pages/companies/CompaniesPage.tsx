@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
 import { useCompanies, type CompanyFilters } from '../../api/queries/useCompanies'
 import { useTags } from '../../api/queries/useTags'
-import { useBulkAddTags, useCompaniesMatchingCount } from '../../api/queries/useBulkActions'
+import { useBulkAddTags, useBulkDelete, useCompaniesMatchingCount } from '../../api/queries/useBulkActions'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useAdvancedFilters, COMPANY_MULTI_KEYS } from '../../hooks/useAdvancedFilters'
 import { useFilterCounts } from '../../hooks/useFilterCounts'
@@ -16,6 +16,7 @@ import { ColumnPicker } from '../../components/ui/ColumnPicker'
 import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
 import { CreateCompanyModal } from '../../components/ui/CreateCompanyModal'
+import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal'
 import { useToast } from '../../components/ui/Toast'
 import { useScrollRestore } from '../../hooks/useScrollRestore'
 import { COMPANY_COLUMNS, COMPANY_ALWAYS_VISIBLE } from '../../config/companyColumns'
@@ -91,12 +92,14 @@ export function CompaniesPage() {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('explicit')
   const [showTagPicker, setShowTagPicker] = useState(false)
   const [showCreateCompany, setShowCreateCompany] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   // Inline editing
   const inlineEdit = useInlineEdit('company')
 
   const { data: tagsData } = useTags()
   const bulkAddTags = useBulkAddTags()
+  const bulkDelete = useBulkDelete()
   const matchingCount = useCompaniesMatchingCount()
 
   // Scroll position restore (saves before navigating to detail, restores on mount)
@@ -172,6 +175,20 @@ export function CompaniesPage() {
     setSelectedIds(new Set())
     setSelectionMode('explicit')
   }, [])
+
+  const handleBulkDelete = useCallback(async () => {
+    try {
+      const payload = selectionMode === 'all-matching'
+        ? { entity_type: 'company' as const, filters: activeFilters }
+        : { entity_type: 'company' as const, ids: Array.from(selectedIds) }
+      const result = await bulkDelete.mutateAsync(payload)
+      toast(`Deleted ${result.deleted} compan${result.deleted !== 1 ? 'ies' : 'y'}`, 'success')
+      setShowDeleteConfirm(false)
+      handleDeselectAll()
+    } catch {
+      toast('Failed to delete companies', 'error')
+    }
+  }, [selectionMode, activeFilters, selectedIds, bulkDelete, toast, handleDeselectAll])
 
   const handleAddTags = useCallback(async (tagIds: string[]) => {
     try {
@@ -392,6 +409,13 @@ export function CompaniesPage() {
               }
             },
           },
+          {
+            label: 'Delete',
+            icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1V4M5.5 6.5v3M8.5 6.5v3" /></svg>,
+            onClick: () => setShowDeleteConfirm(true),
+            loading: bulkDelete.isPending,
+            destructive: true,
+          },
         ]}
         onDeselectAll={handleDeselectAll}
       />
@@ -401,6 +425,18 @@ export function CompaniesPage() {
           onConfirm={handleAddTags}
           onClose={() => setShowTagPicker(false)}
           isLoading={bulkAddTags.isPending}
+        />
+      )}
+
+      {/* Confirm Delete modal */}
+      {showDeleteConfirm && (
+        <ConfirmDeleteModal
+          entityType="company"
+          count={selectionCount}
+          isAllMatching={selectionMode === 'all-matching'}
+          onConfirm={handleBulkDelete}
+          onClose={() => setShowDeleteConfirm(false)}
+          isLoading={bulkDelete.isPending}
         />
       )}
 

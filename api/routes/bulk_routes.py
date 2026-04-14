@@ -332,6 +332,79 @@ def bulk_assign_campaign():
     return jsonify({"affected": new_count, "errors": []})
 
 
+@bulk_bp.route("/api/bulk/delete", methods=["POST"])
+@require_role("editor")
+def bulk_delete():
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    entity_type = body.get("entity_type")
+    ids = body.get("ids")
+    filters = body.get("filters")
+
+    if entity_type not in ("contact", "company"):
+        return jsonify({"error": "entity_type must be 'contact' or 'company'"}), 400
+    if not ids and filters is None:
+        return jsonify({"error": "ids or filters required"}), 400
+
+    # Get entity IDs
+    entity_sql, entity_params = _build_entity_query(
+        entity_type, str(tenant_id), ids, filters
+    )
+    if not entity_sql:
+        return jsonify({"error": "ids or filters required"}), 400
+
+    entity_rows = db.session.execute(db.text(entity_sql), entity_params).fetchall()
+    entity_ids = [str(r[0]) for r in entity_rows]
+
+    if not entity_ids:
+        return jsonify({"deleted": 0})
+
+    # Build DELETE with IN clause
+    eid_ph = ", ".join(f":eid_{i}" for i in range(len(entity_ids)))
+    del_params = {"tenant_id": str(tenant_id)}
+    for i, eid in enumerate(entity_ids):
+        del_params[f"eid_{i}"] = eid
+
+    table = "contacts" if entity_type == "contact" else "companies"
+
+    # Delete related junction records first (tags, campaign contacts)
+    if entity_type == "contact":
+        db.session.execute(
+            db.text(
+                f"DELETE FROM contact_tag_assignments WHERE contact_id IN ({eid_ph}) AND tenant_id = :tenant_id"
+            ),
+            del_params,
+        )
+        db.session.execute(
+            db.text(
+                f"DELETE FROM campaign_contacts WHERE contact_id IN ({eid_ph}) AND tenant_id = :tenant_id"
+            ),
+            del_params,
+        )
+    else:
+        db.session.execute(
+            db.text(
+                f"DELETE FROM company_tag_assignments WHERE company_id IN ({eid_ph}) AND tenant_id = :tenant_id"
+            ),
+            del_params,
+        )
+
+    # Delete the entities
+    result = db.session.execute(
+        db.text(
+            f"DELETE FROM {table} WHERE id IN ({eid_ph}) AND tenant_id = :tenant_id"
+        ),
+        del_params,
+    )
+    deleted = result.rowcount
+    db.session.commit()
+
+    return jsonify({"deleted": deleted})
+
+
 @bulk_bp.route("/api/contacts/matching-count", methods=["POST"])
 @require_role("viewer")
 def contacts_matching_count():
