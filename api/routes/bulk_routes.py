@@ -37,8 +37,9 @@ def _build_entity_query(
         where.append(f"{alias}.id IN ({placeholders})")
         for i, eid in enumerate(ids):
             params[f"id_{i}"] = eid
-    elif filters:
+    elif filters is not None:
         # Filter mode — replicate list endpoint filter logic
+        # Empty filters dict means "all contacts" (no additional WHERE clauses)
         if filters.get("tag_name"):
             if entity_type == "contact":
                 where.append("""EXISTS (
