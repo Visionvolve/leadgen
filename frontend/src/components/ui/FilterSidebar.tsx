@@ -107,15 +107,14 @@ export function FilterSidebar({
           </button>
         )}
 
-        {/* Sidebar panel */}
+        {/* Sidebar panel — fully hidden when collapsed (not just clipped) */}
         <aside
           className={`
             w-[280px] flex-shrink-0 bg-surface border-r border-border-solid overflow-y-auto
-            md:relative md:block
-            ${collapsed ? 'hidden' : ''}
+            md:relative
             ${mobileOpen
               ? 'fixed inset-y-0 left-0 z-50 block shadow-xl'
-              : 'hidden md:block'
+              : collapsed ? 'hidden' : 'hidden md:block'
             }
           `}
         >

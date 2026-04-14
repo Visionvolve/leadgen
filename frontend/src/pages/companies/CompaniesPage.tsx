@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
-import { useCompanies, type CompanyFilters } from '../../api/queries/useCompanies'
+import { useCompanies, useDeleteCompany, type CompanyFilters, type CompanyListItem } from '../../api/queries/useCompanies'
 import { useTags } from '../../api/queries/useTags'
 import { useBulkAddTags, useBulkDelete, useCompaniesMatchingCount } from '../../api/queries/useBulkActions'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
@@ -17,6 +17,7 @@ import { SelectionActionBar } from '../../components/ui/SelectionActionBar'
 import { TagPicker } from '../../components/ui/TagPicker'
 import { CreateCompanyModal } from '../../components/ui/CreateCompanyModal'
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal'
+import { DeleteActionCell } from '../../components/ui/DeleteActionCell'
 import { useToast } from '../../components/ui/Toast'
 import { useScrollRestore } from '../../hooks/useScrollRestore'
 import { COMPANY_COLUMNS, COMPANY_ALWAYS_VISIBLE } from '../../config/companyColumns'
@@ -100,6 +101,7 @@ export function CompaniesPage() {
   const { data: tagsData } = useTags()
   const bulkAddTags = useBulkAddTags()
   const bulkDelete = useBulkDelete()
+  const deleteCompany = useDeleteCompany()
   const matchingCount = useCompaniesMatchingCount()
 
   // Scroll position restore (saves before navigating to detail, restores on mount)
@@ -190,6 +192,16 @@ export function CompaniesPage() {
     }
   }, [selectionMode, activeFilters, selectedIds, bulkDelete, toast, handleDeselectAll])
 
+  // Inline single-record delete
+  const handleInlineDelete = useCallback(async (id: string) => {
+    try {
+      await deleteCompany.mutateAsync(id)
+      toast('Company deleted', 'success')
+    } catch {
+      toast('Failed to delete company', 'error')
+    }
+  }, [deleteCompany, toast])
+
   const handleAddTags = useCallback(async (tagIds: string[]) => {
     try {
       const payload = selectionMode === 'all-matching'
@@ -208,12 +220,29 @@ export function CompaniesPage() {
     ? (matchingCount.data?.count ?? total)
     : selectedIds.size
 
-  // Filter columns by visibility
+  // Filter columns by visibility + action column
   const visibleSet = new Set(visibleKeys)
+  const deleteActionColumn = useMemo(() => ({
+    key: '_actions',
+    label: '',
+    width: '40px',
+    minWidth: '40px',
+    shrink: false,
+    render: (c: CompanyListItem) => (
+      <DeleteActionCell
+        entityType="company"
+        entityId={c.id}
+        entityName={c.name || 'this company'}
+        onDelete={handleInlineDelete}
+        isDeleting={deleteCompany.isPending}
+      />
+    ),
+  }), [handleInlineDelete, deleteCompany.isPending])
+
   const columns = useMemo(
-    () => COMPANY_COLUMNS.filter((c) => visibleSet.has(c.key)),
+    () => [...COMPANY_COLUMNS.filter((c) => visibleSet.has(c.key)), deleteActionColumn],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleKeys],
+    [visibleKeys, deleteActionColumn],
   )
 
   const facets = countsData?.facets

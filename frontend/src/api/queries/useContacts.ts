@@ -236,3 +236,14 @@ export function useCreateContact() {
     },
   })
 }
+
+export function useDeleteContact() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ deleted: boolean }>(`/contacts/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['contacts'] })
+    },
+  })
+}

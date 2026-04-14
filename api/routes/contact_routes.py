@@ -774,6 +774,51 @@ def get_contact(contact_id):
     return jsonify(contact)
 
 
+@contacts_bp.route("/api/contacts/<contact_id>", methods=["DELETE"])
+@require_role("editor")
+def delete_contact(contact_id):
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify contact belongs to tenant
+    row = db.session.execute(
+        db.text(
+            "SELECT id FROM contacts WHERE id = :id AND tenant_id = :tid"
+        ),
+        {"id": contact_id, "tid": str(tenant_id)},
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "Contact not found"}), 404
+
+    params = {"id": contact_id, "tid": str(tenant_id)}
+
+    # Delete junction records first
+    db.session.execute(
+        db.text(
+            "DELETE FROM contact_tag_assignments WHERE contact_id = :id AND tenant_id = :tid"
+        ),
+        params,
+    )
+    db.session.execute(
+        db.text(
+            "DELETE FROM campaign_contacts WHERE contact_id = :id AND tenant_id = :tid"
+        ),
+        params,
+    )
+
+    # Delete the contact
+    db.session.execute(
+        db.text(
+            "DELETE FROM contacts WHERE id = :id AND tenant_id = :tid"
+        ),
+        params,
+    )
+    db.session.commit()
+
+    return jsonify({"deleted": True})
+
+
 @contacts_bp.route("/api/contacts/<contact_id>", methods=["PATCH"])
 @require_role("editor")
 def update_contact(contact_id):

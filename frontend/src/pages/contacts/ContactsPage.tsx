@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
-import { useContacts, type ContactFilters } from '../../api/queries/useContacts'
+import { useContacts, useDeleteContact, type ContactFilters, type ContactListItem } from '../../api/queries/useContacts'
 import { useTags } from '../../api/queries/useTags'
 import { useBulkAddTags, useBulkAssignCampaign, useBulkDelete, useContactsMatchingCount } from '../../api/queries/useBulkActions'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
@@ -20,6 +20,7 @@ import { AddToCampaignModal } from '../../components/ui/AddToCampaignModal'
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal'
 import { CreateContactModal } from '../../components/ui/CreateContactModal'
 import { ChatFilterSyncBar } from '../../components/ui/ChatFilterSyncBar'
+import { DeleteActionCell } from '../../components/ui/DeleteActionCell'
 import { ContactsEmptyState } from '../../components/onboarding/SmartEmptyState'
 import { EntrySignpost } from '../../components/onboarding/EntrySignpost'
 import { useToast } from '../../components/ui/Toast'
@@ -145,6 +146,7 @@ export function ContactsPage() {
   const bulkAddTags = useBulkAddTags()
   const bulkAssignCampaign = useBulkAssignCampaign()
   const bulkDelete = useBulkDelete()
+  const deleteContact = useDeleteContact()
   const matchingCount = useContactsMatchingCount()
 
   // Chat filter sync
@@ -265,6 +267,16 @@ export function ContactsPage() {
     }
   }, [selectionMode, activeFilters, selectedIds, bulkAssignCampaign, toast, handleDeselectAll])
 
+  // Inline single-record delete
+  const handleInlineDelete = useCallback(async (id: string) => {
+    try {
+      await deleteContact.mutateAsync(id)
+      toast('Contact deleted', 'success')
+    } catch {
+      toast('Failed to delete contact', 'error')
+    }
+  }, [deleteContact, toast])
+
   // Accept chat filter suggestions
   const handleAcceptChatFilters = useCallback((chatFilters: Record<string, string | string[]>) => {
     for (const [key, value] of Object.entries(chatFilters)) {
@@ -284,12 +296,29 @@ export function ContactsPage() {
     ? (matchingCount.data?.count ?? total)
     : selectedIds.size
 
-  // Filter columns by visibility + append campaign columns
+  // Filter columns by visibility + append campaign columns + action column
   const visibleSet = new Set(visibleKeys)
+  const deleteActionColumn = useMemo(() => ({
+    key: '_actions',
+    label: '',
+    width: '40px',
+    minWidth: '40px',
+    shrink: false,
+    render: (c: ContactListItem) => (
+      <DeleteActionCell
+        entityType="contact"
+        entityId={c.id}
+        entityName={c.full_name || 'this contact'}
+        onDelete={handleInlineDelete}
+        isDeleting={deleteContact.isPending}
+      />
+    ),
+  }), [handleInlineDelete, deleteContact.isPending])
+
   const columns = useMemo(
-    () => [...CONTACT_COLUMNS.filter((c) => visibleSet.has(c.key)), ...campaignCols],
+    () => [...CONTACT_COLUMNS.filter((c) => visibleSet.has(c.key)), ...campaignCols, deleteActionColumn],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleKeys, campaignCols],
+    [visibleKeys, campaignCols, deleteActionColumn],
   )
 
   const facets = countsData?.facets
