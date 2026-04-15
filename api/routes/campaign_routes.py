@@ -2841,6 +2841,26 @@ def campaign_analytics(campaign_id):
     hard_bounces = int(engagement_row[6]) if engagement_row else 0
     soft_bounces = int(engagement_row[7]) if engagement_row else 0
 
+    # ── Microsite engagement ───────────────────────────────
+    microsite_row = db.session.execute(
+        db.text("""
+            SELECT
+                COUNT(*) AS visits,
+                COUNT(DISTINCT a.contact_id) AS unique_visitors,
+                COUNT(CASE WHEN a.event_type = 'product_viewed' THEN 1 END) AS product_views
+            FROM activities a
+            JOIN campaign_contacts cc
+                ON a.contact_id = cc.contact_id AND cc.tenant_id = :t
+            WHERE cc.campaign_id = :cid
+                AND a.source = 'microsite'
+        """),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchone()
+
+    ms_visits = int(microsite_row[0]) if microsite_row else 0
+    ms_unique = int(microsite_row[1]) if microsite_row else 0
+    ms_product_views = int(microsite_row[2]) if microsite_row else 0
+
     def _rate(num, den):
         if den == 0:
             return 0
@@ -2901,6 +2921,12 @@ def campaign_analytics(campaign_id):
                 "generation_completed_at": _format_ts(generation_completed_at),
                 "first_send_at": _format_ts(first_send_at),
                 "last_send_at": _format_ts(last_send_at),
+            },
+            "microsite": {
+                "visits": ms_visits,
+                "unique_visitors": ms_unique,
+                "product_views": ms_product_views,
+                "visit_rate": _rate(ms_unique, contacts_total),
             },
         }
     )
