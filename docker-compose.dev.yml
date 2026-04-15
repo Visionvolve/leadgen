@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leadgen-dev-pg
+    environment:
+      POSTGRES_USER: leadgen
+      POSTGRES_PASSWORD: leadgen
+      POSTGRES_DB: leadgen
+    ports:
+      - "5433:5432"
+    volumes:
+      - leadgen-dev-pgdata:/var/lib/postgresql/data
+
+volumes:
+  leadgen-dev-pgdata:

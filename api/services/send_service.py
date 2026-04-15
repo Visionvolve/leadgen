@@ -438,6 +438,12 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
 
         # Build the email body as HTML
         body_html = _render_body_html(message.body)
+
+        # Template variable replacement (EventFest and future template campaigns)
+        tpl_vars = _build_template_variables(contact, cc, campaign)
+        if tpl_vars:
+            body_html = _replace_template_variables(body_html, tpl_vars)
+
         sender = f"{from_name} <{from_email}>" if from_name else from_email
 
         try:
@@ -560,6 +566,73 @@ def _send_single_email(
     if isinstance(response, dict):
         return response
     return {"id": str(response)}
+
+
+def _replace_template_variables(html: str, variables: dict) -> str:
+    """Replace ``{{variable}}`` placeholders in email HTML/text.
+
+    Used by the EventFest (and future) template campaigns to inject
+    per-contact values (vocative name, invite link, etc.) at send time.
+    """
+    for key, value in variables.items():
+        html = html.replace("{{" + key + "}}", value or "")
+    return html
+
+
+def _build_template_variables(
+    contact: "Contact",
+    campaign_contact: "CampaignContact",
+    campaign: "Campaign",
+) -> dict[str, str]:
+    """Build template variable dict for a contact in a template campaign.
+
+    Returns an empty dict when no template variables are applicable
+    (i.e. the campaign does not use a template_type).
+    """
+    from .czech_vocative import to_vocative
+    from .eventfest_template import get_or_create_invite
+
+    template_type = (campaign.generation_config or {}).get("template_type")
+    if not template_type:
+        return {}
+
+    first_name = contact.first_name or ""
+    vocative = to_vocative(first_name)
+
+    variables: dict[str, str] = {
+        "vocative_name": vocative,
+        "first_name": first_name,
+    }
+
+    # Microsite invite link — cached in campaign_contact metadata-like field
+    # We store it on the Message or regenerate (idempotent by email)
+    if template_type == "eventfest":
+        import os
+
+        microsite_url = os.environ.get("UA_MICROSITE_URL", "")
+        api_key = os.environ.get("UA_INVITE_API_KEY", "")
+        if microsite_url and api_key and contact.email_address:
+            full_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+            try:
+                invite_url = get_or_create_invite(
+                    email=contact.email_address,
+                    name=full_name,
+                    microsite_url=microsite_url,
+                    api_key=api_key,
+                )
+                variables["microsite_link"] = invite_url
+            except Exception:
+                logger.warning(
+                    "Failed to get invite for %s, using fallback",
+                    contact.email_address,
+                )
+                variables["microsite_link"] = microsite_url
+        elif microsite_url:
+            variables["microsite_link"] = microsite_url
+        else:
+            variables["microsite_link"] = ""
+
+    return variables
 
 
 def _render_body_html(body: str) -> str:
@@ -789,6 +862,11 @@ def send_campaign_emails_gmail(campaign_id: str, tenant_id: str) -> dict:
         db.session.flush()
 
         body_html = _render_body_html(message.body)
+
+        # Template variable replacement (EventFest and future template campaigns)
+        tpl_vars = _build_template_variables(contact, cc, campaign)
+        if tpl_vars:
+            body_html = _replace_template_variables(body_html, tpl_vars)
 
         try:
             gmail_message_id = send_via_gmail(

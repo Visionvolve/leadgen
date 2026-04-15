@@ -21,6 +21,7 @@ services:
       - IAM_BASE_URL=${IAM_BASE_URL:-https://iam.visionvolve.com}
       - IAM_JWKS_URL=${IAM_JWKS_URL:-https://iam.visionvolve.com/.well-known/jwks.json}
       - IAM_AUDIENCE=${IAM_AUDIENCE:-leadgen}
+      - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
     ports:
       - "127.0.0.1:5000:5000"
     restart: unless-stopped
