@@ -43,6 +43,12 @@ class Config:
     IAM_AUDIENCE = os.environ.get("IAM_AUDIENCE", "leadgen")
     IAM_SERVICE_API_KEY = os.environ.get("IAM_SERVICE_API_KEY", "")
 
+    # United Arts microsite
+    UA_MICROSITE_URL = os.environ.get(
+        "UA_MICROSITE_URL", "https://demo.visionvolve.com"
+    )
+    UA_INVITE_API_KEY = os.environ.get("UA_INVITE_API_KEY", "")
+
     # SQLAlchemy connection pool — sized for parallel enrichment workers
     # Only set pool options for PostgreSQL; SQLite uses StaticPool (no pool_size)
     _db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/leadgen")
