@@ -92,6 +92,19 @@ export interface StageCompletion {
   error: string | null
 }
 
+export interface EmailActivity {
+  campaign_name: string | null
+  subject: string | null
+  status: string | null
+  sent_at: string | null
+  delivered_at: string | null
+  opened_at: string | null
+  open_count: number
+  clicked_at: string | null
+  click_count: number
+  bounced_at: string | null
+}
+
 export interface ContactDetail {
   id: string
   first_name: string
@@ -143,6 +156,7 @@ export interface ContactDetail {
   enrichment: ContactEnrichment | null
   stage_completions: StageCompletion[]
   messages: ContactMessage[]
+  email_activity: EmailActivity[]
 }
 
 export interface ContactFilters {

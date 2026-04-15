@@ -771,6 +771,44 @@ def get_contact(contact_id):
         for r in msg_rows
     ]
 
+    # Email activity (send logs joined through messages → campaigns)
+    email_rows = db.session.execute(
+        db.text("""
+            SELECT c.name AS campaign_name,
+                   m.subject,
+                   esl.status,
+                   esl.sent_at,
+                   esl.delivered_at,
+                   esl.opened_at,
+                   esl.open_count,
+                   esl.clicked_at,
+                   esl.click_count,
+                   esl.bounced_at
+            FROM email_send_log esl
+            JOIN messages m ON m.id = esl.message_id
+            LEFT JOIN campaign_contacts cc ON cc.id = m.campaign_contact_id
+            LEFT JOIN campaigns c ON c.id = cc.campaign_id
+            WHERE m.contact_id = :id
+            ORDER BY esl.sent_at DESC
+        """),
+        {"id": contact_id},
+    ).fetchall()
+    contact["email_activity"] = [
+        {
+            "campaign_name": r[0],
+            "subject": r[1],
+            "status": r[2],
+            "sent_at": _iso(r[3]),
+            "delivered_at": _iso(r[4]),
+            "opened_at": _iso(r[5]),
+            "open_count": r[6] or 0,
+            "clicked_at": _iso(r[7]),
+            "click_count": r[8] or 0,
+            "bounced_at": _iso(r[9]),
+        }
+        for r in email_rows
+    ]
+
     return jsonify(contact)
 
 
