@@ -1794,6 +1794,7 @@ class EmailSendLog(db.Model):
     bounce_type = db.Column(db.Text)  # 'hard' or 'soft'
     clicked_at = db.Column(db.DateTime(timezone=True))
     click_count = db.Column(db.Integer, default=0)
+    complained_at = db.Column(db.DateTime(timezone=True))
     error = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
@@ -1817,6 +1818,9 @@ class EmailSendLog(db.Model):
             "bounce_type": self.bounce_type,
             "clicked_at": self.clicked_at.isoformat() if self.clicked_at else None,
             "click_count": self.click_count or 0,
+            "complained_at": self.complained_at.isoformat()
+            if self.complained_at
+            else None,
             "error": self.error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
