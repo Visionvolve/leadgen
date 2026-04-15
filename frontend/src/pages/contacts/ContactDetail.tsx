@@ -11,6 +11,7 @@ import {
 } from '../../components/ui/DetailField'
 import { Tabs, type TabDef } from '../../components/ui/Tabs'
 import { EnrichmentTimeline } from '../../components/ui/EnrichmentTimeline'
+import type { EmailActivity } from '../../api/queries/useContacts'
 import { RawResearchSection } from '../../components/ui/RawResearchSection'
 import {
   SENIORITY_DISPLAY, SENIORITY_REVERSE,
@@ -32,6 +33,79 @@ function MarkdownField({ label, text }: { label?: string; text: string }) {
       <div className="prose-sm-msg text-sm text-text leading-relaxed">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
+    </div>
+  )
+}
+
+const emailStatusColors: Record<string, string> = {
+  delivered: 'bg-green-500/10 text-green-400',
+  opened: 'bg-blue-500/10 text-blue-400',
+  clicked: 'bg-purple-500/10 text-purple-400',
+  bounced: 'bg-red-500/10 text-red-400',
+  queued: 'bg-text-dim/10 text-text-dim',
+  sent: 'bg-accent/10 text-accent',
+}
+
+const emailDotColors: Record<string, string> = {
+  delivered: 'bg-green-500 border-green-500/40',
+  opened: 'bg-blue-500 border-blue-500/40',
+  clicked: 'bg-purple-500 border-purple-500/40',
+  bounced: 'bg-red-500 border-red-500/40',
+  queued: 'bg-text-dim border-text-dim/40',
+  sent: 'bg-accent border-accent/40',
+}
+
+function EmailActivityTimeline({ entries }: { entries: EmailActivity[] }) {
+  if (entries.length === 0) return null
+
+  return (
+    <div className="space-y-0">
+      {entries.map((entry, i) => {
+        const status = entry.status ?? 'queued'
+        const dotColor = emailDotColors[status] ?? 'bg-accent border-accent/40'
+        const badgeColor = emailStatusColors[status] ?? 'bg-text-dim/10 text-text-dim'
+
+        // Build milestone chain: sent → delivered → opened → clicked
+        const milestones: string[] = []
+        if (entry.sent_at) milestones.push(`Sent ${new Date(entry.sent_at).toLocaleString()}`)
+        if (entry.delivered_at) milestones.push(`Delivered ${new Date(entry.delivered_at).toLocaleString()}`)
+        if (entry.opened_at) milestones.push(`Opened ${new Date(entry.opened_at).toLocaleString()}${entry.open_count > 1 ? ` (${entry.open_count}x)` : ''}`)
+        if (entry.clicked_at) milestones.push(`Clicked ${new Date(entry.clicked_at).toLocaleString()}${entry.click_count > 1 ? ` (${entry.click_count}x)` : ''}`)
+        if (entry.bounced_at) milestones.push(`Bounced ${new Date(entry.bounced_at).toLocaleString()}`)
+
+        return (
+          <div key={i} className="flex gap-3">
+            {/* Timeline gutter */}
+            <div className="flex flex-col items-center">
+              <div className={`w-2.5 h-2.5 rounded-full ${dotColor} border-2 flex-shrink-0 mt-1`} />
+              {i < entries.length - 1 && (
+                <div className="w-px flex-1 bg-border-solid min-h-[24px]" />
+              )}
+            </div>
+            {/* Content */}
+            <div className="pb-3 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium text-text">
+                  {entry.subject ?? '(no subject)'}
+                </span>
+                <span className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded ${badgeColor}`}>
+                  {status}
+                </span>
+              </div>
+              {entry.campaign_name && (
+                <div className="text-xs text-text-muted mt-0.5">{entry.campaign_name}</div>
+              )}
+              {milestones.length > 0 && (
+                <div className="text-xs text-text-dim mt-1 space-y-0.5">
+                  {milestones.map((m, j) => (
+                    <div key={j}>{m}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -511,6 +585,13 @@ export function ContactDetail({ contact, onNavigate }: Props) {
             error: sc.error,
           })),
         ]} />
+
+        {contact.email_activity && contact.email_activity.length > 0 && (
+          <>
+            <SectionDivider title="Email Activity" />
+            <EmailActivityTimeline entries={contact.email_activity} />
+          </>
+        )}
 
         <SectionDivider title="Timestamps" />
         <FieldGrid cols={3}>
