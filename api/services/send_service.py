@@ -597,12 +597,35 @@ def _build_template_variables(
         return {}
 
     first_name = contact.first_name or ""
-    vocative = to_vocative(first_name)
+    # to_vocative returns (vocative_form, source_tag) — unpack the form only.
+    # Without this, str.replace() crashes with TypeError because the tuple
+    # flows into _replace_template_variables. See Phase 4 TestSend validation.
+    vocative_form, _source = to_vocative(first_name)
+
+    # Per-recipient token feeds the ?t={{recipient_token}} placeholder that
+    # the EventFest thumbnail grid bakes into each featured-act href.
+    # Empty string when the campaign_contact has no token yet (e.g. UA
+    # microsite was unreachable during provisioning); template degrades
+    # to broken links but the send still goes out.
+    recipient_token = (
+        getattr(campaign_contact, "microsite_partner_token", "") or ""
+    )
 
     variables: dict[str, str] = {
-        "vocative_name": vocative,
+        "vocative_name": vocative_form,
         "first_name": first_name,
+        "recipient_token": recipient_token,
     }
+
+    # Per-contact tone (Vy/Ty) switching — EventFest list contains ~6/357
+    # tykat contacts; the rest are vykat (DB default on contacts.address_style).
+    # Pull the tone map from the template module so both are authored in
+    # one place; unknown/None values fall back to vykat inside tone_variables.
+    if template_type == "eventfest":
+        from .eventfest_template import tone_variables
+
+        tone = (getattr(contact, "address_style", None) or "vykat")
+        variables.update(tone_variables(tone))
 
     # Microsite invite link — cached in campaign_contact metadata-like field
     # We store it on the Message or regenerate (idempotent by email)
