@@ -493,3 +493,312 @@ class TestGetOrCreateInvite:
             "type": "partner",
         }
         assert call_kwargs.kwargs["headers"]["x-api-key"] == "secret-key"
+
+
+# ---------------------------------------------------------------------------
+# Tone (vykání / tykání) per-contact switching — EventFest list has 351
+# vykat recipients and 6 tykat recipients; the template must render both.
+# ---------------------------------------------------------------------------
+
+
+class TestEventfestTone:
+    """Render both vykání (default) and tykání variants of the EventFest body."""
+
+    # Strings that MUST appear only when tone == vykat.
+    VYKAT_FRAGMENTS = (
+        "pro Vás",
+        "na Vás",
+        "hledáte",
+        "můžete",
+        "Zastavte se",
+    )
+    # Strings that MUST appear only when tone == tykat.
+    TYKAT_FRAGMENTS = (
+        "pro Tebe",
+        "na Tebe",
+        "hledáš",
+        "můžeš",
+        "Zastav se",
+    )
+
+    def test_eventfest_template_default_vykani_pronouns(self):
+        """Default tone renders all formal pronouns/verbs (backwards-compat)."""
+        _, html, plain = render_eventfest_email(
+            "Jano", "https://example.com/invite/abc"
+        )
+        for fragment in self.VYKAT_FRAGMENTS:
+            assert fragment in html, f"missing {fragment!r} in HTML (default vykat)"
+            assert fragment in plain, f"missing {fragment!r} in plain (default vykat)"
+        # No leaked tykání forms.
+        for fragment in self.TYKAT_FRAGMENTS:
+            assert fragment not in html, f"leaked {fragment!r} in HTML (default vykat)"
+            assert fragment not in plain, f"leaked {fragment!r} in plain (default vykat)"
+        # No unsubstituted placeholders.
+        assert "{{" not in html
+        assert "{{" not in plain
+
+    def test_eventfest_template_explicit_vykat_pronouns(self):
+        """Explicit tone='vykat' matches the default."""
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://example.com/invite/abc", tone="vykat"
+        )
+        for fragment in self.VYKAT_FRAGMENTS:
+            assert fragment in html
+
+    def test_eventfest_template_explicit_tykani_pronouns(self):
+        """tone='tykat' renders all informal pronouns/verbs; no vykání leaks."""
+        _, html, plain = render_eventfest_email(
+            "Jano", "https://example.com/invite/abc", tone="tykat"
+        )
+        for fragment in self.TYKAT_FRAGMENTS:
+            assert fragment in html, f"missing {fragment!r} in HTML (tykat)"
+            assert fragment in plain, f"missing {fragment!r} in plain (tykat)"
+        for fragment in self.VYKAT_FRAGMENTS:
+            assert fragment not in html, f"leaked {fragment!r} in HTML (tykat)"
+            assert fragment not in plain, f"leaked {fragment!r} in plain (tykat)"
+        assert "{{" not in html
+        assert "{{" not in plain
+
+    def test_eventfest_template_tykani_with_michal_vocative(self):
+        """tone=tykat + Michal → vocative unchanged, pronouns informal."""
+        _, html, plain = render_eventfest_email(
+            "Michale", "https://example.com/invite/abc", tone="tykat"
+        )
+        # Vocative form is provided by caller; it doesn't depend on tone.
+        assert "Michale" in html
+        assert "Michale" in plain
+        # Tykání pronouns present.
+        assert "pro Tebe" in html
+        assert "na Tebe" in html
+        # Vykání pronouns absent.
+        assert "pro Vás" not in html
+        assert "na Vás" not in html
+
+    def test_eventfest_template_tykani_with_hana_vocative(self):
+        """tone=tykat + Hano → vocative unchanged, pronouns informal."""
+        _, html, plain = render_eventfest_email(
+            "Hano", "https://example.com/invite/abc", tone="tykat"
+        )
+        assert "Hano" in html
+        assert "Hano" in plain
+        assert "pro Tebe" in html
+        assert "Zastav se" in plain
+        assert "pro Vás" not in html
+        assert "Zastavte se" not in plain
+
+    def test_unknown_tone_falls_back_to_vykat(self):
+        """Unrecognised tone string defaults to formal register."""
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://example.com/invite/abc", tone="onikáni"
+        )
+        for fragment in self.VYKAT_FRAGMENTS:
+            assert fragment in html
+        for fragment in self.TYKAT_FRAGMENTS:
+            assert fragment not in html
+
+    def test_none_tone_falls_back_to_vykat(self):
+        """Passing None for tone defaults to formal register."""
+        # render_eventfest_email(tone=None) — the helper tolerates None via
+        # tone_variables() even though the annotation says str.
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://example.com/invite/abc", tone=None  # type: ignore[arg-type]
+        )
+        for fragment in self.VYKAT_FRAGMENTS:
+            assert fragment in html
+
+    def test_tone_variants_map_has_matching_placeholders(self):
+        """Both tone dicts expose the same keys (no register-specific leaks)."""
+        from api.services.eventfest_template import _TONE_VARIANTS
+
+        assert set(_TONE_VARIANTS["vykat"]) == set(_TONE_VARIANTS["tykat"])
+        # And those keys are exactly the placeholders the template references.
+        assert set(_TONE_VARIANTS["vykat"]) == {
+            "you_acc",
+            "you_look_verb",
+            "you_can_verb",
+            "stop_by_imper",
+        }
+
+
+class TestSendServiceToneFromContact:
+    """send_service._build_template_variables reads contact.address_style."""
+
+    def _fake_contact(self, first_name: str = "Michal", address_style: str | None = "vykat"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            first_name=first_name,
+            last_name="",
+            email_address="x@example.com",
+            address_style=address_style,
+        )
+
+    def _fake_cc(self, token: str = "tok-1"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(microsite_partner_token=token)
+
+    def _fake_campaign(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(generation_config={"template_type": "eventfest"})
+
+    def test_send_service_picks_tone_from_contact_address_style(self):
+        """address_style='tykat' → variables carry tykání pronouns."""
+        import os
+        from unittest.mock import patch
+
+        from api.services.send_service import _build_template_variables
+
+        with patch.dict(
+            os.environ,
+            {"UA_MICROSITE_URL": "", "UA_INVITE_API_KEY": ""},
+            clear=False,
+        ):
+            variables = _build_template_variables(
+                self._fake_contact("Michal", address_style="tykat"),
+                self._fake_cc(),
+                self._fake_campaign(),
+            )
+
+        assert variables["you_acc"] == "Tebe"
+        assert variables["you_look_verb"] == "hledáš"
+        assert variables["you_can_verb"] == "můžeš"
+        assert variables["stop_by_imper"] == "Zastav se"
+
+    def test_send_service_picks_vykat_for_explicit_vykat(self):
+        """address_style='vykat' → variables carry vykání pronouns."""
+        import os
+        from unittest.mock import patch
+
+        from api.services.send_service import _build_template_variables
+
+        with patch.dict(
+            os.environ,
+            {"UA_MICROSITE_URL": "", "UA_INVITE_API_KEY": ""},
+            clear=False,
+        ):
+            variables = _build_template_variables(
+                self._fake_contact("Michal", address_style="vykat"),
+                self._fake_cc(),
+                self._fake_campaign(),
+            )
+
+        assert variables["you_acc"] == "Vás"
+        assert variables["you_look_verb"] == "hledáte"
+        assert variables["you_can_verb"] == "můžete"
+        assert variables["stop_by_imper"] == "Zastavte se"
+
+    def test_send_service_defaults_to_vykani_for_null_address_style(self):
+        """address_style=None → defensive fallback to vykání."""
+        import os
+        from unittest.mock import patch
+
+        from api.services.send_service import _build_template_variables
+
+        with patch.dict(
+            os.environ,
+            {"UA_MICROSITE_URL": "", "UA_INVITE_API_KEY": ""},
+            clear=False,
+        ):
+            variables = _build_template_variables(
+                self._fake_contact("Michal", address_style=None),
+                self._fake_cc(),
+                self._fake_campaign(),
+            )
+
+        assert variables["you_acc"] == "Vás"
+        assert variables["you_can_verb"] == "můžete"
+
+    def test_send_service_defaults_to_vykani_for_empty_address_style(self):
+        """address_style='' → defensive fallback to vykání (like NULL)."""
+        import os
+        from unittest.mock import patch
+
+        from api.services.send_service import _build_template_variables
+
+        with patch.dict(
+            os.environ,
+            {"UA_MICROSITE_URL": "", "UA_INVITE_API_KEY": ""},
+            clear=False,
+        ):
+            variables = _build_template_variables(
+                self._fake_contact("Michal", address_style=""),
+                self._fake_cc(),
+                self._fake_campaign(),
+            )
+
+        assert variables["you_acc"] == "Vás"
+
+    def test_send_service_tone_only_populated_for_eventfest(self):
+        """Other template types don't get the tone variables."""
+        import os
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from api.services.send_service import _build_template_variables
+
+        other_campaign = SimpleNamespace(
+            generation_config={"template_type": "meetup"}
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            variables = _build_template_variables(
+                self._fake_contact("Michal", address_style="tykat"),
+                self._fake_cc(),
+                other_campaign,
+            )
+
+        # Tone placeholders should be absent — only eventfest wires them.
+        assert "you_acc" not in variables
+        assert "you_can_verb" not in variables
+
+    def test_end_to_end_tykat_contact_renders_informal_body(self):
+        """Full pipeline: tykat contact → stored body → per-recipient render.
+
+        Mirrors the stored-body-plus-send-time-substitution pattern used in
+        production: provisioner stores body with placeholders intact, send
+        service populates per-contact variables, _replace_template_variables
+        produces the final body shipped to Resend.
+        """
+        import os
+        from unittest.mock import patch
+
+        from api.services.eventfest_campaign import _render_storable_body
+        from api.services.send_service import (
+            _build_template_variables,
+            _replace_template_variables,
+        )
+
+        # Step 1 — provision: body stored with placeholders.
+        stored_html, stored_plain = _render_storable_body(
+            featured_acts=None, site_url="https://booking.loserscirque.cz"
+        )
+        assert "{{you_acc}}" in stored_html
+        assert "{{you_can_verb}}" in stored_html
+
+        # Step 2 — send time: build variables for a tykat contact.
+        with patch.dict(
+            os.environ,
+            {"UA_MICROSITE_URL": "", "UA_INVITE_API_KEY": ""},
+            clear=False,
+        ):
+            variables = _build_template_variables(
+                self._fake_contact("Michale", address_style="tykat"),
+                self._fake_cc(),
+                self._fake_campaign(),
+            )
+
+        # Step 3 — substitute per-recipient.
+        final_html = _replace_template_variables(stored_html, variables)
+        final_plain = _replace_template_variables(stored_plain, variables)
+
+        # All placeholders resolved.
+        assert "{{" not in final_html
+        assert "{{" not in final_plain
+        # Tykání forms present, vykání absent.
+        assert "pro Tebe" in final_html
+        assert "hledáš" in final_html
+        assert "Zastav se" in final_plain
+        assert "pro Vás" not in final_html
+        assert "hledáte" not in final_html
+        assert "Zastavte se" not in final_plain

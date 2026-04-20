@@ -37,7 +37,11 @@ from ..models import (
     Message,
     db,
 )
-from .eventfest_template import EVENTFEST_SUBJECT, render_eventfest_email
+from .eventfest_template import (
+    EVENTFEST_SUBJECT,
+    TONE_PASSTHROUGH,
+    render_eventfest_email,
+)
 from .microsite_invites import get_or_create_invite
 
 logger = logging.getLogger(__name__)
@@ -144,14 +148,19 @@ def _render_storable_body(
 ) -> tuple[str, str]:
     """Return the EventFest HTML + plain-text bodies with template placeholders intact.
 
-    Two kinds of placeholders are embedded in the returned body:
+    Three kinds of placeholders are embedded in the returned body and are
+    substituted per-recipient at send time by
+    ``send_service._build_template_variables``:
 
     - ``{{vocative_name}}`` and ``{{microsite_link}}`` — per-recipient text
-      values supplied at send time by ``send_service._build_template_variables``.
+      values.
     - ``{{recipient_token}}`` — per-recipient token baked into each
       featured-act thumbnail href (``?t={{recipient_token}}``) so arrival
-      on the UA detail page sets the partner cookie. Supplied at send
-      time from ``CampaignContact.microsite_partner_token``.
+      on the UA detail page sets the partner cookie.
+    - ``{{you_acc}}``, ``{{you_look_verb}}``, ``{{you_can_verb}}``,
+      ``{{stop_by_imper}}`` — tone (Vy/Ty) variants picked from
+      ``contact.address_style``. Using ``tone=TONE_PASSTHROUGH`` below keeps
+      these literal in the stored body.
 
     Args:
         featured_acts: Optional list of act dicts (see ``_load_featured_acts``).
@@ -170,6 +179,7 @@ def _render_storable_body(
         recipient_token="{{recipient_token}}",
         site_url=site_url,
         featured_acts=featured_acts or None,
+        tone=TONE_PASSTHROUGH,
     )
     return html, plain
 

@@ -617,6 +617,16 @@ def _build_template_variables(
         "recipient_token": recipient_token,
     }
 
+    # Per-contact tone (Vy/Ty) switching — EventFest list contains ~6/357
+    # tykat contacts; the rest are vykat (DB default on contacts.address_style).
+    # Pull the tone map from the template module so both are authored in
+    # one place; unknown/None values fall back to vykat inside tone_variables.
+    if template_type == "eventfest":
+        from .eventfest_template import tone_variables
+
+        tone = (getattr(contact, "address_style", None) or "vykat")
+        variables.update(tone_variables(tone))
+
     # Microsite invite link — cached in campaign_contact metadata-like field
     # We store it on the Message or regenerate (idempotent by email)
     if template_type == "eventfest":
