@@ -1,9 +1,12 @@
 import { useState, useCallback } from 'react'
 import {
   useCampaignAnalytics,
+  useCampaignRecipients,
   useSendEmails,
   useQueueLinkedIn,
   type CampaignDetail,
+  type CampaignRecipient,
+  type RecipientTimelineEvent,
 } from '../../../api/queries/useCampaigns'
 import { useToast } from '../../../components/ui/Toast'
 import { Modal } from '../../../components/ui/Modal'
@@ -229,13 +232,22 @@ export function OutreachTab({ campaign }: Props) {
                   <StatusBadge label="queued" count={emailSending.queued} color="bg-[#8B92A0]/10 text-text-muted" />
                   <StatusBadge label="sent" count={emailSending.sent} color="bg-accent/10 text-accent-hover" />
                   <StatusBadge label="delivered" count={emailSending.delivered} color="bg-success/10 text-success" />
+                  {/* Phase 2: opened / clicked from engagement aggregation */}
+                  <StatusBadge label="opened" count={analytics.engagement.opened} color="bg-accent-cyan/10 text-accent-cyan" />
+                  <StatusBadge label="clicked" count={analytics.engagement.clicked} color="bg-accent-cyan/10 text-accent-cyan" />
                   <StatusBadge label="bounced" count={emailSending.bounced} color="bg-warning/10 text-warning" />
+                  <StatusBadge label="unsubscribed" count={emailSending.unsubscribed ?? 0} color="bg-warning/10 text-warning" />
                   <StatusBadge label="failed" count={emailSending.failed} color="bg-error/10 text-error" />
                 </div>
               </div>
             )}
           </div>
         </div>
+      )}
+
+      {/* Phase 2: Per-recipient drill-down */}
+      {emailChannelCount > 0 && (
+        <RecipientsDrillDown campaignId={campaign.id} />
       )}
 
       {/* LinkedIn Section */}
@@ -394,6 +406,102 @@ export function OutreachTab({ campaign }: Props) {
           </p>
         </div>
       </Modal>
+    </div>
+  )
+}
+
+// ── Per-recipient drill-down (Phase 2 — LEADGEN-03) ─────
+
+function _formatTs(ts: string | null): string {
+  if (!ts) return '—'
+  try {
+    const d = new Date(ts)
+    return d.toLocaleString()
+  } catch {
+    return ts
+  }
+}
+
+function TimelineEntry({ ev }: { ev: RecipientTimelineEvent }) {
+  const label =
+    ev.type === 'microsite_activity'
+      ? `microsite: ${ev.event}`
+      : ev.type
+  return (
+    <li className="flex items-baseline gap-3 text-xs">
+      <span className="text-text-dim tabular-nums whitespace-nowrap">{_formatTs(ev.ts)}</span>
+      <span className="text-text-muted font-medium">{label}</span>
+    </li>
+  )
+}
+
+function RecipientCard({ recipient }: { recipient: CampaignRecipient }) {
+  const [open, setOpen] = useState(false)
+  const eventCount = recipient.timeline.length
+  return (
+    <div className="border border-border rounded-lg bg-surface-alt">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 cursor-pointer bg-transparent border-none text-left"
+        aria-expanded={open}
+      >
+        <div className="flex flex-col">
+          <span className="text-sm font-medium text-text">{recipient.name}</span>
+          <span className="text-[11px] text-text-dim">{recipient.email}</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-text-dim tabular-nums">
+            {eventCount} event{eventCount !== 1 ? 's' : ''}
+          </span>
+          <span className="text-text-dim text-xs">{open ? '▾' : '▸'}</span>
+        </div>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1 border-t border-border/50">
+          {recipient.microsite_partner_token && (
+            <p className="text-[10px] text-text-dim mb-2">
+              Partner token:{' '}
+              <code className="text-text-muted">{recipient.microsite_partner_token}</code>
+            </p>
+          )}
+          {eventCount === 0 ? (
+            <p className="text-xs text-text-dim italic">No events recorded yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {recipient.timeline.map((ev, i) => (
+                <TimelineEntry key={i} ev={ev} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function RecipientsDrillDown({ campaignId }: { campaignId: string }) {
+  const { data, isLoading, error } = useCampaignRecipients(campaignId)
+
+  return (
+    <div data-testid="recipients-drill-down">
+      <SectionDivider title="Recipients" />
+      {isLoading && (
+        <p className="text-xs text-text-dim mt-3">Loading recipients...</p>
+      )}
+      {error && (
+        <p className="text-xs text-error mt-3">Failed to load recipients.</p>
+      )}
+      {data && data.recipients.length === 0 && (
+        <p className="text-xs text-text-dim mt-3">No recipients in this campaign yet.</p>
+      )}
+      {data && data.recipients.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {data.recipients.map((r) => (
+            <RecipientCard key={r.campaign_contact_id} recipient={r} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
