@@ -164,9 +164,7 @@ class TestProvisionEventfestCampaign:
             .join(Contact, Contact.id == CampaignContact.contact_id)
             .all()
         )
-        token_by_email = {
-            c.email_address: cc.microsite_partner_token for cc, c in rows
-        }
+        token_by_email = {c.email_address: cc.microsite_partner_token for cc, c in rows}
         assert token_by_email == {
             "alice@x.com": "ptok_alice",
             "bob@x.com": "ptok_bob",
@@ -201,15 +199,11 @@ class TestProvisionEventfestCampaign:
 
         # No Campaign row should exist.
         existing = (
-            db.session.query(Campaign)
-            .filter(Campaign.name == "EventFest 2026")
-            .first()
+            db.session.query(Campaign).filter(Campaign.name == "EventFest 2026").first()
         )
         assert existing is None
 
-    def test_idempotent_second_call(
-        self, app, db, seed_tenant, env_vars, fake_invites
-    ):
+    def test_idempotent_second_call(self, app, db, seed_tenant, env_vars, fake_invites):
         """Test 4: re-running with same (name, emails) is a no-op."""
         from api.models import CampaignContact, Contact, Message
         from api.services.eventfest_campaign import provision_eventfest_campaign

@@ -2983,9 +2983,7 @@ def campaign_recipients(campaign_id):
 
     # Verify campaign exists and belongs to tenant.
     campaign_exists = db.session.execute(
-        db.text(
-            "SELECT 1 FROM campaigns WHERE id = :id AND tenant_id = :t LIMIT 1"
-        ),
+        db.text("SELECT 1 FROM campaigns WHERE id = :id AND tenant_id = :t LIMIT 1"),
         {"id": campaign_id, "t": tenant_id},
     ).fetchone()
     if not campaign_exists:

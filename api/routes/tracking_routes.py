@@ -165,11 +165,11 @@ def ingest_microsite_event():
                 logger.info(
                     "Tracking: duplicate microsite event for contact=%s "
                     "event=%s ts=%s — skipping persist",
-                    contact.id, event_name, occurred_at.isoformat(),
+                    contact.id,
+                    event_name,
+                    occurred_at.isoformat(),
                 )
-                return jsonify(
-                    {"ok": True, "matched": True, "duplicate": True}
-                ), 200
+                return jsonify({"ok": True, "matched": True, "duplicate": True}), 200
 
         try:
             db.session.add(activity)
@@ -185,9 +185,7 @@ def ingest_microsite_event():
                 event_name,
                 occurred_at.isoformat(),
             )
-            return jsonify(
-                {"ok": True, "matched": True, "duplicate": True}
-            ), 200
+            return jsonify({"ok": True, "matched": True, "duplicate": True}), 200
 
         logger.info(
             "Tracking: persisted %s for contact=%s",

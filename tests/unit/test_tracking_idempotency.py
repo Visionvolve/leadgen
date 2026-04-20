@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from api.models import Activity, Contact, db
+from api.models import Activity, Contact
 
 
 @pytest.fixture
@@ -80,9 +80,7 @@ def _headers(api_key):
 
 
 def _count_activities(contact_id):
-    return Activity.query.filter_by(
-        contact_id=contact_id, source="microsite"
-    ).count()
+    return Activity.query.filter_by(contact_id=contact_id, source="microsite").count()
 
 
 class TestTrackingIdempotency:

@@ -117,12 +117,9 @@ class TestPartnerTokenResolution:
 
         contact_id = seed_partner_recipient["contact"].id
         with client.application.app_context():
-            act = (
-                Activity.query.filter_by(
-                    contact_id=contact_id,
-                    event_type="page_viewed",
-                    source="microsite",
-                )
-                .first()
-            )
+            act = Activity.query.filter_by(
+                contact_id=contact_id,
+                event_type="page_viewed",
+                source="microsite",
+            ).first()
             assert act is not None

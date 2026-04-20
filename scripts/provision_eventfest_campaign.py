@@ -84,7 +84,9 @@ def main(argv: list[str] | None = None) -> int:
 
     emails = _read_emails(args)
     if not emails:
-        print("ERROR: no emails supplied (use --file, --email, or stdin)", file=sys.stderr)
+        print(
+            "ERROR: no emails supplied (use --file, --email, or stdin)", file=sys.stderr
+        )
         return 1
 
     # Defer the import so unit tests can stub the service.
@@ -104,7 +106,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     dashboard = args.dashboard_base.rstrip("/")
-    print(f"Campaign {campaign_id} created. Dashboard: {dashboard}/campaigns/{campaign_id}")
+    print(
+        f"Campaign {campaign_id} created. Dashboard: {dashboard}/campaigns/{campaign_id}"
+    )
     return 0
 
 
