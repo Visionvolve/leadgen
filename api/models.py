@@ -1520,6 +1520,14 @@ class Activity(db.Model):
     event_type = db.Column(db.Text, nullable=False, default="event")
     timestamp = db.Column(db.DateTime(timezone=True))
     payload = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
+    # Phase 4 (migration 061): proper FK for campaign attribution. Set at
+    # ingest time in tracking_routes when a partner token matches. ON DELETE
+    # SET NULL so deleting a campaign_contact does not orphan the event.
+    campaign_contact_id = db.Column(
+        UUID(as_uuid=False),
+        db.ForeignKey("campaign_contacts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
 
