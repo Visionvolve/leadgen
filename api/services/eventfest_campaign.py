@@ -89,16 +89,89 @@ def _extract_token(invite_url: str) -> str:
     return invite_url.rsplit("/", 1)[-1]
 
 
-def _render_storable_body() -> str:
-    """Return the EventFest HTML body with template placeholders intact.
+def _load_featured_acts() -> list[dict]:
+    """Load the 4 featured-act thumbnail records from UA_FEATURED_ACTS_JSON env.
 
-    We pass the placeholder strings *as the values* to
-    ``render_eventfest_email`` so the rendered output already contains
-    ``{{vocative_name}}`` and ``{{microsite_link}}`` — ready for
-    per-recipient substitution at send time.
+    Returns an empty list when the env var is unset or malformed so the
+    template falls back to text-only (thumbnail section omitted entirely).
+
+    Expected JSON shape::
+
+        [
+          {"name": "Complicité", "slug": "complicite",
+           "image_url": "https://...", "category": "performances"},
+          ...
+        ]
+
+    Up to 4 entries are used; extras are silently ignored.
     """
-    _, html, _ = render_eventfest_email("{{vocative_name}}", "{{microsite_link}}")
-    return html
+    raw = os.environ.get("UA_FEATURED_ACTS_JSON", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "UA_FEATURED_ACTS_JSON is not valid JSON (%s) — rendering without thumbnails",
+            exc,
+        )
+        return []
+    if not isinstance(data, list):
+        logger.warning(
+            "UA_FEATURED_ACTS_JSON must be a JSON array — rendering without thumbnails"
+        )
+        return []
+    out: list[dict] = []
+    for entry in data[:4]:
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("slug") or not entry.get("image_url"):
+            continue
+        out.append(
+            {
+                "name": str(entry.get("name") or entry.get("slug")),
+                "slug": str(entry["slug"]),
+                "image_url": str(entry["image_url"]),
+                "category": str(entry.get("category") or "performances"),
+            }
+        )
+    return out
+
+
+def _render_storable_body(
+    featured_acts: list[dict] | None = None,
+    site_url: str = "",
+) -> tuple[str, str]:
+    """Return the EventFest HTML + plain-text bodies with template placeholders intact.
+
+    Two kinds of placeholders are embedded in the returned body:
+
+    - ``{{vocative_name}}`` and ``{{microsite_link}}`` — per-recipient text
+      values supplied at send time by ``send_service._build_template_variables``.
+    - ``{{recipient_token}}`` — per-recipient token baked into each
+      featured-act thumbnail href (``?t={{recipient_token}}``) so arrival
+      on the UA detail page sets the partner cookie. Supplied at send
+      time from ``CampaignContact.microsite_partner_token``.
+
+    Args:
+        featured_acts: Optional list of act dicts (see ``_load_featured_acts``).
+            When empty/None the thumbnail grid is omitted entirely.
+        site_url: UA microsite origin used to build absolute detail-page
+            URLs. Ignored when ``featured_acts`` is empty.
+
+    Returns:
+        ``(html_body, plain_body)`` — both strings contain the placeholders
+        above in literal form so per-recipient substitution at send time
+        produces the final content.
+    """
+    _, html, plain = render_eventfest_email(
+        vocative_name="{{vocative_name}}",
+        microsite_link="{{microsite_link}}",
+        recipient_token="{{recipient_token}}",
+        site_url=site_url,
+        featured_acts=featured_acts or None,
+    )
+    return html, plain
 
 
 def provision_eventfest_campaign(
@@ -148,7 +221,11 @@ def provision_eventfest_campaign(
     if not emails:
         raise ValueError("provision_eventfest_campaign: no valid emails supplied")
 
-    storable_body = _render_storable_body()
+    featured_acts = _load_featured_acts()
+    storable_body, _storable_plain = _render_storable_body(
+        featured_acts=featured_acts,
+        site_url=env["UA_MICROSITE_URL"],
+    )
 
     try:
         # 1. Find or create Campaign (idempotent by (tenant_id, name)).
@@ -308,7 +385,12 @@ def regenerate_messages_for_campaign(campaign_id: str) -> int:
 
     from ..models import EmailSendLog
 
-    storable_body = _render_storable_body()
+    env = _read_env()
+    featured_acts = _load_featured_acts()
+    storable_body, _storable_plain = _render_storable_body(
+        featured_acts=featured_acts,
+        site_url=env["UA_MICROSITE_URL"],
+    )
     rewritten = 0
 
     cc_ids_subq = (
