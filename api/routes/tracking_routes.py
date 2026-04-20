@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
+from sqlalchemy.exc import IntegrityError
 
 from ..models import Activity, CampaignContact, Contact, db
 
@@ -149,15 +150,51 @@ def ingest_microsite_event():
             )
             return jsonify({"ok": True, "matched": False}), 200
 
-        db.session.add(activity)
-        db.session.commit()
+        # WIRE-02: service-layer duplicate check. Cheap path that avoids the
+        # IntegrityError round-trip for the common case (e.g. UA's retry-
+        # with-backoff firing the same payload twice because the first
+        # response was lost in transit).
+        if contact is not None:
+            existing = Activity.query.filter_by(
+                contact_id=contact.id,
+                event_type=event_name,
+                occurred_at=occurred_at,
+                source="microsite",
+            ).first()
+            if existing is not None:
+                logger.info(
+                    "Tracking: duplicate microsite event for contact=%s "
+                    "event=%s ts=%s — skipping persist",
+                    contact.id, event_name, occurred_at.isoformat(),
+                )
+                return jsonify(
+                    {"ok": True, "matched": True, "duplicate": True}
+                ), 200
+
+        try:
+            db.session.add(activity)
+            db.session.commit()
+        except IntegrityError:
+            # WIRE-02: DB unique index (migration 060) enforces the dedup
+            # invariant even if the service-layer check lost a race.
+            db.session.rollback()
+            logger.info(
+                "Tracking: IntegrityError duplicate (DB race) contact=%s "
+                "event=%s ts=%s",
+                contact.id if contact else "?",
+                event_name,
+                occurred_at.isoformat(),
+            )
+            return jsonify(
+                {"ok": True, "matched": True, "duplicate": True}
+            ), 200
 
         logger.info(
             "Tracking: persisted %s for contact=%s",
             event_name,
             contact.id if contact else "?",
         )
-        return jsonify({"ok": True, "matched": True}), 200
+        return jsonify({"ok": True, "matched": True, "duplicate": False}), 200
 
     except Exception:
         db.session.rollback()
