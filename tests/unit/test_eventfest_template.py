@@ -1,7 +1,5 @@
 """Tests for EventFest HTML email template rendering."""
 
-from unittest.mock import patch, MagicMock
-
 from api.services.eventfest_template import (
     render_eventfest_email,
     _replace_template_variables,
@@ -9,7 +7,6 @@ from api.services.eventfest_template import (
     EVENTFEST_PLAIN_TEMPLATE,
     EVENTFEST_SUBJECT,
 )
-from api.services.microsite_invites import get_or_create_invite
 
 
 class TestReplaceTemplateVariables:
@@ -366,134 +363,10 @@ class TestFeaturedActsGrid:
         assert "}}" not in plain
 
 
-class TestGetOrCreateInvite:
-    """Tests for the microsite invite integration."""
-
-    @patch("api.services.microsite_invites.requests.post")
-    def test_successful_invite_creation(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "token": "abc123",
-            "url": "/invite/abc123",
-        }
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        url = get_or_create_invite(
-            "jana@example.com",
-            "Jana Nováková",
-            "https://demo.visionvolve.com",
-            "test-key",
-        )
-        assert url == "https://demo.visionvolve.com/invite/abc123"
-
-    @patch("api.services.microsite_invites.requests.post")
-    def test_invite_with_absolute_url(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "token": "xyz",
-            "url": "https://demo.visionvolve.com/invite/xyz",
-        }
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        url = get_or_create_invite(
-            "test@example.com",
-            "Test User",
-            "https://demo.visionvolve.com",
-            "test-key",
-        )
-        assert url == "https://demo.visionvolve.com/invite/xyz"
-
-    @patch("api.services.microsite_invites.requests.post")
-    def test_invite_with_token_only(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"token": "tok123"}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        url = get_or_create_invite(
-            "test@example.com",
-            "Test",
-            "https://demo.visionvolve.com",
-            "key",
-        )
-        assert url == "https://demo.visionvolve.com/invite/tok123"
-
-    @patch("api.services.microsite_invites.requests.post")
-    def test_returns_none_on_api_failure(self, mock_post):
-        mock_post.side_effect = ConnectionError("timeout")
-
-        url = get_or_create_invite(
-            "test@example.com",
-            "Test",
-            "https://demo.visionvolve.com",
-            "key",
-        )
-        assert url is None
-
-    def test_missing_microsite_url_returns_none(self):
-        url = get_or_create_invite(
-            "test@example.com",
-            "Test",
-            "",
-            "key",
-        )
-        assert url is None
-
-    def test_missing_api_key_returns_none(self):
-        url = get_or_create_invite(
-            "test@example.com",
-            "Test",
-            "https://example.com",
-            "",
-        )
-        assert url is None
-
-    @patch("api.services.microsite_invites.requests.post")
-    def test_retry_on_first_failure(self, mock_post):
-        """First call fails, second succeeds."""
-        success_resp = MagicMock()
-        success_resp.json.return_value = {
-            "token": "retry123",
-            "url": "/invite/retry123",
-        }
-        success_resp.raise_for_status = MagicMock()
-
-        mock_post.side_effect = [ConnectionError("fail"), success_resp]
-
-        url = get_or_create_invite(
-            "test@example.com",
-            "Test",
-            "https://demo.visionvolve.com",
-            "key",
-        )
-        assert url == "https://demo.visionvolve.com/invite/retry123"
-        assert mock_post.call_count == 2
-
-    @patch("api.services.microsite_invites.requests.post")
-    def test_sends_correct_payload(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"token": "t", "url": "/invite/t"}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        get_or_create_invite(
-            "jana@example.com",
-            "Jana Nováková",
-            "https://demo.visionvolve.com",
-            "secret-key",
-        )
-
-        call_kwargs = mock_post.call_args
-        assert call_kwargs.kwargs["json"] == {
-            "email": "jana@example.com",
-            "name": "Jana Nováková",
-            "type": "partner",
-        }
-        assert call_kwargs.kwargs["headers"]["x-api-key"] == "secret-key"
-
+# NOTE: tests for get_or_create_invite moved to tests/unit/test_microsite_invites.py
+# as part of the switch from POST /api/invites (singular) to POST /api/invites/bulk
+# with applyEventFestDefaults.  Keeping them in this file would assert on the old
+# singular response shape and fail.
 
 # ---------------------------------------------------------------------------
 # Tone (vykání / tykání) per-contact switching — EventFest list has 351
