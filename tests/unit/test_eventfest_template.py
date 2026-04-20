@@ -158,6 +158,214 @@ class TestTemplateIntegrity:
         assert "{{microsite_link}}" in EVENTFEST_PLAIN_TEMPLATE
 
 
+class TestFeaturedActsGrid:
+    """Tests for the 2x2 thumbnail grid section."""
+
+    SAMPLE_ACTS = [
+        {
+            "name": "Complicité",
+            "slug": "complicite",
+            "image_url": "https://booking.loserscirque.cz/api/media/file/complicite-01.jpg",
+            "category": "performances",
+        },
+        {
+            "name": "Glamour in Red",
+            "slug": "glamour-in-red",
+            "image_url": "https://booking.loserscirque.cz/api/media/file/glamour-01.jpg",
+            "category": "animations",
+        },
+        {
+            "name": "Onyx",
+            "slug": "onyx",
+            "image_url": "https://booking.loserscirque.cz/api/media/file/onyx-01.jpg",
+            "category": "performances",
+        },
+    ]
+
+    def test_empty_featured_acts_renders_without_thumbnail_section(self):
+        """If featured_acts=[], no empty table/placeholder leaks into output."""
+        _, html, plain = render_eventfest_email(
+            "Jano",
+            "https://booking.loserscirque.cz/invite/tok",
+            recipient_token="tok",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=[],
+        )
+        assert "{{featured_acts_section}}" not in html
+        assert "{{featured_acts_plain}}" not in plain
+        # No placeholder <img> or grid table should appear
+        assert "/cs/performances/" not in html
+        assert "/cs/animations/" not in html
+        # Plain text should not contain the acts header
+        assert "Vybraná vystoupení" not in plain
+
+    def test_none_featured_acts_renders_without_thumbnail_section(self):
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="tok",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=None,
+        )
+        assert "{{featured_acts_section}}" not in html
+        assert "/cs/performances/" not in html
+
+    def test_html_contains_img_for_each_act(self):
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="abc123",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=self.SAMPLE_ACTS,
+        )
+        # One <img> per entry
+        assert html.count("<img ") == len(self.SAMPLE_ACTS)
+        # Each image URL appears
+        for act in self.SAMPLE_ACTS:
+            assert act["image_url"] in html
+        # Each act name appears as caption
+        for act in self.SAMPLE_ACTS:
+            assert act["name"] in html
+
+    def test_each_link_contains_recipient_token_query_param(self):
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="abc123",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=self.SAMPLE_ACTS,
+        )
+        # Count hrefs that include the token query param
+        token_href_count = html.count("?t=abc123")
+        assert token_href_count == len(self.SAMPLE_ACTS)
+
+    def test_links_point_to_detail_pages_not_invite_route(self):
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="abc123",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=self.SAMPLE_ACTS,
+        )
+        # Detail page URLs, not /invite/{token} — the ?t mechanism is
+        # additive on the detail page.
+        assert (
+            'href="https://booking.loserscirque.cz/cs/performances/complicite?t=abc123"'
+            in html
+        )
+        assert (
+            'href="https://booking.loserscirque.cz/cs/animations/glamour-in-red?t=abc123"'
+            in html
+        )
+        assert (
+            'href="https://booking.loserscirque.cz/cs/performances/onyx?t=abc123"'
+            in html
+        )
+
+    def test_site_url_trailing_slash_is_normalised(self):
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="xyz",
+            site_url="https://booking.loserscirque.cz/",
+            featured_acts=[self.SAMPLE_ACTS[0]],
+        )
+        # No double slash in the constructed URL
+        assert "cz//cs/performances" not in html
+        assert (
+            "https://booking.loserscirque.cz/cs/performances/complicite?t=xyz"
+            in html
+        )
+
+    def test_caps_at_four_acts(self):
+        five_acts = self.SAMPLE_ACTS + [
+            {
+                "name": "Aerial silk Armagedon",
+                "slug": "aerial-silk-armagedon",
+                "image_url": "https://x/a.jpg",
+                "category": "performances",
+            },
+            {
+                "name": "Fifth Act",
+                "slug": "fifth",
+                "image_url": "https://x/5.jpg",
+                "category": "performances",
+            },
+        ]
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="tok",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=five_acts,
+        )
+        assert html.count("<img ") == 4
+        assert "Fifth Act" not in html
+
+    def test_plain_text_lists_acts_with_urls(self):
+        _, _, plain = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="abc123",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=self.SAMPLE_ACTS,
+        )
+        assert "Vybraná vystoupení" in plain
+        for act in self.SAMPLE_ACTS:
+            # Each name appears in the bullet list
+            assert f"- {act['name']}:" in plain
+        # Each URL appears with the token
+        assert (
+            "https://booking.loserscirque.cz/cs/performances/complicite?t=abc123"
+            in plain
+        )
+        assert (
+            "https://booking.loserscirque.cz/cs/animations/glamour-in-red?t=abc123"
+            in plain
+        )
+
+    def test_plain_text_no_html_tags_in_acts(self):
+        _, _, plain = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="abc123",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=self.SAMPLE_ACTS,
+        )
+        assert "<img" not in plain
+        assert "<a " not in plain
+        assert "<table" not in plain
+
+    def test_default_category_is_performances(self):
+        """If caller omits 'category', default to performances."""
+        acts = [
+            {
+                "name": "Onyx",
+                "slug": "onyx",
+                "image_url": "https://x.jpg",
+            }
+        ]
+        _, html, _ = render_eventfest_email(
+            "Jano",
+            "https://example.com/invite/tok",
+            recipient_token="t",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=acts,
+        )
+        assert "/cs/performances/onyx?t=t" in html
+
+    def test_backwards_compat_no_featured_acts_kwarg(self):
+        """Existing callers that pass only (name, microsite_link) still work."""
+        subject, html, plain = render_eventfest_email(
+            "Jano", "https://example.com/invite/tok"
+        )
+        assert subject == EVENTFEST_SUBJECT
+        assert "{{" not in html
+        assert "}}" not in html
+        assert "{{" not in plain
+        assert "}}" not in plain
+
+
 class TestGetOrCreateInvite:
     """Tests for the microsite invite integration."""
 
