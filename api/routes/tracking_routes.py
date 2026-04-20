@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 
-from ..models import Activity, Contact, db
+from ..models import Activity, CampaignContact, Contact, db
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +38,32 @@ def _verify_api_key() -> bool:
 def _resolve_contact(token: str, data: dict | None) -> Contact | None:
     """Resolve a contact from the event payload.
 
-    Strategy:
-    1. If *data* contains an ``email`` field, look up the contact by email.
-    2. As a fallback, try to find a contact whose email matches the token
+    Strategy (Phase 2 adds the partner-token branch as strategy 1):
+    1. If *token* matches a ``CampaignContact.microsite_partner_token``,
+       return that CampaignContact's Contact. This is the EventFest
+       cross-repo attribution path — partner tokens are issued by the UA
+       microsite and persisted on each CampaignContact at provisioning
+       time (see ``api/services/eventfest_campaign.py``).
+    2. If *data* contains an ``email`` field, look up the contact by email.
+    3. As a fallback, try to find a contact whose email matches the token
        (some microsites use email-as-token).
 
     Returns the first matching :class:`Contact` or ``None``.
     """
+    # Strategy 1 — partner token match (Phase 2)
+    tok = (token or "").strip()
+    if tok:
+        cc = CampaignContact.query.filter(
+            CampaignContact.microsite_partner_token == tok,
+        ).first()
+        if cc and cc.contact_id:
+            contact = db.session.get(Contact, cc.contact_id)
+            if contact:
+                return contact
+
     email = (data or {}).get("email", "").strip().lower() if data else ""
 
+    # Strategy 2 — email lookup
     if email:
         contact = Contact.query.filter(
             db.func.lower(Contact.email_address) == email,
@@ -54,10 +71,10 @@ def _resolve_contact(token: str, data: dict | None) -> Contact | None:
         if contact:
             return contact
 
-    # Fallback: treat token itself as email
-    if token and "@" in token:
+    # Strategy 3 — fallback: treat token itself as email
+    if tok and "@" in tok:
         contact = Contact.query.filter(
-            db.func.lower(Contact.email_address) == token.strip().lower(),
+            db.func.lower(Contact.email_address) == tok.lower(),
         ).first()
         if contact:
             return contact
