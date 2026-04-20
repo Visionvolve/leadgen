@@ -22,6 +22,12 @@ services:
       - IAM_JWKS_URL=${IAM_JWKS_URL:-https://iam.visionvolve.com/.well-known/jwks.json}
       - IAM_AUDIENCE=${IAM_AUDIENCE:-leadgen}
       - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
+      # Phase 4 (Agent Z5): UA microsite integration. Required for
+      # send_service.get_or_create_invite + scripts/backfill_eventfest_tokens.py.
+      # Without these, EventFest partner tokens never get populated on
+      # campaign_contacts, so tracking-ingest campaign attribution fails.
+      - UA_MICROSITE_URL=${UA_MICROSITE_URL:-https://booking.loserscirque.cz}
+      - UA_INVITE_API_KEY=${UA_INVITE_API_KEY:-}
     ports:
       - "127.0.0.1:5000:5000"
     restart: unless-stopped
