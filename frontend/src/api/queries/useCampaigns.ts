@@ -295,7 +295,7 @@ export interface CampaignAnalyticsData {
     by_step: Record<string, number>
   }
   sending: {
-    email: { total: number; queued: number; sent: number; delivered: number; bounced: number; failed: number }
+    email: { total: number; queued: number; sent: number; delivered: number; bounced: number; failed: number; unsubscribed?: number }
     linkedin: { total: number; queued: number; sent: number; delivered: number; failed: number }
   }
   engagement: {
@@ -303,6 +303,8 @@ export interface CampaignAnalyticsData {
     replied: number
     bounced: number
     clicked: number
+    unsubscribed?: number
+    delivered?: number
     total_opens: number
     total_clicks: number
     hard_bounces: number
@@ -311,6 +313,7 @@ export interface CampaignAnalyticsData {
     reply_rate: number
     bounce_rate: number
     click_rate: number
+    unsubscribe_rate?: number
   }
   contacts: {
     total: number
@@ -337,6 +340,43 @@ export function useCampaignAnalytics(campaignId: string | null, enabled = true) 
     queryFn: () => apiFetch<CampaignAnalyticsData>(`/campaigns/${campaignId}/analytics`),
     enabled: enabled && !!campaignId,
     refetchInterval: 10_000,
+  })
+}
+
+// ── Campaign Recipients (per-recipient timeline drill-down — Phase 2) ──
+
+export type RecipientTimelineMailEvent = {
+  type: 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'unsubscribed'
+  ts: string | null
+}
+
+export type RecipientTimelineMicrositeEvent = {
+  type: 'microsite_activity'
+  event: string
+  ts: string | null
+}
+
+export type RecipientTimelineEvent = RecipientTimelineMailEvent | RecipientTimelineMicrositeEvent
+
+export interface CampaignRecipient {
+  campaign_contact_id: string
+  contact_id: string | null
+  email: string
+  name: string
+  microsite_partner_token: string | null
+  timeline: RecipientTimelineEvent[]
+}
+
+export interface CampaignRecipientsResponse {
+  recipients: CampaignRecipient[]
+}
+
+export function useCampaignRecipients(campaignId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ['campaign-recipients', campaignId],
+    queryFn: () => apiFetch<CampaignRecipientsResponse>(`/campaigns/${campaignId}/recipients`),
+    enabled: enabled && !!campaignId,
+    refetchInterval: 15_000,
   })
 }
 

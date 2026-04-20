@@ -1203,6 +1203,9 @@ class CampaignContact(db.Model):
     enrichment_gaps = db.Column(JSONB, server_default=db.text("'[]'::jsonb"))
     generation_cost = db.Column(db.Numeric(10, 4), default=0)
     error = db.Column(db.Text)
+    # Phase 2 (migration 059): partner token from UA microsite for cross-repo
+    # event attribution. Populated by eventfest_campaign provisioning.
+    microsite_partner_token = db.Column(db.Text)
     added_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     generated_at = db.Column(db.DateTime(timezone=True))
 
@@ -1795,6 +1798,10 @@ class EmailSendLog(db.Model):
     clicked_at = db.Column(db.DateTime(timezone=True))
     click_count = db.Column(db.Integer, default=0)
     complained_at = db.Column(db.DateTime(timezone=True))
+    # Phase 2 (migration 059): 6th mail-event state. Populated by Resend
+    # webhook handler when an `email.unsubscribed` event arrives, and also
+    # set when status transitions to "unsubscribed".
+    unsubscribed_at = db.Column(db.DateTime(timezone=True))
     error = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
@@ -1820,6 +1827,9 @@ class EmailSendLog(db.Model):
             "click_count": self.click_count or 0,
             "complained_at": self.complained_at.isoformat()
             if self.complained_at
+            else None,
+            "unsubscribed_at": self.unsubscribed_at.isoformat()
+            if self.unsubscribed_at
             else None,
             "error": self.error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
