@@ -590,7 +590,7 @@ def _build_template_variables(
     (i.e. the campaign does not use a template_type).
     """
     from .czech_vocative import to_vocative
-    from .eventfest_template import get_or_create_invite
+    from .microsite_invites import get_or_create_invite
 
     template_type = (campaign.generation_config or {}).get("template_type")
     if not template_type:

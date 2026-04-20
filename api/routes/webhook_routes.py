@@ -30,6 +30,10 @@ SUPPORTED_EVENTS = {
     "email.clicked",
     "email.bounced",
     "email.complained",
+    # Phase 2 (LEADGEN-01 6th state): user clicked the List-Unsubscribe
+    # one-click button or hit the mailto unsubscribe link. Resend reports
+    # the unsubscribed_at timestamp through this event.
+    "email.unsubscribed",
 }
 
 
@@ -159,6 +163,10 @@ def resend_webhook():
         elif event_type == "email.complained":
             log.complained_at = now
             log.status = "complained"
+
+        elif event_type == "email.unsubscribed":
+            log.unsubscribed_at = now
+            log.status = "unsubscribed"
 
         db.session.commit()
         logger.info(

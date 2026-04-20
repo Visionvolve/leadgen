@@ -2811,7 +2811,10 @@ def campaign_analytics(campaign_id):
         if last_send_at is None or li_send_times[1] > last_send_at:
             last_send_at = li_send_times[1]
 
-    # ── Engagement tracking (opens, replies, bounces, clicks) ──
+    # ── Engagement tracking (opens, replies, bounces, clicks, unsubscribes, deliveries) ──
+    # Phase 2 (LEADGEN-01/03): added `unsubscribed` and `delivered` counts so
+    # the Outreach tab renders all 6 mail-event states. The query reads from
+    # `email_send_log` only — no PostHog calls (LEADGEN-04).
     engagement_row = db.session.execute(
         db.text("""
             SELECT
@@ -2822,7 +2825,9 @@ def campaign_analytics(campaign_id):
                 COALESCE(SUM(esl.open_count), 0) AS total_opens,
                 COALESCE(SUM(esl.click_count), 0) AS total_clicks,
                 COUNT(CASE WHEN esl.bounce_type = 'hard' THEN 1 END) AS hard_bounces,
-                COUNT(CASE WHEN esl.bounce_type = 'soft' THEN 1 END) AS soft_bounces
+                COUNT(CASE WHEN esl.bounce_type = 'soft' THEN 1 END) AS soft_bounces,
+                COUNT(CASE WHEN esl.unsubscribed_at IS NOT NULL THEN 1 END) AS unsubscribed,
+                COUNT(CASE WHEN esl.delivered_at IS NOT NULL THEN 1 END) AS delivered
             FROM email_send_log esl
             JOIN messages m ON esl.message_id = m.id
             JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
@@ -2831,7 +2836,6 @@ def campaign_analytics(campaign_id):
         {"cid": campaign_id, "t": tenant_id},
     ).fetchone()
 
-    emails_delivered = email_counts.get("delivered", 0) + email_counts.get("sent", 0)
     opened_count = int(engagement_row[0]) if engagement_row else 0
     replied_count = int(engagement_row[1]) if engagement_row else 0
     bounced_count = int(engagement_row[2]) if engagement_row else 0
@@ -2840,6 +2844,17 @@ def campaign_analytics(campaign_id):
     total_clicks = int(engagement_row[5]) if engagement_row else 0
     hard_bounces = int(engagement_row[6]) if engagement_row else 0
     soft_bounces = int(engagement_row[7]) if engagement_row else 0
+    unsubscribed_count = int(engagement_row[8]) if engagement_row else 0
+    delivered_count = int(engagement_row[9]) if engagement_row else 0
+
+    # Prefer the explicit delivered_at-based count over the status-bucket
+    # approximation; fall back to status counts only when the column-based
+    # count is zero (covers the "sent but not yet delivered" historical case).
+    emails_delivered = (
+        delivered_count
+        if delivered_count > 0
+        else email_counts.get("delivered", 0) + email_counts.get("sent", 0)
+    )
 
     # ── Microsite engagement ───────────────────────────────
     microsite_row = db.session.execute(
@@ -2879,9 +2894,17 @@ def campaign_analytics(campaign_id):
                     "total": email_total,
                     "queued": email_counts.get("queued", 0),
                     "sent": email_counts.get("sent", 0),
-                    "delivered": email_counts.get("delivered", 0),
+                    # Phase 2: prefer column-based count; falls back to
+                    # status bucket for historical rows lacking
+                    # delivered_at.
+                    "delivered": delivered_count
+                    if delivered_count > 0
+                    else email_counts.get("delivered", 0),
                     "bounced": email_counts.get("bounced", 0),
                     "failed": email_counts.get("failed", 0),
+                    # Phase 2: 6th mail-event state surfaced to the
+                    # Outreach tab.
+                    "unsubscribed": unsubscribed_count,
                 },
                 "linkedin": {
                     "total": li_total,
@@ -2906,6 +2929,10 @@ def campaign_analytics(campaign_id):
                 "replied": replied_count,
                 "bounced": bounced_count,
                 "clicked": clicked_count,
+                # Phase 2: surface unsubscribed engagement at the same
+                # tier as opens/clicks/bounces.
+                "unsubscribed": unsubscribed_count,
+                "delivered": delivered_count,
                 "total_opens": total_opens,
                 "total_clicks": total_clicks,
                 "hard_bounces": hard_bounces,
@@ -2914,6 +2941,7 @@ def campaign_analytics(campaign_id):
                 "reply_rate": _rate(replied_count, emails_delivered),
                 "bounce_rate": _rate(bounced_count, email_total),
                 "click_rate": _rate(clicked_count, emails_delivered),
+                "unsubscribe_rate": _rate(unsubscribed_count, emails_delivered),
             },
             "timeline": {
                 "created_at": _format_ts(campaign_created_at),
@@ -2930,6 +2958,124 @@ def campaign_analytics(campaign_id):
             },
         }
     )
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/recipients", methods=["GET"])
+@require_role("viewer")
+def campaign_recipients(campaign_id):
+    """Per-recipient timeline for the OutreachTab drill-down (Phase 2).
+
+    Returns one entry per CampaignContact, including any microsite partner
+    token and a chronologically-sorted timeline of:
+
+    - mail-event timestamps from EmailSendLog (sent / delivered / opened /
+      clicked / bounced / unsubscribed)
+    - microsite Activity events linked to the same contact (source =
+      'microsite')
+
+    Tenant-scoped via the existing JWT auth + tenant_id filter on the
+    underlying queries (LEADGEN-04: data sourced from Leadgen DB only,
+    no PostHog).
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Verify campaign exists and belongs to tenant.
+    campaign_exists = db.session.execute(
+        db.text("SELECT 1 FROM campaigns WHERE id = :id AND tenant_id = :t LIMIT 1"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign_exists:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    # Per-recipient roster.
+    rows = db.session.execute(
+        db.text(
+            """
+            SELECT
+                cc.id AS campaign_contact_id,
+                cc.contact_id AS contact_id,
+                cc.microsite_partner_token AS partner_token,
+                ct.email_address AS email,
+                COALESCE(NULLIF(TRIM(COALESCE(ct.first_name,'') || ' ' || COALESCE(ct.last_name,'')), ''), ct.email_address) AS name
+            FROM campaign_contacts cc
+            JOIN contacts ct ON ct.id = cc.contact_id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            ORDER BY ct.email_address
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+
+    recipients: list[dict] = []
+    for r in rows:
+        cc_id = r[0]
+        contact_id = r[1]
+
+        # Mail-event timeline from EmailSendLog (one row → up to 6 events).
+        mail_rows = db.session.execute(
+            db.text(
+                """
+                SELECT
+                    esl.sent_at, esl.delivered_at, esl.opened_at,
+                    esl.clicked_at, esl.bounced_at, esl.unsubscribed_at
+                FROM email_send_log esl
+                JOIN messages m ON m.id = esl.message_id
+                WHERE m.campaign_contact_id = :cc_id
+                  AND esl.tenant_id = :t
+                """
+            ),
+            {"cc_id": cc_id, "t": tenant_id},
+        ).fetchall()
+
+        events: list[dict] = []
+        for er in mail_rows:
+            for label, ts in zip(
+                ("sent", "delivered", "opened", "clicked", "bounced", "unsubscribed"),
+                er,
+            ):
+                if ts is not None:
+                    events.append({"type": label, "ts": _format_ts(ts)})
+
+        # Microsite Activity events for this contact.
+        if contact_id is not None:
+            act_rows = db.session.execute(
+                db.text(
+                    """
+                    SELECT activity_name, occurred_at
+                    FROM activities
+                    WHERE contact_id = :cid AND tenant_id = :t
+                      AND source = 'microsite'
+                    ORDER BY occurred_at ASC
+                    """
+                ),
+                {"cid": contact_id, "t": tenant_id},
+            ).fetchall()
+            for ar in act_rows:
+                events.append(
+                    {
+                        "type": "microsite_activity",
+                        "event": ar[0] or "",
+                        "ts": _format_ts(ar[1]),
+                    }
+                )
+
+        # Chronological sort (None timestamps drop to the end).
+        events.sort(key=lambda e: e.get("ts") or "")
+
+        recipients.append(
+            {
+                "campaign_contact_id": str(cc_id),
+                "contact_id": str(contact_id) if contact_id else None,
+                "email": r[3],
+                "name": r[4],
+                "microsite_partner_token": r[2],
+                "timeline": events,
+            }
+        )
+
+    return jsonify({"recipients": recipients})
 
 
 def _sanitize_csv_cell(value):
