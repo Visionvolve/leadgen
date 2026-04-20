@@ -592,7 +592,19 @@ def _build_template_variables(
     from .czech_vocative import to_vocative
     from .microsite_invites import get_or_create_invite
 
-    template_type = (campaign.generation_config or {}).get("template_type")
+    # generation_config is JSONB in prod (dict) but may come back as str on
+    # SQLite-in-tests — coerce defensively so the template pipeline works
+    # identically in both environments.
+    gen_cfg = campaign.generation_config
+    if isinstance(gen_cfg, str):
+        import json as _json
+
+        try:
+            gen_cfg = _json.loads(gen_cfg)
+        except (ValueError, TypeError):
+            gen_cfg = {}
+    gen_cfg = gen_cfg or {}
+    template_type = gen_cfg.get("template_type")
     if not template_type:
         return {}
 
@@ -632,6 +644,8 @@ def _build_template_variables(
     if template_type == "eventfest":
         import os
 
+        from .eventfest_campaign import _extract_token
+
         microsite_url = os.environ.get("UA_MICROSITE_URL", "")
         api_key = os.environ.get("UA_INVITE_API_KEY", "")
         if microsite_url and api_key and contact.email_address:
@@ -643,7 +657,24 @@ def _build_template_variables(
                     microsite_url=microsite_url,
                     api_key=api_key,
                 )
-                variables["microsite_link"] = invite_url
+                variables["microsite_link"] = invite_url or ""
+
+                # Phase 4 Fix B: persist the partner token on the
+                # campaign_contact row if missing, so the tracking ingest
+                # path can resolve events back to this (campaign, contact)
+                # pair. The send loop calls db.session.commit() after each
+                # send, so just staging the change here is sufficient.
+                if invite_url and not getattr(
+                    campaign_contact, "microsite_partner_token", None
+                ):
+                    token = _extract_token(invite_url)
+                    if token:
+                        campaign_contact.microsite_partner_token = token
+                        # Also surface it through the per-recipient variable
+                        # now that we have it, rather than waiting for the
+                        # NEXT send to pick it up from the DB.
+                        variables["recipient_token"] = token
+                        db.session.add(campaign_contact)
             except Exception:
                 logger.warning(
                     "Failed to get invite for %s, using fallback",
