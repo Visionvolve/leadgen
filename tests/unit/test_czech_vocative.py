@@ -13,7 +13,8 @@ class TestCzechVocativeLookup:
         "nominative,expected",
         [
             ("Jana", "Jano"),
-            ("Hana", "Hanko"),
+            ("Hana", "Hano"),
+            ("Hanka", "Hanko"),
             ("Eva", "Evo"),
             ("Kateřina", "Kateřino"),
             ("Marie", "Marie"),
