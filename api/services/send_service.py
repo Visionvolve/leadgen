@@ -619,9 +619,7 @@ def _build_template_variables(
     # Empty string when the campaign_contact has no token yet (e.g. UA
     # microsite was unreachable during provisioning); template degrades
     # to broken links but the send still goes out.
-    recipient_token = (
-        getattr(campaign_contact, "microsite_partner_token", "") or ""
-    )
+    recipient_token = getattr(campaign_contact, "microsite_partner_token", "") or ""
 
     variables: dict[str, str] = {
         "vocative_name": vocative_form,
@@ -636,7 +634,7 @@ def _build_template_variables(
     if template_type == "eventfest":
         from .eventfest_template import tone_variables
 
-        tone = (getattr(contact, "address_style", None) or "vykat")
+        tone = getattr(contact, "address_style", None) or "vykat"
         variables.update(tone_variables(tone))
 
     # Microsite invite link — cached in campaign_contact metadata-like field

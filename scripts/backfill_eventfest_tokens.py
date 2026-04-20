@@ -16,6 +16,7 @@ Failure details (email + reason) are also written to
     /tmp/backfill_eventfest_tokens_failures.json
 for lead review.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,9 +47,7 @@ def main() -> int:
         return 1
 
     with app.app_context():
-        campaign = (
-            db.session.query(Campaign).filter_by(name=EVENTFEST_NAME).first()
-        )
+        campaign = db.session.query(Campaign).filter_by(name=EVENTFEST_NAME).first()
         if campaign is None:
             print(f"ERROR: no campaign named {EVENTFEST_NAME!r} found")
             return 1

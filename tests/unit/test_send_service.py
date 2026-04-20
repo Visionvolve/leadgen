@@ -1143,9 +1143,7 @@ class TestBuildTemplateVariablesPartnerTokenPersistence:
         db.session.refresh(cc)
         assert cc.microsite_partner_token == "tok_fix_b_xyz"
 
-    def test_preserves_existing_token(
-        self, db, seed_tenant, monkeypatch
-    ):
+    def test_preserves_existing_token(self, db, seed_tenant, monkeypatch):
         """When a token is already set, do not overwrite — the provisioning
         flow owns the initial value."""
         from api.models import Campaign, CampaignContact, Contact
