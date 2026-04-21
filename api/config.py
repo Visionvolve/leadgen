@@ -49,6 +49,19 @@ class Config:
     )
     UA_INVITE_API_KEY = os.environ.get("UA_INVITE_API_KEY", "")
 
+    # PostHog — campaign analytics microsite metrics (BL-1035)
+    # Region = US (account was created US-side). Override POSTHOG_HOST if
+    # pointing at an EU project. All keys are optional here: when unset the
+    # integration raises a clear RuntimeError only at call time, so dev
+    # without PostHog still boots cleanly.
+    POSTHOG_HOST = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
+    POSTHOG_PROJECT_ID = os.environ.get("POSTHOG_PROJECT_ID", "")
+    # Public key — ships to the browser via posthog-js in ua-microsite. Safe
+    # exposure, but still belongs in env/1P, not in git.
+    POSTHOG_PROJECT_API_KEY = os.environ.get("POSTHOG_PROJECT_API_KEY", "")
+    # Secret key — backend Query API only. NEVER expose to frontend. NEVER log.
+    POSTHOG_PERSONAL_API_KEY = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
+
     # SQLAlchemy connection pool — sized for parallel enrichment workers
     # Only set pool options for PostgreSQL; SQLite uses StaticPool (no pool_size)
     _db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/leadgen")

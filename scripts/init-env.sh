@@ -100,10 +100,51 @@ if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ] && command -v op >/dev/null 2>&1; then
     2>/dev/null || true)"
 fi
 
+# PostHog — try VPS .env first, then fall back to 1Password (BL-1035)
+POSTHOG_HOST_VAL="$(get_var POSTHOG_HOST)"
+POSTHOG_PROJECT_ID_VAL="$(get_var POSTHOG_PROJECT_ID)"
+POSTHOG_PROJECT_API_KEY_VAL="$(get_var POSTHOG_PROJECT_API_KEY)"
+POSTHOG_PERSONAL_API_KEY_VAL="$(get_var POSTHOG_PERSONAL_API_KEY)"
+
+# ---------------------------------------------------------------------------
+# 1Password fallback for PostHog (uses `op` CLI if available + signed in)
+# Note titles use ASCII hyphen `-`, not em-dash — `op read` rejects em-dash.
+# ---------------------------------------------------------------------------
+op_read() {
+  local ref="$1"
+  if command -v op >/dev/null 2>&1; then
+    op read "$ref" 2>/dev/null || true
+  fi
+}
+
+if [ -z "$POSTHOG_HOST_VAL" ]; then
+  POSTHOG_HOST_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_HOST')"
+  POSTHOG_HOST_VAL="${POSTHOG_HOST_VAL:-https://us.i.posthog.com}"
+fi
+if [ -z "$POSTHOG_PROJECT_ID_VAL" ]; then
+  POSTHOG_PROJECT_ID_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_PROJECT_ID')"
+fi
+if [ -z "$POSTHOG_PROJECT_API_KEY_VAL" ]; then
+  POSTHOG_PROJECT_API_KEY_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_PROJECT_API_KEY')"
+fi
+if [ -z "$POSTHOG_PERSONAL_API_KEY_VAL" ]; then
+  POSTHOG_PERSONAL_API_KEY_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_PERSONAL_API_KEY')"
+fi
+
 # Validate we got at least the critical ones
 if [ -z "$JWT_SECRET" ]; then
   echo "WARNING: LEADGEN_JWT_SECRET not found on VPS .env — using placeholder."
   JWT_SECRET="local-dev-jwt-secret-change-me"
+fi
+
+# PostHog is optional for most dev work — warn but don't fail.
+POSTHOG_STATUS_NOTE=""
+if [ -z "$POSTHOG_PERSONAL_API_KEY_VAL" ]; then
+  POSTHOG_STATUS_NOTE="# PostHog integration disabled — set POSTHOG_PERSONAL_API_KEY manually"
+  POSTHOG_STATUS_NOTE="$POSTHOG_STATUS_NOTE\n# or configure 1Password (op CLI signed in, visionvolve-prod vault)."
+  echo "NOTE: POSTHOG_PERSONAL_API_KEY not available — campaign analytics microsite"
+  echo "      metrics will be disabled locally until you set it manually or sign"
+  echo "      into 1Password (op signin) and re-run this script."
 fi
 
 # ---------------------------------------------------------------------------
@@ -149,6 +190,13 @@ ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 # (e.g. 'local-dev-secret') and sign test payloads with the same value;
 # see tests/unit/test_webhook_routes.py for the signing helper.
 RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET_VAL}
+
+# --- PostHog (BL-1035) ---
+$(printf "%b" "$POSTHOG_STATUS_NOTE")
+POSTHOG_HOST=${POSTHOG_HOST_VAL:-https://us.i.posthog.com}
+POSTHOG_PROJECT_ID=${POSTHOG_PROJECT_ID_VAL}
+POSTHOG_PROJECT_API_KEY=${POSTHOG_PROJECT_API_KEY_VAL}
+POSTHOG_PERSONAL_API_KEY=${POSTHOG_PERSONAL_API_KEY_VAL}
 EOF
 
 # If neither staging VPS nor 1Password had the secret, append a clear
@@ -183,5 +231,9 @@ if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ]; then
 else
   echo "      RESEND_WEBHOOK_SECRET = [set]"
 fi
+echo "      POSTHOG_HOST         = ${POSTHOG_HOST_VAL:-[default]}"
+echo "      POSTHOG_PROJECT_ID   = ${POSTHOG_PROJECT_ID_VAL:+[set]}${POSTHOG_PROJECT_ID_VAL:-[missing]}"
+echo "      POSTHOG_PROJECT_API_KEY = ${POSTHOG_PROJECT_API_KEY_VAL:+[set]}${POSTHOG_PROJECT_API_KEY_VAL:-[missing]}"
+echo "      POSTHOG_PERSONAL_API_KEY = ${POSTHOG_PERSONAL_API_KEY_VAL:+[set]}${POSTHOG_PERSONAL_API_KEY_VAL:-[missing]}"
 echo ""
 echo "    Start local dev with: make dev"
