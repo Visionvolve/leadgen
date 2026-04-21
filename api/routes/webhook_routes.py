@@ -83,6 +83,32 @@ def _verify_svix_signature(payload_bytes: bytes, headers: dict) -> bool:
     return False
 
 
+def _parse_event_timestamp(body: dict) -> datetime:
+    """Extract the event timestamp from the webhook payload.
+
+    Resend places the authoritative event time at the top level as
+    ``created_at`` (ISO-8601). Using that — rather than ``datetime.now()``
+    at webhook-processing time — keeps the row's timestamp aligned with
+    when the open/click actually happened, even if Resend retried
+    delivery hours later. Falls back to the current UTC wall clock when
+    ``created_at`` is missing or unparseable (tests, non-compliant
+    proxies, etc.).
+    """
+    raw = body.get("created_at")
+    if isinstance(raw, str) and raw:
+        try:
+            # ``datetime.fromisoformat`` in Py 3.11+ accepts the trailing
+            # ``Z``. For older runtimes translate it to ``+00:00``.
+            normalised = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+            parsed = datetime.fromisoformat(normalised)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except ValueError:
+            logger.warning("Resend webhook: unparseable created_at %r", raw)
+    return datetime.now(timezone.utc)
+
+
 @webhooks_bp.route("/resend", methods=["POST"])
 def resend_webhook():
     """Handle Resend webhook events for email tracking.
@@ -90,6 +116,7 @@ def resend_webhook():
     Resend sends POST requests with JSON body:
     {
         "type": "email.opened",
+        "created_at": "2026-02-22T23:41:12.126Z",
         "data": {
             "email_id": "resend-message-id",
             "to": ["recipient@example.com"],
@@ -97,7 +124,13 @@ def resend_webhook():
         }
     }
 
-    Always returns 200 to prevent Resend from retrying.
+    All timestamp columns follow **earliest-observed** semantics: once
+    set they are never overwritten by a later webhook delivery. Repeat
+    deliveries from Resend's retry queue are therefore idempotent — they
+    only bump ``open_count`` / ``click_count``.
+
+    Always returns 200 to prevent Resend from retrying (except for
+    signature failures which return 400 so Resend flags the endpoint).
     """
     payload_bytes = request.get_data()
 
@@ -122,58 +155,77 @@ def resend_webhook():
         logger.warning("Resend webhook %s: missing email_id in data", event_type)
         return jsonify({"status": "ignored", "reason": "no email_id"}), 200
 
-    # Look up the send log by resend_message_id
+    # Look up the send log by resend_message_id. Order by sent_at so that
+    # when a pathological collision exists across tenants (data-migration
+    # error) we deterministically pick the ORIGINAL sender rather than a
+    # non-deterministic row — keeps multi-tenant isolation safe by
+    # default.
     log = (
         db.session.query(EmailSendLog)
         .filter(EmailSendLog.resend_message_id == email_id)
+        .order_by(EmailSendLog.sent_at.asc().nullslast())
         .first()
     )
 
     if not log:
-        logger.info(
+        # Log at WARNING (not INFO) so production log dashboards surface
+        # this — a flood of "unknown email_id" is the usual fingerprint
+        # of a mis-match between what we store in ``resend_message_id``
+        # and what Resend sends in webhook payloads.
+        logger.warning(
             "Resend webhook %s: no EmailSendLog for email_id=%s",
             event_type,
             email_id,
         )
         return jsonify({"status": "ignored", "reason": "unknown email_id"}), 200
 
-    now = datetime.now(timezone.utc)
+    event_time = _parse_event_timestamp(body)
 
     try:
         if event_type == "email.delivered":
-            log.delivered_at = now
-            log.status = "delivered"
+            if not log.delivered_at:
+                log.delivered_at = event_time
+            # ``status`` tracks the latest transition — delivered is not
+            # a terminal state, so allow it to advance from "sent" only.
+            if log.status in (None, "queued", "sent"):
+                log.status = "delivered"
 
         elif event_type == "email.opened":
             if not log.opened_at:
-                log.opened_at = now
+                log.opened_at = event_time
             log.open_count = (log.open_count or 0) + 1
 
         elif event_type == "email.clicked":
             if not log.clicked_at:
-                log.clicked_at = now
+                log.clicked_at = event_time
             log.click_count = (log.click_count or 0) + 1
 
         elif event_type == "email.bounced":
-            log.bounced_at = now
-            bounce_data = data.get("bounce", {})
-            log.bounce_type = bounce_data.get("type", "unknown")
+            if not log.bounced_at:
+                log.bounced_at = event_time
+                bounce_data = data.get("bounce", {}) or {}
+                # Preserve first-observed bounce_type too — a subsequent
+                # "soft" retry must not downgrade an earlier "hard".
+                log.bounce_type = bounce_data.get("type", "unknown")
             log.status = "bounced"
 
         elif event_type == "email.complained":
-            log.complained_at = now
+            if not log.complained_at:
+                log.complained_at = event_time
             log.status = "complained"
 
         elif event_type == "email.unsubscribed":
-            log.unsubscribed_at = now
+            if not log.unsubscribed_at:
+                log.unsubscribed_at = event_time
             log.status = "unsubscribed"
 
         db.session.commit()
         logger.info(
-            "Resend webhook %s processed for email_id=%s (log=%s)",
+            "Resend webhook %s processed for email_id=%s (log=%s, tenant=%s)",
             event_type,
             email_id,
             log.id,
+            log.tenant_id,
         )
 
     except Exception:
