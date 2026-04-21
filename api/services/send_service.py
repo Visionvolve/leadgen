@@ -624,6 +624,7 @@ def _build_template_variables(
     Returns an empty dict when no template variables are applicable
     (i.e. the campaign does not use a template_type).
     """
+    from .campaign_attribution import add_campaign_attribution
     from .czech_vocative import to_vocative
     from .microsite_invites import get_or_create_invite
 
@@ -646,6 +647,8 @@ def _build_template_variables(
 
         microsite_url = os.environ.get("UA_MICROSITE_URL", "")
         api_key = os.environ.get("UA_INVITE_API_KEY", "")
+        # Raw invite/fallback URL before campaign attribution is applied.
+        raw_link = ""
         if microsite_url and api_key and contact.email_address:
             full_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
             try:
@@ -655,17 +658,29 @@ def _build_template_variables(
                     microsite_url=microsite_url,
                     api_key=api_key,
                 )
-                variables["microsite_link"] = invite_url
+                raw_link = invite_url or microsite_url
             except Exception:
                 logger.warning(
                     "Failed to get invite for %s, using fallback",
                     contact.email_address,
                 )
-                variables["microsite_link"] = microsite_url
+                raw_link = microsite_url
         elif microsite_url:
-            variables["microsite_link"] = microsite_url
-        else:
-            variables["microsite_link"] = ""
+            raw_link = microsite_url
+
+        # BL-1036: tag every microsite link with campaign attribution so
+        # PostHog events can be filtered by `properties.campaign_id` +
+        # `properties.recipient_id`. Using campaign_contact.id as the
+        # recipient ID because it is durable across re-sends and
+        # tenant-scoped. Non-microsite URLs are returned unchanged.
+        variables["microsite_link"] = add_campaign_attribution(
+            raw_link,
+            campaign_id=str(campaign.id) if campaign and campaign.id else None,
+            recipient_id=str(campaign_contact.id)
+            if campaign_contact and campaign_contact.id
+            else None,
+            microsite_base_url=microsite_url or None,
+        )
 
     return variables
 
