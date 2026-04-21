@@ -1,0 +1,100 @@
+# Deploy configuration for the /deploy skill.
+# Schema: ~/.claude/local-marketplace/plugins/vps-infrastructure/skills/deploy/SKILL.md
+#
+# The skill reads one target by default. Invoke explicitly with --staging
+# or --prod to switch. Production uses direct deploy scripts; staging uses
+# GitHub Actions (push to `staging` branch triggers `deploy-staging.yml`).
+
+project: leadgen-pipeline
+
+# Default target when no flag is passed. Staging is safest.
+target: staging
+
+# ---------------------------------------------------------------------------
+# Staging target (default)
+# Push to the `staging` branch triggers `.github/workflows/deploy-staging.yml`
+# which builds the image, pushes to GHCR, and restarts the leadgen-api
+# container on the staging VPS (3.124.110.199).
+# ---------------------------------------------------------------------------
+type: cicd
+workflow: deploy-staging.yml
+branch: staging
+
+containers:
+  - name: leadgen-api
+    compose_overlay: docker-compose.leadgen.yml
+  - name: dashboard-web
+    compose_overlay: docker-compose.leadgen.yml
+
+health_urls:
+  - url: https://leadgen-staging.visionvolve.com/api/health
+    expect: 200
+    follow_redirects: true
+  - url: https://leadgen-staging.visionvolve.com/
+    expect: 200
+    follow_redirects: true
+
+domain: leadgen-staging.visionvolve.com
+
+rollback:
+  strategy: restart
+
+# ---------------------------------------------------------------------------
+# Production overlay (activated with `/deploy --prod`)
+# Production deploys run from the `main` branch via direct deploy scripts.
+# The /deploy skill selects this block when --prod is passed.
+# ---------------------------------------------------------------------------
+targets:
+  prod:
+    type: direct
+    branch: main
+    deploy_script: deploy/deploy-api.sh
+    extra_scripts:
+      - deploy/deploy-dashboard.sh
+    containers:
+      - name: leadgen-api
+        compose_overlay: docker-compose.api.yml
+    health_urls:
+      - url: https://leadgen.visionvolve.com/api/health
+        expect: 200
+        follow_redirects: true
+    domain: leadgen.visionvolve.com
+    rollback:
+      strategy: restart
+    require_approval: true
+    notes: |
+      Production deploys require human approval. Never deploy from a feature
+      branch. The deploy-api.sh and deploy-dashboard.sh scripts themselves
+      refuse non-main branches.
+  staging:
+    type: cicd
+    workflow: deploy-staging.yml
+    branch: staging
+    containers:
+      - name: leadgen-api
+        compose_overlay: docker-compose.leadgen.yml
+      - name: dashboard-web
+        compose_overlay: docker-compose.leadgen.yml
+    health_urls:
+      - url: https://leadgen-staging.visionvolve.com/api/health
+        expect: 200
+        follow_redirects: true
+      - url: https://leadgen-staging.visionvolve.com/
+        expect: 200
+        follow_redirects: true
+    domain: leadgen-staging.visionvolve.com
+    rollback:
+      strategy: restart
+
+# ---------------------------------------------------------------------------
+# Notes
+# ---------------------------------------------------------------------------
+# - For feature branches, use `deploy/deploy-revision.sh` (staging revision)
+#   instead of invoking this config directly. Feature branches are BLOCKED
+#   from deploying to the staging root.
+# - Caddy config is managed by the visionvolve-vps infra repo. Do NOT deploy
+#   Caddy snippets from this repo.
+# - Staging VPS: 3.124.110.199 (SSH blocked by default; use
+#   `claude --staging-access` to enable).
+# - Production VPS: 52.58.119.191 (SSH blocked by default; use
+#   `claude --prod-access` to enable).
