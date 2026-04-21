@@ -94,7 +94,7 @@ RESEND_WEBHOOK_SECRET_VAL="$(get_var RESEND_WEBHOOK_SECRET)"
 # or the item does not exist.
 if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ] && command -v op >/dev/null 2>&1; then
   RESEND_WEBHOOK_SECRET_VAL="$(op read \
-    'op://visionvolve-prod/Resend Webhook (leadgen-pipeline)/RESEND_WEBHOOK_SECRET' \
+    'op://visionvolve-prod/Resend - leadgen-pipeline/RESEND_WEBHOOK_SECRET' \
     2>/dev/null || true)"
 fi
 # Final fallback: dev-bypass token. Only works when FLASK_ENV=development,
