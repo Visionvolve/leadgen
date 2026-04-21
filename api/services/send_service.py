@@ -541,7 +541,7 @@ def _send_single_email(
     import resend
 
     params = {
-        "from_": sender,
+        "from": sender,
         "to": [to_email],
         "subject": subject,
         "html": body_html,

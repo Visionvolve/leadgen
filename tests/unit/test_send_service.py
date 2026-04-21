@@ -609,6 +609,40 @@ class TestUnsubscribeHeader:
                 == "List-Unsubscribe=One-Click"
             )
 
+    def test_send_single_email_uses_from_key_not_from_underscore(self, app):
+        """Regression: Resend SDK v2.22 expects 'from' key, not 'from_'.
+
+        Wave C's test send to 2 recipients failed ALL sends until monkey-
+        patched in-process because params used 'from_' as the dict key.
+        This test locks in the correct key so tomorrow's 357-recipient
+        EventFest send will not regress.
+        """
+        import unittest.mock as mock
+
+        with mock.patch("resend.Emails.send") as mock_send:
+            mock_send.return_value = type("R", (), {"id": "re_789"})()
+
+            from api.services.send_service import _send_single_email
+
+            _send_single_email(
+                to_email="recipient@example.com",
+                sender="Test <test@acme.com>",
+                reply_to=None,
+                subject="Test",
+                body_html="<p>Hello</p>",
+                sender_domain="acme.com",
+            )
+
+            call_args = mock_send.call_args[0][0]
+            assert "from" in call_args, (
+                "Resend SDK expects 'from' key in params dict"
+            )
+            assert "from_" not in call_args, (
+                "'from_' key must not be present — SDK rejects it with "
+                "ValueError('Missing from field')"
+            )
+            assert call_args["from"] == "Test <test@acme.com>"
+
 
 class TestPreSendValidation:
     """Tests for pre-send email validation."""
