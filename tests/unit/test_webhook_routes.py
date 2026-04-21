@@ -1,4 +1,4 @@
-"""Unit tests for Resend webhook handler (BL-315).
+"""Unit tests for Resend webhook handler (BL-315 + BL-1034).
 
 Covers:
 - Each event type updates the correct EmailSendLog fields
@@ -6,14 +6,45 @@ Covers:
 - Unknown event types return 200
 - Missing EmailSendLog returns 200 (don't break on unknown email_id)
 - Empty/invalid body returns 200
-- Svix signature verification (when secret configured)
+- Svix signature verification is fail-closed (BL-1034):
+  - Missing RESEND_WEBHOOK_SECRET → 401
+  - Invalid signature → 401
+  - Valid signature → 200
+  - Dev-bypass (FLASK_ENV=development + secret=dev-bypass) → 200
+
+Tests that exercise event-handling logic (not signature verification)
+run with the dev-bypass active via ``_dev_bypass_env`` so the handler
+accepts unsigned payloads. This matches how the local dev server is
+configured in ``scripts/init-env.sh``.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Shared environment patches
+# ---------------------------------------------------------------------------
+# Tests that focus on handler logic (not signature verification) run with
+# the dev-bypass active. This keeps the existing tests green under the new
+# fail-closed default without inventing a valid signature for each test.
+_DEV_BYPASS_ENV = {
+    "FLASK_ENV": "development",
+    "RESEND_WEBHOOK_SECRET": "dev-bypass",
+}
+
+
+@pytest.fixture
+def dev_bypass_env(monkeypatch):
+    """Activate the documented dev-only svix verification bypass."""
+    for key, value in _DEV_BYPASS_ENV.items():
+        monkeypatch.setenv(key, value)
+    yield
 
 
 @pytest.fixture
@@ -104,7 +135,19 @@ def _webhook_payload(event_type, email_id="resend-test-id-001", extra_data=None)
 
 
 class TestResendWebhook:
-    """Tests for POST /api/webhooks/resend."""
+    """Tests for POST /api/webhooks/resend.
+
+    BL-1034: the webhook is now fail-closed on svix signature
+    verification. Tests in this class focus on event-handling logic
+    rather than signature verification and therefore run with the
+    documented dev-only bypass active. Signature-specific behaviour is
+    covered in ``TestResendWebhookSignature`` below.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _auto_dev_bypass(self, dev_bypass_env):
+        """Activate the dev-bypass for every test in this class."""
+        yield
 
     def test_delivered_event(self, client, seed_send_log):
         """email.delivered sets delivered_at and status."""
@@ -299,33 +342,6 @@ class TestResendWebhook:
         )
         assert resp.status_code == 200
 
-    @patch.dict("os.environ", {"RESEND_WEBHOOK_SECRET": "whsec_dGVzdHNlY3JldA=="})
-    def test_invalid_signature_returns_400(self, client, seed_send_log):
-        """Invalid svix signature returns 400 when secret is configured."""
-        payload = _webhook_payload("email.delivered")
-        resp = client.post(
-            "/api/webhooks/resend",
-            data=json.dumps(payload),
-            content_type="application/json",
-            headers={
-                "svix-id": "msg_test",
-                "svix-timestamp": "1234567890",
-                "svix-signature": "v1,invalidsignature",
-            },
-        )
-        assert resp.status_code == 400
-
-    @patch.dict("os.environ", {"RESEND_WEBHOOK_SECRET": ""})
-    def test_no_secret_skips_verification(self, client, seed_send_log):
-        """No webhook secret configured means verification is skipped."""
-        payload = _webhook_payload("email.delivered")
-        resp = client.post(
-            "/api/webhooks/resend",
-            data=json.dumps(payload),
-            content_type="application/json",
-        )
-        assert resp.status_code == 200
-
     def test_bounced_soft(self, client, seed_send_log):
         """Soft bounce sets bounce_type to 'soft'."""
         payload = _webhook_payload(
@@ -343,3 +359,168 @@ class TestResendWebhook:
 
         log = db.session.get(EmailSendLog, seed_send_log["log"].id)
         assert log.bounce_type == "soft"
+
+
+# ---------------------------------------------------------------------------
+# Svix signature verification (BL-1034 — fail-closed)
+# ---------------------------------------------------------------------------
+# The svix HMAC secret is "testsecret" base64-encoded, matching the value
+# used by the existing ``whsec_dGVzdHNlY3JldA==`` fixture for readability.
+_TEST_SECRET_PLAIN = b"testsecret"
+_TEST_SECRET_ENV = "whsec_" + base64.b64encode(_TEST_SECRET_PLAIN).decode()
+
+
+def _sign_svix(
+    payload_bytes: bytes,
+    svix_id: str = "msg_test",
+    svix_timestamp: str = "1234567890",
+    secret_bytes: bytes = _TEST_SECRET_PLAIN,
+) -> dict:
+    """Compute a valid svix v1 signature header set for ``payload_bytes``."""
+    to_sign = f"{svix_id}.{svix_timestamp}.".encode() + payload_bytes
+    digest = hmac.new(secret_bytes, to_sign, hashlib.sha256).digest()
+    sig = base64.b64encode(digest).decode()
+    return {
+        "svix-id": svix_id,
+        "svix-timestamp": svix_timestamp,
+        "svix-signature": f"v1,{sig}",
+    }
+
+
+class TestResendWebhookSignature:
+    """BL-1034 — svix signature verification is fail-closed.
+
+    Covers the four acceptance criteria:
+    - (a) no secret → 401
+    - (b) bad signature → 401
+    - (c) good signature → 200
+    - (d) dev-bypass (FLASK_ENV=development + secret=dev-bypass) → 200
+    """
+
+    def test_missing_secret_returns_401(self, client, seed_send_log, monkeypatch):
+        """No secret configured → fail-closed with 401 and critical log."""
+        # Ensure both envs are fully unset for this test
+        monkeypatch.delenv("RESEND_WEBHOOK_SECRET", raising=False)
+        monkeypatch.delenv("FLASK_ENV", raising=False)
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+        assert resp.get_json() == {"error": "Invalid signature"}
+
+    def test_empty_secret_returns_401(self, client, seed_send_log, monkeypatch):
+        """Secret explicitly set to empty string → still fail-closed."""
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "")
+        monkeypatch.delenv("FLASK_ENV", raising=False)
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+
+    def test_invalid_signature_returns_401(self, client, seed_send_log, monkeypatch):
+        """Secret configured but signature invalid → 401."""
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", _TEST_SECRET_ENV)
+        monkeypatch.delenv("FLASK_ENV", raising=False)
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+            headers={
+                "svix-id": "msg_test",
+                "svix-timestamp": "1234567890",
+                "svix-signature": "v1,invalidsignature",
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_missing_svix_headers_returns_401(self, client, seed_send_log, monkeypatch):
+        """Secret configured but svix-* headers missing → 401."""
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", _TEST_SECRET_ENV)
+        monkeypatch.delenv("FLASK_ENV", raising=False)
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+
+    def test_valid_signature_returns_200(self, client, seed_send_log, monkeypatch):
+        """Secret configured and signature valid → handler accepts (200)."""
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", _TEST_SECRET_ENV)
+        monkeypatch.delenv("FLASK_ENV", raising=False)
+
+        payload = _webhook_payload("email.delivered")
+        body = json.dumps(payload).encode()
+        headers = _sign_svix(body)
+
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=body,
+            content_type="application/json",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+    def test_dev_bypass_accepts_unsigned_payload(
+        self, client, seed_send_log, monkeypatch
+    ):
+        """FLASK_ENV=development + secret=dev-bypass → skip verification."""
+        monkeypatch.setenv("FLASK_ENV", "development")
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "dev-bypass")
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+    def test_dev_bypass_requires_flask_env_development(
+        self, client, seed_send_log, monkeypatch
+    ):
+        """secret=dev-bypass alone (no FLASK_ENV) must NOT skip verification.
+
+        This is defence-in-depth: an operator who accidentally deploys
+        with ``RESEND_WEBHOOK_SECRET=dev-bypass`` in staging or prod
+        gets a 401 rather than silent acceptance.
+        """
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "dev-bypass")
+        monkeypatch.setenv("FLASK_ENV", "staging")
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        # "dev-bypass" is treated as a normal secret here, and with no
+        # svix headers the verification fails.
+        assert resp.status_code == 401
+
+    def test_dev_bypass_token_not_special_in_production(
+        self, client, seed_send_log, monkeypatch
+    ):
+        """FLASK_ENV=production + secret=dev-bypass → still 401."""
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "dev-bypass")
+
+        payload = _webhook_payload("email.delivered")
+        resp = client.post(
+            "/api/webhooks/resend",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 401

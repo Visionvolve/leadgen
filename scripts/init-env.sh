@@ -84,6 +84,24 @@ PERPLEXITY_KEY="$(get_var PERPLEXITY_API_KEY)"
 GOOGLE_CID="$(get_var GOOGLE_CLIENT_ID)"
 GOOGLE_CSECRET="$(get_var GOOGLE_CLIENT_SECRET)"
 OAUTH_ENC_KEY="$(get_var OAUTH_ENCRYPTION_KEY)"
+# BL-1034: Resend webhook svix signing secret. Pulled from staging VPS
+# if set there (same individual-secret architecture as STAGING_RESEND_API_KEY).
+# Falls back to the documented local dev-bypass token so `make dev` works
+# offline without contacting Resend.
+RESEND_WEBHOOK_SECRET_VAL="$(get_var RESEND_WEBHOOK_SECRET)"
+# Try 1Password as a fallback source (read-only — writes are blocked by
+# the service-account token role). Silently skipped if `op` is missing
+# or the item does not exist.
+if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ] && command -v op >/dev/null 2>&1; then
+  RESEND_WEBHOOK_SECRET_VAL="$(op read \
+    'op://visionvolve-prod/Resend Webhook (leadgen-pipeline)/RESEND_WEBHOOK_SECRET' \
+    2>/dev/null || true)"
+fi
+# Final fallback: dev-bypass token. Only works when FLASK_ENV=development,
+# which is set below for local dev. See api/routes/webhook_routes.py.
+if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ]; then
+  RESEND_WEBHOOK_SECRET_VAL="dev-bypass"
+fi
 
 # Validate we got at least the critical ones
 if [ -z "$JWT_SECRET" ]; then
@@ -117,6 +135,10 @@ N8N_BASE_URL=https://n8n.visionvolve.com
 # Flask debug mode
 FLASK_APP=api:create_app
 FLASK_DEBUG=1
+# BL-1034: required for the RESEND_WEBHOOK_SECRET=dev-bypass escape hatch.
+# Without FLASK_ENV=development the dev-bypass token is treated as a
+# normal secret and the webhook fails closed with 401 (desired).
+FLASK_ENV=development
 
 # --- Secrets pulled from staging VPS ($(date +%Y-%m-%d)) ---
 
@@ -127,6 +149,12 @@ GOOGLE_REDIRECT_URI=http://localhost:5001/api/oauth/google/callback
 OAUTH_ENCRYPTION_KEY=${OAUTH_ENC_KEY}
 PERPLEXITY_API_KEY=${PERPLEXITY_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+
+# Resend webhook svix signing secret (BL-1034). "dev-bypass" is the
+# documented local fallback — only the matching FLASK_ENV=development
+# above makes it skip verification. In staging/prod this is overridden
+# with a real svix secret by the infra deploy workflow.
+RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET_VAL}
 EOF
 
 echo ""
@@ -140,5 +168,12 @@ echo "      PERPLEXITY_API_KEY= ${PERPLEXITY_KEY:+[set]}${PERPLEXITY_KEY:-[missi
 echo "      GOOGLE_CLIENT_ID  = ${GOOGLE_CID:+[set]}${GOOGLE_CID:-[missing]}"
 echo "      GOOGLE_CLIENT_SECRET = ${GOOGLE_CSECRET:+[set]}${GOOGLE_CSECRET:-[missing]}"
 echo "      OAUTH_ENCRYPTION_KEY = ${OAUTH_ENC_KEY:+[set]}${OAUTH_ENC_KEY:-[missing]}"
+# RESEND_WEBHOOK_SECRET is logged as a mode indicator only — never echo
+# the real value. "dev-bypass" means local curl testing is enabled.
+if [ "$RESEND_WEBHOOK_SECRET_VAL" = "dev-bypass" ]; then
+  echo "      RESEND_WEBHOOK_SECRET = [dev-bypass] (local curl testing — FLASK_ENV=development)"
+else
+  echo "      RESEND_WEBHOOK_SECRET = [set] (real svix secret)"
+fi
 echo ""
 echo "    Start local dev with: make dev"

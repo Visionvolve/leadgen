@@ -3,8 +3,20 @@
 Handles Resend webhook events for email delivery, opens, clicks,
 bounces, and complaints. Updates EmailSendLog records accordingly.
 
-No authentication required — webhooks come from Resend, not users.
-Optional svix signature verification when RESEND_WEBHOOK_SECRET is configured.
+No user authentication required — webhooks come from Resend, not users.
+Svix signature verification is MANDATORY (fail-closed): if
+``RESEND_WEBHOOK_SECRET`` is missing or the signature does not match,
+the request is rejected with HTTP 401.
+
+Dev-only bypass
+---------------
+When ``FLASK_ENV=development`` AND ``RESEND_WEBHOOK_SECRET=dev-bypass``
+(the literal string), signature verification is skipped. This is the
+only escape hatch and exists so local ``curl`` tests against the
+running Flask dev server work without computing svix signatures. It is
+inert in staging/production because ``FLASK_ENV`` is never
+``development`` there, and the secret value is not the literal
+``dev-bypass`` token.
 """
 
 from __future__ import annotations
@@ -23,6 +35,24 @@ logger = logging.getLogger(__name__)
 
 webhooks_bp = Blueprint("webhooks", __name__, url_prefix="/api/webhooks")
 
+# Literal token used with FLASK_ENV=development to skip svix verification
+# for local curl testing. Any other value (including an empty string)
+# triggers the normal fail-closed path. This token is intentionally
+# useless in any environment where FLASK_ENV != "development".
+_DEV_BYPASS_TOKEN = "dev-bypass"  # nosec B105 — not a real credential
+
+
+def _is_dev_bypass(secret: str) -> bool:
+    """Return True if dev-only bypass is active.
+
+    Dev bypass requires BOTH:
+    - ``FLASK_ENV == "development"``
+    - ``RESEND_WEBHOOK_SECRET == "dev-bypass"`` (literal)
+    """
+    flask_env = os.environ.get("FLASK_ENV", "").lower()
+    return flask_env == "development" and secret == _DEV_BYPASS_TOKEN
+
+
 # Event type → handler mapping
 SUPPORTED_EVENTS = {
     "email.delivered",
@@ -37,19 +67,66 @@ SUPPORTED_EVENTS = {
 }
 
 
-def _verify_svix_signature(payload_bytes: bytes, headers: dict) -> bool:
+def _get_header(headers, name: str) -> str:
+    """Case-insensitive header lookup.
+
+    Werkzeug's ``EnvironHeaders`` is case-insensitive, but ``dict(headers)``
+    normalizes keys to title case (``Svix-Id``), which breaks
+    ``dict(...).get("svix-id")``. Accept both forms.
+    """
+    # Direct lookup works on EnvironHeaders; fall back to manual scan
+    try:
+        value = headers.get(name)
+        if value:
+            return value
+    except AttributeError:
+        pass
+
+    needle = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == needle:
+            return value or ""
+    return ""
+
+
+def _verify_svix_signature(payload_bytes: bytes, headers) -> bool:
     """Verify Resend webhook signature using svix HMAC.
 
-    Returns True if signature is valid or if no secret is configured (skip).
-    Returns False if secret is configured but signature is invalid.
+    Fail-closed:
+    - Missing or empty ``RESEND_WEBHOOK_SECRET`` → returns False, logs critical.
+    - Missing svix headers → returns False, logs warning.
+    - Bad signature → returns False, logs warning.
+
+    Dev-only bypass: if ``FLASK_ENV=development`` and the secret is the
+    literal token ``dev-bypass``, verification is skipped (returns True).
     """
     secret = os.environ.get("RESEND_WEBHOOK_SECRET", "")
-    if not secret:
-        return True  # No secret configured — skip verification
 
-    svix_id = headers.get("svix-id", "")
-    svix_timestamp = headers.get("svix-timestamp", "")
-    svix_signature = headers.get("svix-signature", "")
+    # Dev-only escape hatch for local curl testing. Intentionally inert
+    # in any environment where FLASK_ENV != "development".
+    if _is_dev_bypass(secret):
+        logger.warning(
+            "Resend webhook: dev-bypass active (FLASK_ENV=development, "
+            "RESEND_WEBHOOK_SECRET=dev-bypass). Signature verification "
+            "SKIPPED. This must NEVER happen in staging/production."
+        )
+        return True
+
+    if not secret:
+        # Fail-closed: unconfigured secret means we cannot trust any
+        # inbound payload. Previously this returned True (fail-open),
+        # which allowed arbitrary forged events to update metrics.
+        logger.critical(
+            "Resend webhook: RESEND_WEBHOOK_SECRET is not configured. "
+            "Rejecting request with 401. Configure the secret in the "
+            "deployment environment or set FLASK_ENV=development + "
+            "RESEND_WEBHOOK_SECRET=dev-bypass for local testing."
+        )
+        return False
+
+    svix_id = _get_header(headers, "svix-id")
+    svix_timestamp = _get_header(headers, "svix-timestamp")
+    svix_signature = _get_header(headers, "svix-signature")
 
     if not svix_id or not svix_timestamp or not svix_signature:
         logger.warning("Missing svix headers for webhook verification")
@@ -124,19 +201,26 @@ def resend_webhook():
         }
     }
 
+    Signature verification is **fail-closed**: requests without a valid
+    svix signature (missing header, bad signature, or unconfigured secret)
+    return 401 so Resend flags the endpoint rather than silently dropping
+    events.
+
     All timestamp columns follow **earliest-observed** semantics: once
     set they are never overwritten by a later webhook delivery. Repeat
     deliveries from Resend's retry queue are therefore idempotent — they
     only bump ``open_count`` / ``click_count``.
 
-    Always returns 200 to prevent Resend from retrying (except for
-    signature failures which return 400 so Resend flags the endpoint).
+    Beyond the 401 signature path, the endpoint always returns 200 to
+    prevent Resend from retrying for business-logic reasons (unknown
+    email_id, unknown event, etc.).
     """
     payload_bytes = request.get_data()
 
-    # Optional signature verification
-    if not _verify_svix_signature(payload_bytes, dict(request.headers)):
-        return jsonify({"error": "Invalid signature"}), 400
+    # Mandatory signature verification (fail-closed). See
+    # ``_verify_svix_signature`` for the dev-only bypass.
+    if not _verify_svix_signature(payload_bytes, request.headers):
+        return jsonify({"error": "Invalid signature"}), 401
 
     body = request.get_json(silent=True)
     if not body:
