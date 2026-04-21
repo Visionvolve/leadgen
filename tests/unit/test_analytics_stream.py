@@ -206,6 +206,52 @@ class TestComputeAnalyticsDelta:
         # Messages total also reported
         assert delta["messages"]["total"]["change"] == 1
 
+    def test_delta_resolves_dotted_parent_path(self):
+        """``sending.email`` in _STREAM_DELTA_KEYS is a path (traversed),
+        NOT a flat dict key. A change in ``snapshot["sending"]["email"]``
+        must surface under ``delta["sending"]["email"][...]``.
+
+        Regression guard for code review Nit #5: if the resolver treated
+        ``"sending.email"`` as a flat key, the lookup would always miss
+        and sending-channel deltas would silently drop.
+        """
+        prev = {
+            "sending": {
+                "email": {"sent": 1, "delivered": 1, "bounced": 0},
+                "linkedin": {"sent": 0},
+            },
+            "engagement": {"opened": 0},
+            "messages": {"total": 1},
+            "microsite": {"visits": 0},
+        }
+        curr = {
+            "sending": {
+                "email": {"sent": 3, "delivered": 2, "bounced": 1},
+                "linkedin": {"sent": 0},
+            },
+            "engagement": {"opened": 0},
+            "messages": {"total": 1},
+            "microsite": {"visits": 0},
+        }
+
+        delta = _compute_analytics_delta(prev, curr)
+
+        # Dotted parent produces nested output under "sending" → "email"
+        assert "sending" in delta, (
+            "dotted parent 'sending.email' must produce a 'sending' key in delta"
+        )
+        assert "email" in delta["sending"], (
+            "changed sending-channel counters must surface under sending.email"
+        )
+        assert delta["sending"]["email"]["sent"]["value"] == 3
+        assert delta["sending"]["email"]["sent"]["change"] == 2
+        assert delta["sending"]["email"]["delivered"]["change"] == 1
+        assert delta["sending"]["email"]["bounced"]["change"] == 1
+        # Unchanged keys must NOT appear
+        assert "engagement" not in delta
+        assert "messages" not in delta
+        assert "microsite" not in delta
+
 
 class TestAnalyticsStreamGenerator:
     """_analytics_stream_gen yields SSE-formatted chunks."""
@@ -344,6 +390,98 @@ class TestAnalyticsStreamGenerator:
         _ = next(gen)  # prime
         # Simulate client disconnect
         gen.close()  # must not raise
+
+    def test_transient_db_error_does_not_kill_stream(
+        self, client, seed_companies_contacts, db, monkeypatch
+    ):
+        """A transient ``OperationalError`` during a poll must be skipped,
+        not propagated. The next successful poll must still emit a delta.
+
+        Guards against RDS failover / connection-drop scenarios killing
+        every open SSE stream on the fleet.
+        """
+        from datetime import datetime
+
+        from sqlalchemy.exc import OperationalError
+
+        from api.routes import campaign_routes
+
+        tenant = seed_companies_contacts["tenant"]
+        campaign = _make_campaign(db, tenant.id)
+        ct = _make_contact(db, tenant.id, "Alice")
+        cc = _make_campaign_contact(db, campaign.id, ct.id, tenant.id)
+        msg = _make_message(db, tenant.id, ct.id, cc.id)
+        db.session.commit()
+
+        campaign_id_val = campaign.id
+        tenant_id_val = tenant.id
+        msg_id_val = msg.id
+
+        clock = _FakeClock()
+        monkeypatch.setattr("api.routes.campaign_routes.time.time", clock)
+        monkeypatch.setattr(
+            "api.routes.campaign_routes.time.sleep",
+            lambda s: clock.advance(s),
+        )
+
+        # Wrap the real helper so that the FIRST poll call (call #2 — the
+        # initial snapshot is call #1) raises OperationalError, and the
+        # second poll (call #3) returns real data after we've written a
+        # new row.
+        real_compute = campaign_routes._compute_campaign_analytics
+        call_count = {"n": 0}
+
+        def flaky_compute(campaign_id, tenant_id):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise OperationalError(
+                    "SELECT ...", {}, Exception("connection reset by peer")
+                )
+            # Before call #3 (second poll), persist a new delivered row so
+            # a delta is observable after recovery.
+            if call_count["n"] == 3:
+                _make_log(
+                    db,
+                    tenant_id_val,
+                    msg_id_val,
+                    status="delivered",
+                    delivered_at=datetime.utcnow(),
+                    opened_at=datetime.utcnow(),
+                )
+                db.session.commit()
+            return real_compute(campaign_id, tenant_id)
+
+        monkeypatch.setattr(
+            "api.routes.campaign_routes._compute_campaign_analytics",
+            flaky_compute,
+        )
+
+        gen = _analytics_stream_gen(
+            campaign_id_val,
+            tenant_id_val,
+            poll_interval=1,
+            heartbeat_interval=9999,
+            posthog_refresh_interval=9999,
+        )
+        # First yield: snapshot (call #1)
+        snapshot_chunk = next(gen)
+        # Second yield: after OperationalError (call #2, skipped) and
+        # then a successful poll (call #3) that sees a new row — update.
+        update_chunk = next(gen)
+        gen.close()
+
+        snap_event, _ = _parse_sse_event(snapshot_chunk)
+        upd_event, upd_data = _parse_sse_event(update_chunk)
+        assert snap_event == "snapshot"
+        assert upd_event == "update", (
+            "stream must recover from transient OperationalError and "
+            "emit an update after a subsequent successful poll"
+        )
+
+        payload = json.loads(upd_data)
+        assert payload["delta"]["engagement"]["delivered"]["value"] == 1
+        # Sanity: the flaky helper was hit three times (snapshot + skipped + recovery)
+        assert call_count["n"] == 3
 
 
 class TestAnalyticsStreamEndpoint:
