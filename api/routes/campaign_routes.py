@@ -16,6 +16,7 @@ from ..models import (
     CampaignContact,
     CampaignStep,
     CampaignTemplate,
+    EmailSendLog,
     LinkedInSendQueue,
     Message,
     MessageFeedback,
@@ -2707,6 +2708,8 @@ def campaign_analytics(campaign_id):
     # BL-1029: exclude superseded rows (earlier failed attempts that were
     # later retried successfully) so abort-then-retry runs don't
     # double-count.
+    # BL-1026: `esl.kind != 'preview'` excludes preview/test sends so
+    # operator-self-send previews cannot pollute the campaign's rollup.
     email_send_rows = db.session.execute(
         db.text("""
             SELECT esl.status, COUNT(*)
@@ -2714,7 +2717,8 @@ def campaign_analytics(campaign_id):
             JOIN messages m ON esl.message_id = m.id
             JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
             WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
-                AND esl.superseded_at IS NULL
+              AND esl.superseded_at IS NULL
+              AND esl.kind != 'preview'
             GROUP BY esl.status
         """),
         {"cid": campaign_id, "t": tenant_id},
@@ -2780,7 +2784,8 @@ def campaign_analytics(campaign_id):
         generation_cost_usd = float(cost_row[0]) if cost_row else 0
 
     # ── Timeline ─────────────────────────────────────────────
-    # First/last send timestamps from email_send_log
+    # First/last send timestamps from email_send_log (BL-1026: preview
+    # rows excluded so stakeholder previews don't shift the timeline).
     send_times = db.session.execute(
         db.text("""
             SELECT MIN(esl.sent_at), MAX(esl.sent_at)
@@ -2790,6 +2795,7 @@ def campaign_analytics(campaign_id):
             WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
                 AND esl.sent_at IS NOT NULL
                 AND esl.superseded_at IS NULL
+                AND esl.kind != 'preview'
         """),
         {"cid": campaign_id, "t": tenant_id},
     ).fetchone()
@@ -2820,6 +2826,9 @@ def campaign_analytics(campaign_id):
     # Phase 2 (LEADGEN-01/03): added `unsubscribed` and `delivered` counts so
     # the Outreach tab renders all 6 mail-event states. The query reads from
     # `email_send_log` only — no PostHog calls (LEADGEN-04).
+    # BL-1026: preview rows excluded so a stakeholder previewing a campaign
+    # to themselves (and potentially opening/clicking) cannot inflate
+    # engagement rates or the opens/clicks counters.
     engagement_row = db.session.execute(
         db.text("""
             SELECT
@@ -2838,6 +2847,7 @@ def campaign_analytics(campaign_id):
             JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
             WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
                 AND esl.superseded_at IS NULL
+                AND esl.kind != 'preview'
         """),
         {"cid": campaign_id, "t": tenant_id},
     ).fetchone()
@@ -3020,6 +3030,9 @@ def campaign_recipients(campaign_id):
         contact_id = r[1]
 
         # Mail-event timeline from EmailSendLog (one row → up to 6 events).
+        # BL-1026: exclude preview rows so a stakeholder preview does not
+        # appear in the per-recipient drill-down as if it were a real
+        # partner engagement event.
         mail_rows = db.session.execute(
             db.text(
                 """
@@ -3031,6 +3044,7 @@ def campaign_recipients(campaign_id):
                 WHERE m.campaign_contact_id = :cc_id
                   AND esl.tenant_id = :t
                   AND esl.superseded_at IS NULL
+                  AND esl.kind != 'preview'
                 """
             ),
             {"cc_id": cc_id, "t": tenant_id},
@@ -4272,6 +4286,32 @@ def send_test_email(campaign_id):
     except Exception as e:
         logger.error("Test email send failed for campaign %s: %s", campaign_id, e)
         return jsonify({"error": f"Failed to send test email: {str(e)}"}), 500
+
+    # BL-1026: log the preview send with kind='preview' so Resend webhooks
+    # for the test email land on a known row (instead of being dropped as
+    # "no EmailSendLog") while analytics queries still filter it out.
+    from datetime import datetime, timezone
+
+    try:
+        preview_log = EmailSendLog(
+            tenant_id=tenant_id,
+            message_id=message.id,
+            status="sent",
+            kind="preview",
+            from_email=from_email,
+            to_email=to_email,
+            resend_message_id=resend_id,
+            sent_at=datetime.now(timezone.utc),
+        )
+        db.session.add(preview_log)
+        db.session.commit()
+    except Exception as e:  # pragma: no cover — defensive; the email was sent
+        logger.warning(
+            "Test email sent for campaign %s but preview log insert failed: %s",
+            campaign_id,
+            e,
+        )
+        db.session.rollback()
 
     return jsonify(
         {
