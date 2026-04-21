@@ -123,6 +123,23 @@ Leadgen Pipeline is a multi-tenant B2B lead enrichment and outreach platform. It
 - **Namespace routing**: `/{slug}/page` → strips prefix → serves `/page.html`
 - **TLS**: Automatic via Let's Encrypt
 
+### 9. Email Engagement Tracking (BL-1028)
+Two tables record email-related events; they are *not* duplicates. Analytics reads `email_send_log` for channel-level funnels and joins `activities` for per-contact timelines.
+
+| Table | Purpose | Write path |
+|---|---|---|
+| `email_send_log` | One row per outbound email send. Holds `sent_at`, `delivered_at`, `opened_at`, `clicked_at`, `bounced_at`, `complained_at`, `unsubscribed_at`, `replied_at`, `open_count`, `click_count`, `bounce_type`, `status`, `resend_message_id`. Sole source of truth for **channel funnels** (sent → delivered → opened → clicked → replied / bounced / unsubscribed). | Send: `api/services/send_service.py` inserts a `queued` row, then updates with `resend_message_id` + `status='sent'` + `sent_at`. Engagement: `api/routes/webhook_routes.py` (`POST /api/webhooks/resend`) matches on `resend_message_id` and sets the appropriate timestamp. Earliest-observed semantics — a duplicate webhook never overwrites an existing non-null timestamp. |
+| `activities` | Per-contact timeline event log (from browser extension, microsite, and other channels). Analytics uses it only for the contact-level history tab, not for funnels. | Extension `POST /api/extension/activities`, microsite `POST /api/events/microsite`. |
+
+The webhook handler is the *only* write path for `email_send_log.opened_at` / `clicked_at`. If either column is consistently NULL, the likely cause is **Resend dashboard → Domains → tracking toggles being off**, not a code bug — see the runbook below.
+
+#### Runbook: "opened_at is NULL everywhere"
+
+1. **Check Resend tracking toggles first.** Resend dashboard → Domains → select the sending domain → verify "Track opens" and "Track clicks" are enabled. If either is off, flip it on. No webhooks are emitted for disabled trackers.
+2. **Verify webhooks reach the app.** Resend dashboard → Webhooks → the endpoint → "Recent deliveries". Any `200 OK` response means the handler accepted the event. `4xx` means svix verification failed (check `RESEND_WEBHOOK_SECRET` in `STAGING_DOTENV` / 1Password prod vault — see BL-1034).
+3. **Verify the `resend_message_id` link.** If webhooks are 200-ing but DB rows stay NULL, query `SELECT resend_message_id, sent_at, opened_at FROM email_send_log WHERE resend_message_id = '<event email_id from Resend>';`. No row means the send flow didn't persist the id — check `api/services/send_service.py` around the `log.resend_message_id = result.get("id")` line.
+4. **Replay historical events.** Resend stores webhook deliveries for 30 days. Re-deliver from Resend dashboard → Webhooks → select event → "Redeliver". The handler is idempotent so replaying is safe.
+
 ## Data Flow
 
 ### Enrichment Pipeline (DAG Model)

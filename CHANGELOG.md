@@ -5,6 +5,7 @@ All notable changes to the Leadgen Pipeline project.
 ## [Unreleased]
 
 ### Fixed
+- **Resend webhook tracking** (BL-1028): `email_send_log.opened_at` / `clicked_at` / `delivered_at` / `bounced_at` / `complained_at` / `unsubscribed_at` were being overwritten on duplicate webhook deliveries (or silently populated with wall-clock time rather than the Resend event time). All timestamp columns now follow **earliest-observed** semantics — a duplicate webhook never shifts a set timestamp. The handler also now parses the payload's top-level `created_at` so the persisted time matches the real engagement moment. Lookup is deterministic under pathological multi-tenant `resend_message_id` collisions (orders by `sent_at`). Unmatched `email_id` logs at WARNING level so production log dashboards surface the problem. Runbook added to `docs/ARCHITECTURE.md` for the "opens stay NULL" triage path.
 - **Triage Estimate Rejected** (BL-228): Added `triage` to valid enrichment stages so the estimate endpoint accepts it
 - **QC Dispatch Broken** (BL-229): Added `qc` to direct stages with dispatch to `run_qc()`, added QC to `STAGE_PREDECESSORS` for reactive pipeline chaining
 - **Registry DAG 0 Items** (BL-230): Removed registry hard dependency on L1 — registry enrichment is independent
