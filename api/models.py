@@ -1813,6 +1813,17 @@ class EmailSendLog(db.Model):
         UUID(as_uuid=False),
         db.ForeignKey("email_send_log.id", ondelete="SET NULL"),
     )
+    # BL-1026 (migration 062): distinguishes preview/test sends from real
+    # campaign sends. Defaults to 'production'; the `send-test` endpoint and
+    # any future `preview_to` helper tag their rows `'preview'`. Default
+    # analytics queries filter on `kind != 'preview'` so previews cannot
+    # pollute open/click/reply rates. Preview rows are retained for audit.
+    kind = db.Column(
+        db.String(20),
+        nullable=False,
+        default="production",
+        server_default=db.text("'production'"),
+    )
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
     def to_dict(self):
@@ -1822,6 +1833,7 @@ class EmailSendLog(db.Model):
             "message_id": str(self.message_id),
             "resend_message_id": self.resend_message_id,
             "status": self.status,
+            "kind": self.kind,
             "from_email": self.from_email,
             "to_email": self.to_email,
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
