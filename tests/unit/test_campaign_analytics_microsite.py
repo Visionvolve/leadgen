@@ -10,7 +10,7 @@ All PostHog traffic is mocked — tests never hit the real PostHog API.
 
 import json
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -376,15 +376,14 @@ class TestMicrositeSecurity:
         headers["X-Namespace"] = "test-corp"  # auth context is test-corp
 
         # Even if PostHog would happily return data, the tenant check must
-        # short-circuit before any PostHog call.
-        def _should_not_be_called(self, *_a, **_kw):  # pragma: no cover
-            raise AssertionError(
-                "PostHog must NOT be called for a cross-tenant campaign"
-            )
-
+        # short-circuit before any PostHog call. We use an explicit MagicMock
+        # + assert_not_called() (rather than a side-effecting AssertionError
+        # helper) so the assertion is clearly visible in the test body and
+        # won't be swallowed by any broad except in the route handler.
+        mock_metrics = MagicMock()
         with patch(
             "api.integrations.posthog.PostHogClient.get_campaign_microsite_metrics",
-            _should_not_be_called,
+            mock_metrics,
         ):
             resp = client.get(
                 f"/api/campaigns/{other_campaign.id}/analytics/microsite?range=7d",
@@ -392,6 +391,7 @@ class TestMicrositeSecurity:
             )
 
         assert resp.status_code == 404
+        mock_metrics.assert_not_called()  # PostHog never invoked
         body = resp.get_json() or {}
         err = (body.get("error") or "").lower()
         # Spec NFR-3: 404 should look like "not found", never "forbidden".

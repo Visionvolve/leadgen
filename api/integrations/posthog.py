@@ -207,7 +207,24 @@ class PostHogClient:
                 f"PostHog Query API returned HTTP {resp.status_code}"
             )
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            # HTTP 200 with non-JSON body (maintenance page, CDN error,
+            # truncated response). Without this wrapper, ``resp.json()``
+            # raises ``requests.exceptions.JSONDecodeError`` (a ``ValueError``
+            # subclass) which would escape the graceful-degradation branch
+            # in the route handler (which catches ``PostHogUnavailableError``
+            # and ``RuntimeError`` only) and surface as a 500. Use
+            # ``from None`` so we don't leak the original response content
+            # via the exception chain.
+            logger.warning(
+                "PostHog query returned non-JSON body (status %s)",
+                resp.status_code,
+            )
+            raise PostHogUnavailableError(
+                "PostHog Query API returned malformed response"
+            ) from None
         columns: list[str] = data.get("columns") or []
         results: list[list[Any]] = data.get("results") or []
         if not columns:
