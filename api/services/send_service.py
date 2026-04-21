@@ -54,6 +54,37 @@ WARMUP_SCHEDULE = [
 # Basic email regex for pre-send validation
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
+
+def _mark_prior_failures_superseded(
+    tenant_id: str, message_id: str, winning_log_id: str
+) -> int:
+    """BL-1029: mark any earlier failed send-log rows for this message as
+    superseded by the winning (successful) row.
+
+    Called after a successful send so audit queries stop double-counting
+    abort-then-retry attempts. Returns the number of rows marked.
+
+    Only rows with status='failed' and superseded_at IS NULL are touched —
+    idempotent and safe to call after every success.
+    """
+    now = datetime.now(timezone.utc)
+    prior_failures = (
+        db.session.query(EmailSendLog)
+        .filter(
+            EmailSendLog.tenant_id == tenant_id,
+            EmailSendLog.message_id == message_id,
+            EmailSendLog.id != winning_log_id,
+            EmailSendLog.status == "failed",
+            EmailSendLog.superseded_at.is_(None),
+        )
+        .all()
+    )
+    for row in prior_failures:
+        row.superseded_at = now
+        row.superseded_by = winning_log_id
+    return len(prior_failures)
+
+
 # Gmail-specific rate limits (more conservative — reputation is harder to recover)
 # GSuite Workspace: 2,000/day.  Free Gmail: 500/day.
 GMAIL_DELAY_SECONDS = 45  # ~80 emails/hour, well under limits
@@ -463,6 +494,10 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
 
             # Update message sent_at
             message.sent_at = datetime.now(timezone.utc)
+
+            # BL-1029: mark any earlier failed attempts for this message as
+            # superseded so audit queries count the delivery once.
+            _mark_prior_failures_superseded(tenant_id, message.id, log.id)
 
             db.session.commit()
             sent_count += 1
@@ -883,6 +918,10 @@ def send_campaign_emails_gmail(campaign_id: str, tenant_id: str) -> dict:
             log.sent_at = datetime.now(timezone.utc)
 
             message.sent_at = datetime.now(timezone.utc)
+
+            # BL-1029: mark any earlier failed attempts for this message as
+            # superseded so audit queries count the delivery once.
+            _mark_prior_failures_superseded(tenant_id, message.id, log.id)
 
             db.session.commit()
             sent_count += 1
