@@ -121,9 +121,9 @@ class PostHogClient:
         self.personal_api_key = personal_api_key or os.environ.get(
             "POSTHOG_PERSONAL_API_KEY", ""
         )
-        self.host = (host or os.environ.get("POSTHOG_HOST") or "https://us.i.posthog.com").rstrip(
-            "/"
-        )
+        self.host = (
+            host or os.environ.get("POSTHOG_HOST") or "https://us.i.posthog.com"
+        ).rstrip("/")
         self.project_id = project_id or os.environ.get("POSTHOG_PROJECT_ID", "")
         self.timeout = timeout
 
@@ -178,12 +178,14 @@ class PostHogClient:
         }
 
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
-        except requests.Timeout as exc:
-            # Do NOT include ``exc`` in the message — ``requests`` may echo
-            # parts of the request including the Authorization header in its
-            # repr on some versions. Log at debug with the exception so ops
-            # can diagnose, but keep the user-facing message generic.
+            resp = requests.post(
+                url, headers=headers, json=payload, timeout=self.timeout
+            )
+        except requests.Timeout:
+            # Do NOT include the exception in the message — ``requests`` may
+            # echo parts of the request (including the Authorization header)
+            # in its repr on some versions. Log generically so ops can see
+            # the timeout without the secret.
             logger.warning("PostHog query timed out after %.1fs", self.timeout)
             raise PostHogUnavailableError(
                 f"PostHog Query API timed out after {self.timeout:.0f}s"
@@ -212,7 +214,9 @@ class PostHogClient:
             # Unexpected shape — treat as unavailable rather than crashing
             # callers with a KeyError.
             logger.warning("PostHog query returned no columns in response")
-            raise PostHogUnavailableError("PostHog Query API returned malformed response")
+            raise PostHogUnavailableError(
+                "PostHog Query API returned malformed response"
+            )
         return [dict(zip(columns, row)) for row in results]
 
     # ------------------------------------------------------------------

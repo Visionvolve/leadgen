@@ -164,13 +164,14 @@ class TestQuery:
     def test_query_parses_results_into_dicts(self):
         client = PostHogClient()
         mock_resp = _mock_posthog_response(
-            visits=5, unique_visitors=3, cta_clicks=1, form_submits=0,
+            visits=5,
+            unique_visitors=3,
+            cta_clicks=1,
+            form_submits=0,
             avg_time_on_page_sec=12.3,
         )
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             rows = client.query("SELECT ...")
 
         assert rows == [
@@ -187,9 +188,7 @@ class TestQuery:
         client = PostHogClient()
         mock_resp = _mock_posthog_response(status_code=500)
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             with pytest.raises(PostHogUnavailableError) as excinfo:
                 client.query("SELECT 1")
 
@@ -211,9 +210,7 @@ class TestQuery:
         client = PostHogClient()
         mock_resp = _mock_posthog_response(status_code=403)
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             with pytest.raises(PostHogUnavailableError):
                 client.query("SELECT 1")
 
@@ -233,13 +230,14 @@ class TestCampaignMicrositeMetrics:
         client = PostHogClient()
         since, until = self._range()
         mock_resp = _mock_posthog_response(
-            visits=20, unique_visitors=15, cta_clicks=4, form_submits=1,
+            visits=20,
+            unique_visitors=15,
+            cta_clicks=4,
+            form_submits=1,
             avg_time_on_page_sec=55.0,
         )
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             result = client.get_campaign_microsite_metrics(
                 campaign_id="cmp_abc", since=since, until=until
             )
@@ -296,9 +294,7 @@ class TestCampaignMicrositeMetrics:
         }
         mock_resp.raise_for_status = MagicMock()
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             result = client.get_campaign_microsite_metrics(
                 campaign_id="cmp_zero", since=since, until=until
             )
@@ -324,9 +320,7 @@ class TestCampaignMicrositeMetrics:
         }
         mock_resp.raise_for_status = MagicMock()
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             result = client.get_campaign_microsite_metrics(
                 campaign_id="cmp_nothing", since=since, until=until
             )
@@ -342,9 +336,7 @@ class TestCampaignMicrositeMetrics:
         since, until = self._range()
         mock_resp = _mock_posthog_response(status_code=503)
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             with pytest.raises(PostHogUnavailableError):
                 client.get_campaign_microsite_metrics(
                     campaign_id="cmp_down", since=since, until=until
@@ -390,10 +382,13 @@ class TestCache:
         def fake_monotonic():
             return fake_now[0]
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ) as mock_post, patch(
-            "api.integrations.posthog.time.monotonic", side_effect=fake_monotonic
+        with (
+            patch(
+                "api.integrations.posthog.requests.post", return_value=mock_resp
+            ) as mock_post,
+            patch(
+                "api.integrations.posthog.time.monotonic", side_effect=fake_monotonic
+            ),
         ):
             client.get_campaign_microsite_metrics(
                 campaign_id="cmp_exp", since=since, until=until
@@ -453,9 +448,7 @@ class TestSecretHygiene:
         client = PostHogClient()
         mock_resp = _mock_posthog_response(status_code=500)
 
-        with patch(
-            "api.integrations.posthog.requests.post", return_value=mock_resp
-        ):
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
             try:
                 client.query("SELECT 1")
             except PostHogUnavailableError as exc:
