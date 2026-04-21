@@ -426,7 +426,7 @@ Existing ADRs that remain in force: ADR-006 (Campaign Data Model), ADR-007 (Mess
 - `POSTHOG_PROJECT_API_KEY` is **public** — used by microsite for event ingestion. Safe to ship in microsite JS bundle.
 - All new endpoints verify tenant membership on the campaign before serving data. 404 (not 403) on cross-tenant ID.
 - PostHog queries always include `AND properties.campaign_id = :campaign_id` with the campaign's tenant verified first.
-- `RESEND_WEBHOOK_SECRET` is now **fail-closed** (BL-1034 — `_verify_svix_signature` returns False when the secret is missing or empty, handler responds with 401, missing-secret case logs `CRITICAL`). Dev-only bypass: `FLASK_ENV=development` + `RESEND_WEBHOOK_SECRET=dev-bypass` skips verification for local curl testing; it is inert in staging/production because `FLASK_ENV` is never `development` there.
+- `RESEND_WEBHOOK_SECRET` is now **fail-closed** (BL-1034 — `_verify_svix_signature` returns False when the secret is missing or empty, handler responds with 401, missing-secret case logs at `ERROR` level). There is no dev-bypass path in production code. For local dev without a valid secret, set `RESEND_WEBHOOK_SECRET=any-local-string` in `.env.dev` and sign test payloads accordingly (see `tests/unit/test_webhook_routes.py` for the HMAC signing helper).
 
 ### 6.1 Webhook secret rotation runbook (BL-1034)
 

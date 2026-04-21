@@ -8,19 +8,15 @@ Svix signature verification is MANDATORY (fail-closed): if
 ``RESEND_WEBHOOK_SECRET`` is missing or the signature does not match,
 the request is rejected with HTTP 401.
 
-Dev-only bypass
----------------
-When ``FLASK_ENV=development`` AND ``RESEND_WEBHOOK_SECRET=dev-bypass``
-(the literal string), signature verification is skipped. This is the
-only escape hatch and exists so local ``curl`` tests against the
-running Flask dev server work without computing svix signatures. It is
-inert in staging/production because ``FLASK_ENV`` is never
-``development`` there, and the secret value is not the literal
-``dev-bypass`` token.
+There is no dev-bypass path. For local testing, set
+``RESEND_WEBHOOK_SECRET`` in ``.env.dev`` to any value and sign test
+payloads with that same secret (see ``tests/unit/test_webhook_routes.py``
+for the signing helper).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
@@ -34,23 +30,6 @@ from ..models import EmailSendLog, db
 logger = logging.getLogger(__name__)
 
 webhooks_bp = Blueprint("webhooks", __name__, url_prefix="/api/webhooks")
-
-# Literal token used with FLASK_ENV=development to skip svix verification
-# for local curl testing. Any other value (including an empty string)
-# triggers the normal fail-closed path. This token is intentionally
-# useless in any environment where FLASK_ENV != "development".
-_DEV_BYPASS_TOKEN = "dev-bypass"  # nosec B105 — not a real credential
-
-
-def _is_dev_bypass(secret: str) -> bool:
-    """Return True if dev-only bypass is active.
-
-    Dev bypass requires BOTH:
-    - ``FLASK_ENV == "development"``
-    - ``RESEND_WEBHOOK_SECRET == "dev-bypass"`` (literal)
-    """
-    flask_env = os.environ.get("FLASK_ENV", "").lower()
-    return flask_env == "development" and secret == _DEV_BYPASS_TOKEN
 
 
 # Event type → handler mapping
@@ -67,69 +46,37 @@ SUPPORTED_EVENTS = {
 }
 
 
-def _get_header(headers, name: str) -> str:
-    """Case-insensitive header lookup.
-
-    Werkzeug's ``EnvironHeaders`` is case-insensitive, but ``dict(headers)``
-    normalizes keys to title case (``Svix-Id``), which breaks
-    ``dict(...).get("svix-id")``. Accept both forms.
-    """
-    # Direct lookup works on EnvironHeaders; fall back to manual scan
-    try:
-        value = headers.get(name)
-        if value:
-            return value
-    except AttributeError:
-        pass
-
-    needle = name.lower()
-    for key, value in headers.items():
-        if str(key).lower() == needle:
-            return value or ""
-    return ""
-
-
 def _verify_svix_signature(payload_bytes: bytes, headers) -> bool:
     """Verify Resend webhook signature using svix HMAC.
 
     Fail-closed:
-    - Missing or empty ``RESEND_WEBHOOK_SECRET`` → returns False, logs critical.
-    - Missing svix headers → returns False, logs warning.
-    - Bad signature → returns False, logs warning.
+    - Missing or empty ``RESEND_WEBHOOK_SECRET`` → returns False, logs error.
+    - Missing svix headers → returns False, logs error.
+    - Bad signature → returns False, logs error.
 
-    Dev-only bypass: if ``FLASK_ENV=development`` and the secret is the
-    literal token ``dev-bypass``, verification is skipped (returns True).
+    ``headers`` must be a ``werkzeug.datastructures.Headers`` instance (or
+    any mapping with a case-insensitive ``.get()``). Do NOT pass
+    ``dict(request.headers)`` — that normalizes keys to title case and
+    breaks lowercase lookups like ``.get("svix-id")``.
     """
     secret = os.environ.get("RESEND_WEBHOOK_SECRET", "")
-
-    # Dev-only escape hatch for local curl testing. Intentionally inert
-    # in any environment where FLASK_ENV != "development".
-    if _is_dev_bypass(secret):
-        logger.warning(
-            "Resend webhook: dev-bypass active (FLASK_ENV=development, "
-            "RESEND_WEBHOOK_SECRET=dev-bypass). Signature verification "
-            "SKIPPED. This must NEVER happen in staging/production."
-        )
-        return True
 
     if not secret:
         # Fail-closed: unconfigured secret means we cannot trust any
         # inbound payload. Previously this returned True (fail-open),
         # which allowed arbitrary forged events to update metrics.
-        logger.critical(
-            "Resend webhook: RESEND_WEBHOOK_SECRET is not configured. "
-            "Rejecting request with 401. Configure the secret in the "
-            "deployment environment or set FLASK_ENV=development + "
-            "RESEND_WEBHOOK_SECRET=dev-bypass for local testing."
+        logger.error(
+            "RESEND_WEBHOOK_SECRET not configured — rejecting webhook (fail-closed)"
         )
         return False
 
-    svix_id = _get_header(headers, "svix-id")
-    svix_timestamp = _get_header(headers, "svix-timestamp")
-    svix_signature = _get_header(headers, "svix-signature")
+    # Werkzeug's Headers object is case-insensitive, so lowercase keys work.
+    svix_id = headers.get("svix-id", "")
+    svix_timestamp = headers.get("svix-timestamp", "")
+    svix_signature = headers.get("svix-signature", "")
 
     if not svix_id or not svix_timestamp or not svix_signature:
-        logger.warning("Missing svix headers for webhook verification")
+        logger.error("Resend webhook: missing svix-* headers — rejecting (fail-closed)")
         return False
 
     # Resend/svix signs: "{svix_id}.{svix_timestamp}.{body}"
@@ -137,16 +84,11 @@ def _verify_svix_signature(payload_bytes: bytes, headers) -> bool:
 
     # Secret may have "whsec_" prefix — strip it and base64-decode
     if secret.startswith("whsec_"):
-        import base64
-
         secret_bytes = base64.b64decode(secret[6:])
     else:
         secret_bytes = secret.encode()
 
     expected = hmac.new(secret_bytes, to_sign, hashlib.sha256).digest()
-
-    import base64
-
     expected_b64 = base64.b64encode(expected).decode()
 
     # svix-signature can contain multiple signatures: "v1,<sig1> v1,<sig2>"
@@ -156,7 +98,7 @@ def _verify_svix_signature(payload_bytes: bytes, headers) -> bool:
             if hmac.compare_digest(expected_b64, sig_value):
                 return True
 
-    logger.warning("Svix signature verification failed")
+    logger.error("Resend webhook: svix signature verification failed — rejecting")
     return False
 
 
@@ -217,8 +159,9 @@ def resend_webhook():
     """
     payload_bytes = request.get_data()
 
-    # Mandatory signature verification (fail-closed). See
-    # ``_verify_svix_signature`` for the dev-only bypass.
+    # Mandatory signature verification (fail-closed). ``request.headers``
+    # is Werkzeug's case-insensitive Headers object — pass it directly,
+    # do NOT wrap with ``dict()``.
     if not _verify_svix_signature(payload_bytes, request.headers):
         return jsonify({"error": "Invalid signature"}), 401
 

@@ -7,9 +7,10 @@ Covers:
 3. Invalid svix signature returns 401 when RESEND_WEBHOOK_SECRET is set
    (fail-closed — BL-1034).
 
-Event-handling tests activate the dev-bypass (``FLASK_ENV=development``
-+ ``RESEND_WEBHOOK_SECRET=dev-bypass``) so they do not need to compute
-valid svix signatures; signature behaviour is covered separately in
+Event-handling tests mock ``_verify_svix_signature`` at the import site
+so they do not need to compute valid svix signatures. There is no
+dev-bypass path in production code (BL-1034 review gate). Signature
+behaviour is covered separately in
 ``test_webhook_routes.py::TestResendWebhookSignature``.
 """
 
@@ -101,13 +102,20 @@ def _payload(event_type, email_id="resend-unsub-id-001"):
 
 
 class TestUnsubscribedWebhook:
-    """POST /api/webhooks/resend with type=email.unsubscribed."""
+    """POST /api/webhooks/resend with type=email.unsubscribed.
+
+    Event-handling tests mock ``_verify_svix_signature`` at the import
+    site so they can focus on handler behaviour rather than HMAC math.
+    There is no dev-bypass in production code.
+    """
 
     @pytest.fixture(autouse=True)
-    def _auto_dev_bypass(self, monkeypatch):
-        """BL-1034: the webhook is fail-closed; use dev-bypass for event tests."""
-        monkeypatch.setenv("FLASK_ENV", "development")
-        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "dev-bypass")
+    def _mock_signature_ok(self, monkeypatch):
+        """Stub out signature verification for event-handling tests."""
+        monkeypatch.setattr(
+            "api.routes.webhook_routes._verify_svix_signature",
+            lambda payload_bytes, headers: True,
+        )
         yield
 
     def test_unsubscribed_sets_timestamp_and_status(self, client, seed_send_log):
@@ -139,16 +147,19 @@ class TestUnsubscribedWebhook:
         assert body["status"] == "ignored"
         assert body["reason"] == "unknown email_id"
 
+
+class TestUnsubscribedWebhookSignature:
+    """BL-1034: signature verification is exercised against unsubscribe events.
+
+    This class does NOT mock the verification function — it runs the
+    real ``_verify_svix_signature`` against a configured secret.
+    """
+
     def test_unsubscribed_invalid_signature_returns_401(
         self, client, seed_send_log, monkeypatch
     ):
-        """BL-1034: invalid svix signature → 401 (fail-closed).
-
-        Overrides the class-level dev-bypass to exercise real svix
-        verification against a configured secret.
-        """
+        """Invalid svix signature → 401 (fail-closed)."""
         monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "whsec_dGVzdHNlY3JldA==")
-        monkeypatch.setenv("FLASK_ENV", "staging")
 
         resp = client.post(
             "/api/webhooks/resend",
