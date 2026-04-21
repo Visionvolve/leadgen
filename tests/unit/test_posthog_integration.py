@@ -214,6 +214,32 @@ class TestQuery:
             with pytest.raises(PostHogUnavailableError):
                 client.query("SELECT 1")
 
+    def test_malformed_json_response_raises_unavailable(self):
+        """HTTP 200 with non-JSON body should raise PostHogUnavailableError.
+
+        Without the try/except around ``resp.json()``, a PostHog response that
+        is 200 OK but contains a maintenance page or CDN error HTML would let
+        ``requests.exceptions.JSONDecodeError`` (a ``ValueError`` subclass)
+        escape — and the route handler catches only
+        ``(PostHogUnavailableError, RuntimeError)``, so it would surface as a
+        500 instead of graceful degradation.
+        """
+        client = PostHogClient()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = requests.exceptions.JSONDecodeError(
+            "Expecting value", "", 0
+        )
+
+        with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
+            with pytest.raises(PostHogUnavailableError) as excinfo:
+                client.query("SELECT 1")
+
+        assert "malformed" in str(excinfo.value).lower()
+        # Sanity: personal API key must never leak into the error message.
+        assert "phx_test_secret_KEY_DO_NOT_LEAK" not in str(excinfo.value)
+        assert "phx_" not in str(excinfo.value)
+
 
 # ---------------------------------------------------------------------------
 # get_campaign_microsite_metrics()

@@ -4875,3 +4875,155 @@ def campaign_analytics_stream(campaign_id):
             "Connection": "keep-alive",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# BL-1038 — Microsite analytics endpoint (PostHog-sourced)
+# ---------------------------------------------------------------------------
+#
+# GET /api/campaigns/<id>/analytics/microsite?range=7d
+#
+# Returns microsite engagement metrics (visits, unique visitors, CTA clicks,
+# form submits, avg time on page) for a campaign over a time window. Data
+# comes from the PostHog Query API via the BL-1035 ``PostHogClient`` helper,
+# which carries a 30s in-process cache.
+#
+# Graceful degradation (spec NFR-4): if PostHog is unavailable or not
+# configured, we return HTTP 200 with zero metrics and ``posthog_available:
+# false`` so the rest of the analytics dashboard keeps rendering. The
+# frontend shows a "temporarily unavailable" banner on this block only.
+#
+# Tenant isolation (spec NFR-3): the campaign lookup is scoped to the
+# resolved tenant BEFORE any PostHog call. Cross-tenant IDs return 404 (not
+# 403) to avoid existence disclosure.
+
+
+# Valid values for the ``range`` query param. Mirrors the analytics timeseries
+# endpoint (BL-1037) when it lands; kept local here so this route can be
+# factored/shared later without blocking BL-1037.
+_VALID_RANGES = ("24h", "7d", "30d", "all")
+
+
+def _range_to_window(range_param):
+    """Map a ``range`` query-string value to a (since, until) UTC window.
+
+    ``all`` returns a far-past ``since`` to effectively drop the lower bound.
+
+    Raises:
+        ValueError: when ``range_param`` is not one of ``_VALID_RANGES``.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    if range_param == "24h":
+        return now - timedelta(hours=24), now
+    if range_param == "7d":
+        return now - timedelta(days=7), now
+    if range_param == "30d":
+        return now - timedelta(days=30), now
+    if range_param == "all":
+        # Fallback: far-past epoch. Sufficient until we have campaigns older
+        # than 2020 (we don't — this project did not exist yet).
+        return datetime(2020, 1, 1, tzinfo=timezone.utc), now
+    raise ValueError(f"Invalid range: {range_param!r}")
+
+
+def _zero_microsite_metrics():
+    """The metrics block emitted when PostHog is unavailable / not configured."""
+    return {
+        "visits": 0,
+        "unique_visitors": 0,
+        "cta_clicks": 0,
+        "form_submits": 0,
+        "avg_time_on_page_sec": None,
+    }
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/analytics/microsite", methods=["GET"])
+@require_role("viewer")
+def campaign_analytics_microsite(campaign_id):
+    """Return microsite metrics for a campaign from PostHog.
+
+    Query params:
+        range: one of ``24h``, ``7d`` (default), ``30d``, ``all``.
+
+    Responses:
+        200: ``{campaign_id, range, since, until, metrics, source,
+              posthog_available[, degraded_reason]}``.
+        400: invalid ``range`` value.
+        401: no auth.
+        404: campaign not found in current tenant (cross-tenant access also
+             returns 404 per spec NFR-3 — no existence disclosure).
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Range first — cheap validation before a DB round-trip.
+    range_param = (request.args.get("range") or "7d").strip()
+    if range_param not in _VALID_RANGES:
+        return jsonify(
+            {
+                "error": (
+                    f"Invalid range: {range_param!r}. "
+                    f"Expected one of: {', '.join(_VALID_RANGES)}"
+                )
+            }
+        ), 400
+
+    # Tenant-scoped campaign lookup. A missing row OR a row owned by another
+    # tenant both produce 404 (spec NFR-3).
+    exists = db.session.execute(
+        db.text("SELECT 1 FROM campaigns WHERE id = :id AND tenant_id = :t LIMIT 1"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not exists:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    # All invalid ranges were caught above, so this is guaranteed to succeed.
+    since, until = _range_to_window(range_param)
+
+    # Deferred import keeps the integrations module off the cold-start path
+    # for unrelated routes.
+    from ..integrations.posthog import PostHogClient, PostHogUnavailableError
+
+    payload = {
+        "campaign_id": str(campaign_id),
+        "range": range_param,
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "source": "posthog",
+    }
+
+    try:
+        client = PostHogClient()
+        metrics = client.get_campaign_microsite_metrics(str(campaign_id), since, until)
+        payload["metrics"] = {
+            "visits": metrics.visits,
+            "unique_visitors": metrics.unique_visitors,
+            "cta_clicks": metrics.cta_clicks,
+            "form_submits": metrics.form_submits,
+            "avg_time_on_page_sec": metrics.avg_time_on_page_sec,
+        }
+        payload["posthog_available"] = True
+    except (PostHogUnavailableError, RuntimeError) as exc:
+        # RuntimeError covers missing env (PostHogClient.__init__).
+        # PostHogUnavailableError covers transient failures / malformed
+        # responses. Both degrade cleanly to zero metrics so the frontend
+        # can render a "temporarily unavailable" banner on this block while
+        # the rest of the dashboard keeps working.
+        logger.warning(
+            "Microsite analytics degraded for campaign %s: %s",
+            campaign_id,
+            type(exc).__name__,
+        )
+        payload["metrics"] = _zero_microsite_metrics()
+        payload["posthog_available"] = False
+        # ``str(exc)`` on ``PostHogClient`` init or ``PostHogUnavailableError``
+        # carries no secret material by design (see
+        # ``api/integrations/posthog.py`` — the client never formats the key
+        # into error messages). Still, we only expose the message, never
+        # ``repr(exc)`` or the traceback.
+        payload["degraded_reason"] = str(exc) or type(exc).__name__
+
+    return jsonify(payload), 200

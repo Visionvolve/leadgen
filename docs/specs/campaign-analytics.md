@@ -87,7 +87,7 @@ Each Given/When/Then maps to an FR and is verified via the sprint's manual test 
 ### AC-5 — Microsite metrics from PostHog (FR-7, NFR-4)
 - **Given** a campaign with 20 microsite visits logged in PostHog (via `campaign_id` property)
 - **When** the Microsite Metrics block renders
-- **Then** visits, unique visitors, median time-on-page, and CTA clicks match the PostHog Query API response within 30s cache window
+- **Then** visits, unique visitors, average time-on-page, and CTA clicks match the PostHog Query API response within 30s cache window
 - **And when** the PostHog API returns 5xx or times out, the block shows "PostHog temporarily unavailable" but the rest of the dashboard still renders
 
 ### AC-6 — Per-contact drill-down (FR-4)
@@ -340,13 +340,18 @@ Response:
   "range": {...},
   "visits": 58,
   "unique_visitors": 41,
-  "median_time_on_page_sec": 87,
+  "avg_time_on_page_sec": 87,
   "cta_clicks": 12,
   "form_submits": 3,
   "source": "posthog",
   "fallback": false
 }
 ```
+
+> Note: using `avg_time_on_page_sec` (HogQL's built-in `avg()`) rather than
+> `median_time_on_page_sec`. A true median would require HogQL `percentile()`
+> — more expensive per query and offers only marginal signal for microsite
+> engagement at current volumes. See BL-1045 follow-up if median is desired.
 
 On PostHog 5xx/timeout: returns `{"fallback": true, "error": "posthog_unavailable"}` with last-known cache if available.
 
