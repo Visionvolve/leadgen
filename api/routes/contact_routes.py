@@ -179,7 +179,9 @@ def create_contact():
 
     # Normalize phone number before saving
     if "phone_number" in params:
-        params["phone_number"] = normalize_phone(params["phone_number"]) or params["phone_number"]
+        params["phone_number"] = (
+            normalize_phone(params["phone_number"]) or params["phone_number"]
+        )
 
     # Validate company_id belongs to tenant
     if "company_id" in params:
@@ -771,7 +773,10 @@ def get_contact(contact_id):
         for r in msg_rows
     ]
 
-    # Email activity (send logs joined through messages → campaigns)
+    # Email activity (send logs joined through messages → campaigns).
+    # BL-1029: contact history is the "all attempts" audit view — it keeps
+    # superseded rows so users can see the full retry trail. The
+    # `superseded_at` column lets the UI grey-out / flag retried attempts.
     email_rows = db.session.execute(
         db.text("""
             SELECT c.name AS campaign_name,
@@ -783,7 +788,8 @@ def get_contact(contact_id):
                    esl.open_count,
                    esl.clicked_at,
                    esl.click_count,
-                   esl.bounced_at
+                   esl.bounced_at,
+                   esl.superseded_at
             FROM email_send_log esl
             JOIN messages m ON m.id = esl.message_id
             LEFT JOIN campaign_contacts cc ON cc.id = m.campaign_contact_id
@@ -805,6 +811,7 @@ def get_contact(contact_id):
             "clicked_at": _iso(r[7]),
             "click_count": r[8] or 0,
             "bounced_at": _iso(r[9]),
+            "superseded_at": _iso(r[10]),
         }
         for r in email_rows
     ]
@@ -821,9 +828,7 @@ def delete_contact(contact_id):
 
     # Verify contact belongs to tenant
     row = db.session.execute(
-        db.text(
-            "SELECT id FROM contacts WHERE id = :id AND tenant_id = :tid"
-        ),
+        db.text("SELECT id FROM contacts WHERE id = :id AND tenant_id = :tid"),
         {"id": contact_id, "tid": str(tenant_id)},
     ).fetchone()
     if not row:
@@ -847,9 +852,7 @@ def delete_contact(contact_id):
 
     # Delete the contact
     db.session.execute(
-        db.text(
-            "DELETE FROM contacts WHERE id = :id AND tenant_id = :tid"
-        ),
+        db.text("DELETE FROM contacts WHERE id = :id AND tenant_id = :tid"),
         params,
     )
     db.session.commit()

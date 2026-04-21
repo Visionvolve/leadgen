@@ -2704,6 +2704,9 @@ def campaign_analytics(campaign_id):
     msg_by_step = {str(r[0]): r[1] for r in msg_by_step_rows}
 
     # ── Email sending stats ──────────────────────────────────
+    # BL-1029: exclude superseded rows (earlier failed attempts that were
+    # later retried successfully) so abort-then-retry runs don't
+    # double-count.
     email_send_rows = db.session.execute(
         db.text("""
             SELECT esl.status, COUNT(*)
@@ -2711,6 +2714,7 @@ def campaign_analytics(campaign_id):
             JOIN messages m ON esl.message_id = m.id
             JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
             WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                AND esl.superseded_at IS NULL
             GROUP BY esl.status
         """),
         {"cid": campaign_id, "t": tenant_id},
@@ -2785,6 +2789,7 @@ def campaign_analytics(campaign_id):
             JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
             WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
                 AND esl.sent_at IS NOT NULL
+                AND esl.superseded_at IS NULL
         """),
         {"cid": campaign_id, "t": tenant_id},
     ).fetchone()
@@ -2832,6 +2837,7 @@ def campaign_analytics(campaign_id):
             JOIN messages m ON esl.message_id = m.id
             JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
             WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                AND esl.superseded_at IS NULL
         """),
         {"cid": campaign_id, "t": tenant_id},
     ).fetchone()
@@ -3024,6 +3030,7 @@ def campaign_recipients(campaign_id):
                 JOIN messages m ON m.id = esl.message_id
                 WHERE m.campaign_contact_id = :cc_id
                   AND esl.tenant_id = :t
+                  AND esl.superseded_at IS NULL
                 """
             ),
             {"cc_id": cc_id, "t": tenant_id},
