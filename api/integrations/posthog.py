@@ -242,6 +242,9 @@ class PostHogClient:
         cache_key = (campaign_id, since.isoformat(), until.isoformat())
         now = time.monotonic()
 
+        # Note: in-process cache; concurrent cold misses may double-fetch
+        # (acceptable). Each Gunicorn worker has its own cache. At scale,
+        # move to shared cache (Redis).
         with _cache_lock:
             cached = _cache.get(cache_key)
             if cached is not None and cached[0] > now:

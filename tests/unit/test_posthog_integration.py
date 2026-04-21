@@ -449,11 +449,10 @@ class TestSecretHygiene:
         mock_resp = _mock_posthog_response(status_code=500)
 
         with patch("api.integrations.posthog.requests.post", return_value=mock_resp):
-            try:
+            with pytest.raises(PostHogUnavailableError) as excinfo:
                 client.query("SELECT 1")
-            except PostHogUnavailableError as exc:
-                assert "phx_test_secret_KEY_DO_NOT_LEAK" not in str(exc)
-                assert "phx_test_secret_KEY_DO_NOT_LEAK" not in repr(exc)
+            assert "phx_test_secret_KEY_DO_NOT_LEAK" not in str(excinfo.value)
+            assert "phx_test_secret_KEY_DO_NOT_LEAK" not in repr(excinfo.value)
 
     def test_client_repr_does_not_leak_key(self):
         client = PostHogClient()
