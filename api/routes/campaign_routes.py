@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from flask import (
@@ -2665,6 +2665,250 @@ def campaign_analytics(campaign_id):
         return jsonify({"error": "Campaign not found"}), 404
 
     return jsonify(result)
+
+
+# ─── Time-series analytics (BL-1037) ────────────────────────────────────
+# Valid query parameter values for the timeseries endpoint. Kept at
+# module scope so tests / other modules can inspect the contract.
+_TIMESERIES_RANGES = {"24h", "7d", "30d", "all"}
+_TIMESERIES_BUCKETS = {"hour", "day"}
+# How far back to look when range=all and the campaign has no events yet.
+# Anything older than this is treated as "the beginning of time" for
+# bucket skeleton generation, so we don't materialise years of zero rows.
+_TIMESERIES_ALL_FALLBACK_DAYS = 30
+
+
+def _timeseries_since(range_val, oldest_event_at, now):
+    """Compute the window start timestamp for the requested range."""
+    if range_val == "24h":
+        return now - timedelta(hours=24)
+    if range_val == "7d":
+        return now - timedelta(days=7)
+    if range_val == "30d":
+        return now - timedelta(days=30)
+    # range == "all": span the campaign's whole lifetime (or a sensible
+    # fallback when no events exist yet).
+    if oldest_event_at is None:
+        return now - timedelta(days=_TIMESERIES_ALL_FALLBACK_DAYS)
+    return _coerce_aware(oldest_event_at)
+
+
+def _coerce_aware(ts):
+    """Coerce a SQL timestamp (datetime or ISO string) to a UTC-aware datetime.
+
+    SQLite stores ``DateTime(timezone=True)`` columns as strings; PostgreSQL
+    returns ``datetime`` objects. This helper normalises both paths so
+    bucketing logic can assume tz-aware UTC datetimes.
+    """
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        # SQLite typically emits 'YYYY-MM-DD HH:MM:SS[.ffffff]' or ISO-8601.
+        text = ts.strip()
+        # Be tolerant of trailing 'Z' and '+00:00' suffixes.
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            # Fallback: drop sub-second / tz decoration and retry.
+            dt = datetime.fromisoformat(text.split(".")[0])
+    else:
+        dt = ts
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _truncate_bucket(dt, bucket):
+    """Floor a UTC datetime to the start of its bucket."""
+    dt = _coerce_aware(dt)
+    if bucket == "hour":
+        return dt.replace(minute=0, second=0, microsecond=0)
+    # day
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _iter_buckets(since, until, bucket):
+    """Yield bucket start timestamps from ``since`` through ``until`` inclusive."""
+    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
+    current = _truncate_bucket(since, bucket)
+    end = _truncate_bucket(until, bucket)
+    # Safety cap: avoid pathological outputs (>5 years daily, >45 days hourly).
+    max_buckets = 45 * 24 if bucket == "hour" else 365 * 5
+    count = 0
+    while current <= end and count < max_buckets:
+        yield current
+        current = current + step
+        count += 1
+
+
+def _iso_z(dt):
+    """Render a UTC datetime as ISO-8601 with trailing Z (not +00:00)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    # isoformat() yields +00:00; normalise to Z for contract.
+    return dt.replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
+
+
+@campaigns_bp.route(
+    "/api/campaigns/<campaign_id>/analytics/timeseries", methods=["GET"]
+)
+@require_role("viewer")
+def campaign_analytics_timeseries(campaign_id):
+    """Time-bucketed mail-event counts for a campaign (BL-1037).
+
+    Buckets counts of sent / delivered / opened / clicked / bounced /
+    unsubscribed events across the requested range. Empty buckets are
+    zero-filled so the front-end can render a continuous series without
+    special-casing gaps.
+
+    Query params:
+      range: 24h | 7d (default) | 30d | all
+      bucket: hour | day (auto-selected when omitted: 24h→hour, else→day)
+
+    Tenant isolation: the campaign's tenant is verified first; cross-tenant
+    IDs return 404 (not 403) to avoid existence disclosure.
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # ── Validate query parameters ───────────────────────────────────
+    range_val = (request.args.get("range") or "7d").strip().lower()
+    if range_val not in _TIMESERIES_RANGES:
+        return jsonify(
+            {
+                "error": (
+                    f"Invalid range '{range_val}'. "
+                    f"Must be one of: {sorted(_TIMESERIES_RANGES)}"
+                )
+            }
+        ), 400
+
+    bucket_param = request.args.get("bucket")
+    if bucket_param is None or bucket_param.strip() == "":
+        bucket_val = "hour" if range_val == "24h" else "day"
+    else:
+        bucket_val = bucket_param.strip().lower()
+        if bucket_val not in _TIMESERIES_BUCKETS:
+            return jsonify(
+                {
+                    "error": (
+                        f"Invalid bucket '{bucket_val}'. "
+                        f"Must be one of: {sorted(_TIMESERIES_BUCKETS)}"
+                    )
+                }
+            ), 400
+
+    # ── Verify campaign belongs to tenant (404 on miss, not 403) ────
+    campaign_exists = db.session.execute(
+        db.text("SELECT 1 FROM campaigns WHERE id = :id AND tenant_id = :t LIMIT 1"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign_exists:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    now = datetime.now(timezone.utc)
+
+    # ── Fetch event timestamps ──────────────────────────────────────
+    # We fetch just the six timestamp columns for rows in this campaign
+    # (joined through messages → campaign_contacts) and bucket in Python.
+    # This is portable across PG + SQLite (tests use SQLite), and fast
+    # enough at current scale. A future optimisation is PG-side
+    # `date_trunc` aggregation; at that point it would live behind a
+    # dialect check.
+    # Exclude superseded retry rows (BL-1029) so a message that bounced and
+    # was later re-sent successfully only counts once per event type.
+    # Exclude preview/test sends (BL-1026) so they never inflate analytics.
+    rows = db.session.execute(
+        db.text(
+            """
+            SELECT
+                esl.sent_at,
+                esl.delivered_at,
+                esl.opened_at,
+                esl.clicked_at,
+                esl.bounced_at,
+                esl.unsubscribed_at
+            FROM email_send_log esl
+            JOIN messages m ON esl.message_id = m.id
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid
+              AND cc.tenant_id = :t
+              AND esl.tenant_id = :t
+              AND esl.kind != 'preview'
+              AND esl.superseded_at IS NULL
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+
+    # ── Determine window (range=all uses oldest event) ──────────────
+    oldest = None
+    for r in rows:
+        for ts in r:
+            ts_aware = _coerce_aware(ts)
+            if ts_aware is None:
+                continue
+            if oldest is None or ts_aware < oldest:
+                oldest = ts_aware
+    since = _timeseries_since(range_val, oldest, now)
+
+    # ── Build zero-filled bucket skeleton ───────────────────────────
+    skeleton = {}
+    for bucket_start in _iter_buckets(since, now, bucket_val):
+        skeleton[bucket_start] = {
+            "sent": 0,
+            "delivered": 0,
+            "opened": 0,
+            "clicked": 0,
+            "bounced": 0,
+            "unsubscribed": 0,
+        }
+
+    # ── Fold events into buckets ────────────────────────────────────
+    # Each send-log row contributes up to 6 event increments (one per
+    # non-NULL timestamp column). Each increment is attributed to the
+    # bucket containing its own timestamp.
+    metric_fields = (
+        ("sent_at", "sent"),
+        ("delivered_at", "delivered"),
+        ("opened_at", "opened"),
+        ("clicked_at", "clicked"),
+        ("bounced_at", "bounced"),
+        ("unsubscribed_at", "unsubscribed"),
+    )
+    for r in rows:
+        for idx, (_col, metric) in enumerate(metric_fields):
+            ts_aware = _coerce_aware(r[idx])
+            if ts_aware is None:
+                continue
+            if ts_aware < since or ts_aware > now:
+                continue
+            bucket_start = _truncate_bucket(ts_aware, bucket_val)
+            if bucket_start not in skeleton:
+                # Event falls outside the iter_buckets range (shouldn't
+                # happen given the since/now clamp above, but guard).
+                continue
+            skeleton[bucket_start][metric] += 1
+
+    # ── Emit in chronological order ─────────────────────────────────
+    buckets = [
+        {"bucket_start": _iso_z(ts), **counts}
+        for ts, counts in sorted(skeleton.items(), key=lambda kv: kv[0])
+    ]
+
+    return jsonify(
+        {
+            "campaign_id": str(campaign_id),
+            "range": range_val,
+            "bucket": bucket_val,
+            "buckets": buckets,
+        }
+    )
 
 
 @campaigns_bp.route("/api/campaigns/<campaign_id>/recipients", methods=["GET"])
