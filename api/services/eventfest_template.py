@@ -104,7 +104,7 @@ EVENTFEST_HTML_TEMPLATE = """\
 </head>
 <body style="margin:0;padding:0;background:#f4f4f7;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0A0066;max-width:600px;">
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f4f7;">
-  \u010cty\u0159i p\u0159edstaven\u00ed pro Va\u0161i sez\u00f3nu 2026 \u2014 Complicit\u00e9, Glamour in Red, Aerial Hoop a Onyx.
+  \u010cty\u0159i vystoupen\u00ed pro Va\u0161i sez\u00f3nu 2026 \u2014 Complicit\u00e9, Glamour in Red, Aerial Hoop a Onyx.
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f7;">
@@ -154,10 +154,11 @@ EVENTFEST_HTML_TEMPLATE = """\
               Losers Cirque Company m\u00e1 pro {{you_acc}} n\u011bkolik novinek, kter\u00e9 si {{you_can_verb}} prohl\u00e9dnout v\u00a0na\u0161\u00ed aktualizovan\u00e9 <a href="{{microsite_link}}" style="color:#1A0DAB;text-decoration:underline;">nab\u00eddce vystoupen\u00ed</a>.
             </p>
             <p style="margin:0 0 14px 0;font-size:16px;line-height:1.6;color:#222;">
-              N\u011bkter\u00e1 z\u00a0nich {{you_can_verb}} vid\u011bt i\u00a0na\u017eivo v\u00a0r\u00e1mci akce <strong style="color:#0A0066;">EVENT FEST</strong> ve st\u0159edu <strong style="color:#0A0066;">22.4.2026</strong> na pra\u017esk\u00e9m V\u00fdstavi\u0161ti Let\u0148any. Od 12:00 hodin na Expo stage {{you_can_verb}} t\u011b\u0161it na <strong style="color:#0A0066;">Hat Jazz</strong> a od 13:00 hodin v\u00a0r\u00e1mci prostoru Experience show na <strong style="color:#0A0066;">Handstand</strong>.
+              N\u011bkter\u00e1 z\u00a0nich {{you_can_verb}} vid\u011bt i\u00a0na\u017eivo v\u00a0r\u00e1mci <strong style="color:#0A0066;">EVENT FESTu</strong> ve st\u0159edu <strong style="color:#0A0066;">22.4.2026</strong> na pra\u017esk\u00e9m V\u00fdstavi\u0161ti Let\u0148any.
             </p>
+            <ul style="margin:0 0 16px 0; padding-left:20px;font-size:16px;line-height:1.6;color:#222;"><li style="margin-bottom:8px">Od 12:00 hodin na Expo stage \u2014 <strong style="color:#0A0066;">Hat Jazz</strong></li><li>Od 13:00 hodin v\u00a0prostoru Experience show \u2014 <strong style="color:#0A0066;">Handstand</strong></li></ul>
             <p style="margin:0 0 28px 0;font-size:16px;line-height:1.6;color:#222;">
-              {{stop_by_imper}} i\u00a0na na\u0161em st\u00e1nku, budeme se na {{you_acc}} t\u011b\u0161it.
+              {{stop_by_imper}} i\u00a0na na\u0161em st\u00e1nku ve vstupn\u00ed hale, budeme se na {{you_acc}} t\u011b\u0161it.
             </p>
           </td>
         </tr>
@@ -166,7 +167,7 @@ EVENTFEST_HTML_TEMPLATE = """\
         <tr>
           <td class="px-32" style="padding:0 32px 20px 32px;">
             <h2 style="margin:0;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;line-height:1.25;font-weight:700;color:#0A0066;">
-              Vybrali jsme pro {{you_acc}} \u010dty\u0159i p\u0159edstaven\u00ed, kter\u00e1 stoj\u00ed za pozornost
+              Vybrali jsme pro {{you_acc}} \u010dty\u0159i vystoupen\u00ed, kter\u00e1 stoj\u00ed za pozornost
             </h2>
             <div style="height:3px;width:48px;background:#FF0000;margin:10px 0 0 0;line-height:3px;font-size:0;">&nbsp;</div>
           </td>
@@ -190,16 +191,16 @@ EVENTFEST_HTML_TEMPLATE = """\
                     </div>
                   </a>
                 </td>
-                <!-- Glamour in Red -->
+                <!-- Onyx -->
                 <td class="card-cell" width="50%" valign="top" style="padding:8px 0 16px 8px;">
                   <a href="{{microsite_link}}" style="text-decoration:none;color:#0A0066;display:block;">
-                    <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-11-768x512.jpg"
-                         alt="Glamour in Red \u2014 anima\u010dn\u00ed program"
+                    <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-17-768x512.jpg"
+                         alt="Onyx \u2014 skupinov\u00e1 akrobacie"
                          width="260"
                          style="display:block;border:0;width:100%;max-width:260px;height:auto;border-radius:6px;background:#e6e6f0;">
                     <div style="padding:12px 2px 0 2px;">
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Glamour in Red</div>
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">\u017div\u00e9 sochy v \u010derven\u00e9 \u2014 smysln\u00e1, elegantn\u00ed animace pro V\u00e1\u0161 prostor.</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Onyx</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">P\u00e1rov\u00e1 i skupinov\u00e1 akrobacie s handstandem \u2014 p\u0159esnost a s\u00edla v\u00a0ka\u017ed\u00e9m gestu.</div>
                     </div>
                   </a>
                 </td>
@@ -226,16 +227,16 @@ EVENTFEST_HTML_TEMPLATE = """\
                     </div>
                   </a>
                 </td>
-                <!-- Onyx -->
+                <!-- Glamour in Red -->
                 <td class="card-cell" width="50%" valign="top" style="padding:8px 0 16px 8px;">
                   <a href="{{microsite_link}}" style="text-decoration:none;color:#0A0066;display:block;">
-                    <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-17-768x512.jpg"
-                         alt="Onyx \u2014 skupinov\u00e1 akrobacie"
+                    <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-11-768x512.jpg"
+                         alt="Glamour in Red \u2014 anima\u010dn\u00ed program"
                          width="260"
                          style="display:block;border:0;width:100%;max-width:260px;height:auto;border-radius:6px;background:#e6e6f0;">
                     <div style="padding:12px 2px 0 2px;">
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Onyx</div>
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">P\u00e1rov\u00e1 i skupinov\u00e1 akrobacie s handstandem \u2014 p\u0159esnost a s\u00edla v\u00a0ka\u017ed\u00e9m gestu.</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Glamour in Red</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">\u017div\u00e9 sochy v \u010derven\u00e9 \u2014 smysln\u00e1, elegantn\u00ed animace pro V\u00e1\u0161 prostor.</div>
                     </div>
                   </a>
                 </td>
@@ -292,7 +293,7 @@ EVENTFEST_HTML_TEMPLATE = """\
                     E:&nbsp;&nbsp;<a href="mailto:hana@unitedarts.cz" style="color:#1A0DAB;text-decoration:none;">hana@unitedarts.cz</a>
                   </div>
                   <div style="font-size:13px;font-weight:400;color:#1A0DAB;line-height:1.6;margin-top:8px;">
-                    <a href="https://www.unitedarts.cz" style="color:#1A0DAB;text-decoration:none;">www.unitedarts.cz</a> | <a href="https://www.loserscirque.cz" style="color:#1A0DAB;text-decoration:none;">www.loserscirque.cz</a> | <a href="https://www.divadlobravo.cz" style="color:#1A0DAB;text-decoration:none;">www.divadlobravo.cz</a>
+                    <a href="{{microsite_link}}" style="color:#1A0DAB;text-decoration:none;">booking.loserscirque.cz</a>
                   </div>
                 </td>
               </tr>
@@ -333,15 +334,18 @@ Hezk\u00fd den, {{vocative_name}},
 
 Losers Cirque Company m\u00e1 pro {{you_acc}} n\u011bkolik novinek, kter\u00e9 si {{you_can_verb}} prohl\u00e9dnout v na\u0161\u00ed aktualizovan\u00e9 nab\u00eddce vystoupen\u00ed ({{microsite_link}}).
 
-N\u011bkter\u00e1 z nich {{you_can_verb}} vid\u011bt i na\u017eivo v r\u00e1mci akce EVENT FEST ve st\u0159edu 22.4.2026 na pra\u017esk\u00e9m V\u00fdstavi\u0161ti Let\u0148any. Od 12:00 hodin na Expo stage {{you_can_verb}} t\u011b\u0161it na Hat Jazz a od 13:00 hodin v r\u00e1mci prostoru Experience show na Handstand.
+N\u011bkter\u00e1 z nich {{you_can_verb}} vid\u011bt i na\u017eivo v r\u00e1mci EVENT FESTu ve st\u0159edu 22.4.2026 na pra\u017esk\u00e9m V\u00fdstavi\u0161ti Let\u0148any.
 
-{{stop_by_imper}} i na na\u0161em st\u00e1nku, budeme se na {{you_acc}} t\u011b\u0161it.
+\u2022 Od 12:00 hodin na Expo stage \u2014 Hat Jazz
+\u2022 Od 13:00 hodin v prostoru Experience show \u2014 Handstand
 
-Vybrali jsme pro {{you_acc}} \u010dty\u0159i p\u0159edstaven\u00ed, kter\u00e1 stoj\u00ed za pozornost:
+{{stop_by_imper}} i na na\u0161em st\u00e1nku ve vstupn\u00ed hale, budeme se na {{you_acc}} t\u011b\u0161it.
+
+Vybrali jsme pro {{you_acc}} \u010dty\u0159i vystoupen\u00ed, kter\u00e1 stoj\u00ed za pozornost:
 - Complicit\u00e9 \u2014 P\u011bt akrobat\u016f, s\u00edla a d\u016fv\u011bra ve vizu\u00e1ln\u011b strhuj\u00edc\u00ed choreografii.
-- Glamour in Red \u2014 \u017div\u00e9 sochy v \u010derven\u00e9, smysln\u00e1 a elegantn\u00ed animace.
-- Aerial Hoop \u2014 Armagedon \u2014 S\u00f3lo na z\u00e1v\u011bsn\u00e9m kruhu, ide\u00e1ln\u00ed pro gala ve\u010dery.
 - Onyx \u2014 P\u00e1rov\u00e1 i skupinov\u00e1 akrobacie s handstandem.
+- Aerial Hoop \u2014 Armagedon \u2014 S\u00f3lo na z\u00e1v\u011bsn\u00e9m kruhu, ide\u00e1ln\u00ed pro gala ve\u010dery.
+- Glamour in Red \u2014 \u017div\u00e9 sochy v \u010derven\u00e9, smysln\u00e1 a elegantn\u00ed animace.
 
 Prohl\u00e9dn\u011bte si celou nab\u00eddku: {{microsite_link}}
 
@@ -353,7 +357,7 @@ Event Producer
 United Arts s.r.o. | Losers Cirque Company | Divadlo BRAVO!
 M: +420 737 853 490
 E: hana@unitedarts.cz
-www.unitedarts.cz | www.loserscirque.cz | www.divadlobravo.cz
+booking.loserscirque.cz ({{microsite_link}})
 
 United Arts s.r.o. \u00b7 Praha \u00b7 \u010cesk\u00e1 republika
 Pokud si nep\u0159ejete dal\u0161\u00ed zpr\u00e1vy, odpov\u011bzte na tento e-mail (hana@unitedarts.cz) s p\u0159edm\u011btem "unsubscribe"."""

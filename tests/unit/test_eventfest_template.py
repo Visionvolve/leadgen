@@ -313,7 +313,11 @@ class TestV4BrandContract:
         assert "Event Producer" in html
         assert "+420 737 853 490" in html
         assert "hana@unitedarts.cz" in html
-        assert "www.loserscirque.cz" in html
+        # Round-2: the 3 URL footer collapsed to a single booking.loserscirque.cz
+        # display whose href is {{microsite_link}}.
+        assert "booking.loserscirque.cz" in html
+        assert "www.unitedarts.cz" not in html
+        assert "www.divadlobravo.cz" not in html
 
 
 # NOTE: tests for get_or_create_invite moved to tests/unit/test_microsite_invites.py
@@ -628,3 +632,55 @@ class TestSendServiceToneFromContact:
         assert "pro Vás" not in final_html
         assert "hledáte" not in final_html
         assert "Zastavte se" not in final_plain
+
+
+class TestHankaRound2Revisions:
+    """Tests that pin down Hanka's round-2 copy revisions.
+
+    Covers the 6 changes: EVENT FESTu genitive, bullet lines for
+    Hat Jazz/Handstand, "ve vstupní hale" stánek phrasing,
+    představení→vystoupení, thumbnail reorder, single booking URL.
+    """
+
+    def test_event_festu_genitive(self):
+        """Template renders 'v rámci EVENT FESTu' (genitive), not 'akce EVENT FEST'."""
+        _, html, plain = render_eventfest_email(
+            "Jano", "https://example.com/invite/tok"
+        )
+        assert "EVENT FESTu" in html, "missing genitive EVENT FESTu in HTML"
+        assert "EVENT FESTu" in plain, "missing genitive EVENT FESTu in plain"
+        # The old "akce EVENT FEST" wording must be gone.
+        assert "akce EVENT FEST" not in html
+        assert "akce EVENT FEST" not in plain
+
+    def test_stanek_ve_vstupni_hale(self):
+        """'ve vstupní hale' qualifies the stánek invitation in both registers."""
+        _, html_v, plain_v = render_eventfest_email(
+            "Jano", "https://example.com/invite/tok", tone="vykat"
+        )
+        _, html_t, plain_t = render_eventfest_email(
+            "Jano", "https://example.com/invite/tok", tone="tykat"
+        )
+        for body in (html_v, plain_v, html_t, plain_t):
+            assert "ve vstupní hale" in body, "missing 've vstupní hale' qualifier"
+        # Vykat: "Zastavte se i na našem stánku ve vstupní hale"
+        assert "Zastavte se i" in html_v and "stánku ve vstupní hale" in html_v
+        # Tykat: "Zastav se i na našem stánku ve vstupní hale"
+        assert "Zastav se i" in html_t and "stánku ve vstupní hale" in html_t
+
+    def test_thumbnail_order_complicite_onyx_aerial_glamour(self):
+        """HTML thumbnails render in order: complicite, onyx, aerial, glamour."""
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
+        )
+        pos_complicite = html.find("01-2-768x512")
+        pos_onyx = html.find("01-17-768x512")
+        pos_aerial = html.find("40_1-768x512")
+        pos_glamour = html.find("01-11-768x512")
+        assert -1 not in (pos_complicite, pos_onyx, pos_aerial, pos_glamour), (
+            "one or more thumbnail URLs missing"
+        )
+        assert pos_complicite < pos_onyx < pos_aerial < pos_glamour, (
+            f"thumbnail order wrong: complicite={pos_complicite} "
+            f"onyx={pos_onyx} aerial={pos_aerial} glamour={pos_glamour}"
+        )
