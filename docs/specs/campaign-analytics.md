@@ -426,7 +426,15 @@ Existing ADRs that remain in force: ADR-006 (Campaign Data Model), ADR-007 (Mess
 - `POSTHOG_PROJECT_API_KEY` is **public** — used by microsite for event ingestion. Safe to ship in microsite JS bundle.
 - All new endpoints verify tenant membership on the campaign before serving data. 404 (not 403) on cross-tenant ID.
 - PostHog queries always include `AND properties.campaign_id = :campaign_id` with the campaign's tenant verified first.
-- `RESEND_WEBHOOK_SECRET` is currently **fail-open** (`_verify_svix_signature` returns True when secret is empty, `webhook_routes.py:46-48`). Sprint bundles a hardening chore: set the secret in staging+prod AND change the handler to fail-closed (log + 401 when secret missing). This is a real security gap today.
+- `RESEND_WEBHOOK_SECRET` is now **fail-closed** (BL-1034 — `_verify_svix_signature` returns False when the secret is missing or empty, handler responds with 401, missing-secret case logs at `ERROR` level). There is no dev-bypass path in production code. For local dev without a valid secret, set `RESEND_WEBHOOK_SECRET=any-local-string` in `.env.dev` and sign test payloads accordingly (see `tests/unit/test_webhook_routes.py` for the HMAC signing helper).
+
+### 6.1 Webhook secret rotation runbook (BL-1034)
+
+1. In the Resend dashboard, open Webhooks → the target endpoint → **Rotate signing secret**. Copy the new value (format `whsec_...`).
+2. Update the 1Password item `visionvolve-prod` / `Resend Webhook (leadgen-pipeline)` field `RESEND_WEBHOOK_SECRET` with the new value.
+3. Update staging: rotate the GitHub secret `STAGING_RESEND_WEBHOOK_SECRET` on `michallicko/visionvolve-vps` (`gh secret set STAGING_RESEND_WEBHOOK_SECRET --repo michallicko/visionvolve-vps`), then trigger the staging infra redeploy (`gh workflow run deploy-staging-infra.yml --repo michallicko/visionvolve-vps`).
+4. Update production: rotate the equivalent production secret (`PROD_RESEND_WEBHOOK_SECRET` on the same repo — add if missing alongside existing `PROD_RESEND_API_KEY`) and redeploy the leadgen-api container.
+5. Verify by sending a Resend test event from the dashboard; confirm the corresponding `EmailSendLog` row is updated and no `CRITICAL: RESEND_WEBHOOK_SECRET is not configured` entries appear in logs.
 - SSE endpoint authenticates via JWT in Authorization header (same as other routes). Connection is tenant-scoped.
 - PostHog event ingestion from microsite uses the public project API key — no backend secret exposure.
 - **GDPR consideration**: Microsite analytics sent to PostHog US region. Acceptable for current tenant (VisionVolve). If EU-resident tenant data flows through the microsite in future, evaluate region migration or dual-project setup.

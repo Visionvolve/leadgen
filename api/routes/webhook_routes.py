@@ -3,12 +3,20 @@
 Handles Resend webhook events for email delivery, opens, clicks,
 bounces, and complaints. Updates EmailSendLog records accordingly.
 
-No authentication required — webhooks come from Resend, not users.
-Optional svix signature verification when RESEND_WEBHOOK_SECRET is configured.
+No user authentication required — webhooks come from Resend, not users.
+Svix signature verification is MANDATORY (fail-closed): if
+``RESEND_WEBHOOK_SECRET`` is missing or the signature does not match,
+the request is rejected with HTTP 401.
+
+There is no dev-bypass path. For local testing, set
+``RESEND_WEBHOOK_SECRET`` in ``.env.dev`` to any value and sign test
+payloads with that same secret (see ``tests/unit/test_webhook_routes.py``
+for the signing helper).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
@@ -22,6 +30,7 @@ from ..models import EmailSendLog, db
 logger = logging.getLogger(__name__)
 
 webhooks_bp = Blueprint("webhooks", __name__, url_prefix="/api/webhooks")
+
 
 # Event type → handler mapping
 SUPPORTED_EVENTS = {
@@ -37,22 +46,37 @@ SUPPORTED_EVENTS = {
 }
 
 
-def _verify_svix_signature(payload_bytes: bytes, headers: dict) -> bool:
+def _verify_svix_signature(payload_bytes: bytes, headers) -> bool:
     """Verify Resend webhook signature using svix HMAC.
 
-    Returns True if signature is valid or if no secret is configured (skip).
-    Returns False if secret is configured but signature is invalid.
+    Fail-closed:
+    - Missing or empty ``RESEND_WEBHOOK_SECRET`` → returns False, logs error.
+    - Missing svix headers → returns False, logs error.
+    - Bad signature → returns False, logs error.
+
+    ``headers`` must be a ``werkzeug.datastructures.Headers`` instance (or
+    any mapping with a case-insensitive ``.get()``). Do NOT pass
+    ``dict(request.headers)`` — that normalizes keys to title case and
+    breaks lowercase lookups like ``.get("svix-id")``.
     """
     secret = os.environ.get("RESEND_WEBHOOK_SECRET", "")
-    if not secret:
-        return True  # No secret configured — skip verification
 
+    if not secret:
+        # Fail-closed: unconfigured secret means we cannot trust any
+        # inbound payload. Previously this returned True (fail-open),
+        # which allowed arbitrary forged events to update metrics.
+        logger.error(
+            "RESEND_WEBHOOK_SECRET not configured — rejecting webhook (fail-closed)"
+        )
+        return False
+
+    # Werkzeug's Headers object is case-insensitive, so lowercase keys work.
     svix_id = headers.get("svix-id", "")
     svix_timestamp = headers.get("svix-timestamp", "")
     svix_signature = headers.get("svix-signature", "")
 
     if not svix_id or not svix_timestamp or not svix_signature:
-        logger.warning("Missing svix headers for webhook verification")
+        logger.error("Resend webhook: missing svix-* headers — rejecting (fail-closed)")
         return False
 
     # Resend/svix signs: "{svix_id}.{svix_timestamp}.{body}"
@@ -60,16 +84,11 @@ def _verify_svix_signature(payload_bytes: bytes, headers: dict) -> bool:
 
     # Secret may have "whsec_" prefix — strip it and base64-decode
     if secret.startswith("whsec_"):
-        import base64
-
         secret_bytes = base64.b64decode(secret[6:])
     else:
         secret_bytes = secret.encode()
 
     expected = hmac.new(secret_bytes, to_sign, hashlib.sha256).digest()
-
-    import base64
-
     expected_b64 = base64.b64encode(expected).decode()
 
     # svix-signature can contain multiple signatures: "v1,<sig1> v1,<sig2>"
@@ -79,7 +98,7 @@ def _verify_svix_signature(payload_bytes: bytes, headers: dict) -> bool:
             if hmac.compare_digest(expected_b64, sig_value):
                 return True
 
-    logger.warning("Svix signature verification failed")
+    logger.error("Resend webhook: svix signature verification failed — rejecting")
     return False
 
 
@@ -124,19 +143,27 @@ def resend_webhook():
         }
     }
 
+    Signature verification is **fail-closed**: requests without a valid
+    svix signature (missing header, bad signature, or unconfigured secret)
+    return 401 so Resend flags the endpoint rather than silently dropping
+    events.
+
     All timestamp columns follow **earliest-observed** semantics: once
     set they are never overwritten by a later webhook delivery. Repeat
     deliveries from Resend's retry queue are therefore idempotent — they
     only bump ``open_count`` / ``click_count``.
 
-    Always returns 200 to prevent Resend from retrying (except for
-    signature failures which return 400 so Resend flags the endpoint).
+    Beyond the 401 signature path, the endpoint always returns 200 to
+    prevent Resend from retrying for business-logic reasons (unknown
+    email_id, unknown event, etc.).
     """
     payload_bytes = request.get_data()
 
-    # Optional signature verification
-    if not _verify_svix_signature(payload_bytes, dict(request.headers)):
-        return jsonify({"error": "Invalid signature"}), 400
+    # Mandatory signature verification (fail-closed). ``request.headers``
+    # is Werkzeug's case-insensitive Headers object — pass it directly,
+    # do NOT wrap with ``dict()``.
+    if not _verify_svix_signature(payload_bytes, request.headers):
+        return jsonify({"error": "Invalid signature"}), 401
 
     body = request.get_json(silent=True)
     if not body:
