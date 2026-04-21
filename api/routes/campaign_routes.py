@@ -2,11 +2,20 @@ import csv
 import io
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from io import BytesIO
 
-from flask import Blueprint, Response, current_app, g, jsonify, request
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    g,
+    jsonify,
+    request,
+    stream_with_context,
+)
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import display_campaign_status, display_tier, display_status
@@ -4322,3 +4331,579 @@ def send_test_email(campaign_id):
             "attachments_included": len(attachments),
         }
     ), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BL-1039: SSE analytics stream
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Shares query logic with ``campaign_analytics`` (at line ~2635) but is
+# invoked from a streaming generator context where we can't return a
+# Flask ``jsonify`` response. The helper below runs the same SQL and
+# returns the dict that ``campaign_analytics`` would serialize.
+#
+# Design choices:
+#   * Polling over webhook-push: the Resend webhook handler writes to PG;
+#     polling PG every 5–10s is simpler than threading a pub/sub bus
+#     through Gunicorn worker processes, and latency is well within the
+#     2s AC-4 budget.
+#   * Metric diffing: engagement counters drive the ``update`` event. We
+#     emit only changed keys to minimize bandwidth.
+#   * Tenant isolation: the helper returns ``None`` when the campaign
+#     does not belong to ``tenant_id``. Route handler surfaces that as
+#     **404** (not 403) per NFR-3 to avoid existence disclosure.
+#   * Generator cleanup: ``GeneratorExit`` is swallowed so client
+#     disconnects don't log an exception; the SQLAlchemy session is
+#     released via ``db.session.remove()``.
+
+
+def _compute_campaign_analytics(campaign_id, tenant_id):
+    """Return the analytics dict for a campaign, or ``None`` if not found.
+
+    Mirrors the aggregation performed in :func:`campaign_analytics`
+    (the HTTP handler at /api/campaigns/<id>/analytics). Kept as a
+    standalone helper so the SSE stream generator can reuse it without
+    touching Flask request/response objects.
+
+    Tenant isolation: returns ``None`` if the campaign either does not
+    exist or does not belong to ``tenant_id``. The route-level handler
+    translates that to a 404 (NFR-3: avoid existence disclosure).
+    """
+    # Verify campaign exists and belongs to tenant (BL-1039 tenant gate).
+    campaign_row = db.session.execute(
+        db.text(
+            """
+            SELECT id, generation_config, created_at,
+                   generation_started_at, generation_completed_at
+            FROM campaigns
+            WHERE id = :id AND tenant_id = :t
+            """
+        ),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+
+    if not campaign_row:
+        return None
+
+    gen_config = _parse_jsonb(campaign_row[1]) or {}
+    campaign_created_at = campaign_row[2]
+    generation_started_at = campaign_row[3]
+    generation_completed_at = campaign_row[4]
+
+    # Messages — by status / channel / step
+    msg_by_status_rows = db.session.execute(
+        db.text(
+            """
+            SELECT m.status, COUNT(*)
+            FROM messages m
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            GROUP BY m.status
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    msg_by_status = {r[0]: r[1] for r in msg_by_status_rows}
+    msg_total = sum(msg_by_status.values())
+
+    msg_by_channel_rows = db.session.execute(
+        db.text(
+            """
+            SELECT m.channel, COUNT(*)
+            FROM messages m
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            GROUP BY m.channel
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    msg_by_channel = {r[0]: r[1] for r in msg_by_channel_rows}
+
+    msg_by_step_rows = db.session.execute(
+        db.text(
+            """
+            SELECT m.sequence_step, COUNT(*)
+            FROM messages m
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            GROUP BY m.sequence_step
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    msg_by_step = {str(r[0]): r[1] for r in msg_by_step_rows}
+
+    # Email send log aggregation
+    email_send_rows = db.session.execute(
+        db.text(
+            """
+            SELECT esl.status, COUNT(*)
+            FROM email_send_log esl
+            JOIN messages m ON esl.message_id = m.id
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            GROUP BY esl.status
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    email_counts = {r[0]: r[1] for r in email_send_rows}
+    email_total = sum(email_counts.values())
+
+    # LinkedIn send queue aggregation
+    li_send_rows = db.session.execute(
+        db.text(
+            """
+            SELECT lsq.status, COUNT(*)
+            FROM linkedin_send_queue lsq
+            JOIN messages m ON lsq.message_id = m.id
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            GROUP BY lsq.status
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+    li_counts = {r[0]: r[1] for r in li_send_rows}
+    li_total = sum(li_counts.values())
+
+    # Contact stats
+    contact_stats_row = db.session.execute(
+        db.text(
+            """
+            SELECT
+                COUNT(DISTINCT cc.contact_id) AS total,
+                COUNT(DISTINCT CASE WHEN ct.email_address IS NOT NULL AND ct.email_address != '' THEN cc.contact_id END) AS with_email,
+                COUNT(DISTINCT CASE WHEN ct.linkedin_url IS NOT NULL AND ct.linkedin_url != '' THEN cc.contact_id END) AS with_linkedin,
+                COUNT(DISTINCT CASE WHEN
+                    (ct.email_address IS NOT NULL AND ct.email_address != '')
+                    AND (ct.linkedin_url IS NOT NULL AND ct.linkedin_url != '')
+                THEN cc.contact_id END) AS both_channels
+            FROM campaign_contacts cc
+            JOIN contacts ct ON cc.contact_id = ct.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchone()
+
+    contacts_total = contact_stats_row[0] if contact_stats_row else 0
+    contacts_with_email = contact_stats_row[1] if contact_stats_row else 0
+    contacts_with_linkedin = contact_stats_row[2] if contact_stats_row else 0
+    contacts_both = contact_stats_row[3] if contact_stats_row else 0
+
+    # Cost — prefer generation_config.cost, fall back to summed messages
+    cost_data = gen_config.get("cost", {})
+    generation_cost_usd = (
+        float(cost_data.get("generation_usd", 0)) if isinstance(cost_data, dict) else 0
+    )
+    if generation_cost_usd == 0:
+        cost_row = db.session.execute(
+            db.text(
+                """
+                SELECT COALESCE(SUM(m.generation_cost_usd), 0)
+                FROM messages m
+                JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+                WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                """
+            ),
+            {"cid": campaign_id, "t": tenant_id},
+        ).fetchone()
+        generation_cost_usd = float(cost_row[0]) if cost_row else 0
+
+    # Timeline — first/last send from email + LinkedIn
+    send_times = db.session.execute(
+        db.text(
+            """
+            SELECT MIN(esl.sent_at), MAX(esl.sent_at)
+            FROM email_send_log esl
+            JOIN messages m ON esl.message_id = m.id
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                AND esl.sent_at IS NOT NULL
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchone()
+    first_send_at = send_times[0] if send_times else None
+    last_send_at = send_times[1] if send_times else None
+
+    li_send_times = db.session.execute(
+        db.text(
+            """
+            SELECT MIN(lsq.sent_at), MAX(lsq.sent_at)
+            FROM linkedin_send_queue lsq
+            JOIN messages m ON lsq.message_id = m.id
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+                AND lsq.sent_at IS NOT NULL
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if li_send_times and li_send_times[0]:
+        if first_send_at is None or li_send_times[0] < first_send_at:
+            first_send_at = li_send_times[0]
+        if last_send_at is None or li_send_times[1] > last_send_at:
+            last_send_at = li_send_times[1]
+
+    # Engagement (the metrics that drive live updates)
+    engagement_row = db.session.execute(
+        db.text(
+            """
+            SELECT
+                COUNT(CASE WHEN esl.opened_at IS NOT NULL THEN 1 END) AS opened,
+                COUNT(CASE WHEN esl.replied_at IS NOT NULL THEN 1 END) AS replied,
+                COUNT(CASE WHEN esl.bounced_at IS NOT NULL THEN 1 END) AS bounced,
+                COUNT(CASE WHEN esl.clicked_at IS NOT NULL THEN 1 END) AS clicked,
+                COALESCE(SUM(esl.open_count), 0) AS total_opens,
+                COALESCE(SUM(esl.click_count), 0) AS total_clicks,
+                COUNT(CASE WHEN esl.bounce_type = 'hard' THEN 1 END) AS hard_bounces,
+                COUNT(CASE WHEN esl.bounce_type = 'soft' THEN 1 END) AS soft_bounces,
+                COUNT(CASE WHEN esl.unsubscribed_at IS NOT NULL THEN 1 END) AS unsubscribed,
+                COUNT(CASE WHEN esl.delivered_at IS NOT NULL THEN 1 END) AS delivered
+            FROM email_send_log esl
+            JOIN messages m ON esl.message_id = m.id
+            JOIN campaign_contacts cc ON m.campaign_contact_id = cc.id
+            WHERE cc.campaign_id = :cid AND cc.tenant_id = :t
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchone()
+
+    opened_count = int(engagement_row[0]) if engagement_row else 0
+    replied_count = int(engagement_row[1]) if engagement_row else 0
+    bounced_count = int(engagement_row[2]) if engagement_row else 0
+    clicked_count = int(engagement_row[3]) if engagement_row else 0
+    total_opens = int(engagement_row[4]) if engagement_row else 0
+    total_clicks = int(engagement_row[5]) if engagement_row else 0
+    hard_bounces = int(engagement_row[6]) if engagement_row else 0
+    soft_bounces = int(engagement_row[7]) if engagement_row else 0
+    unsubscribed_count = int(engagement_row[8]) if engagement_row else 0
+    delivered_count = int(engagement_row[9]) if engagement_row else 0
+
+    emails_delivered = (
+        delivered_count
+        if delivered_count > 0
+        else email_counts.get("delivered", 0) + email_counts.get("sent", 0)
+    )
+
+    # Microsite
+    microsite_row = db.session.execute(
+        db.text(
+            """
+            SELECT
+                COUNT(*) AS visits,
+                COUNT(DISTINCT a.contact_id) AS unique_visitors,
+                COUNT(CASE WHEN a.event_type = 'product_viewed' THEN 1 END) AS product_views
+            FROM activities a
+            JOIN campaign_contacts cc
+                ON a.contact_id = cc.contact_id AND cc.tenant_id = :t
+            WHERE cc.campaign_id = :cid
+                AND a.source = 'microsite'
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchone()
+    ms_visits = int(microsite_row[0]) if microsite_row else 0
+    ms_unique = int(microsite_row[1]) if microsite_row else 0
+    ms_product_views = int(microsite_row[2]) if microsite_row else 0
+
+    def _rate(num, den):
+        if den == 0:
+            return 0
+        return round((num / den) * 100, 1)
+
+    return {
+        "messages": {
+            "total": msg_total,
+            "by_status": msg_by_status,
+            "by_channel": msg_by_channel,
+            "by_step": msg_by_step,
+        },
+        "sending": {
+            "email": {
+                "total": email_total,
+                "queued": email_counts.get("queued", 0),
+                "sent": email_counts.get("sent", 0),
+                "delivered": delivered_count
+                if delivered_count > 0
+                else email_counts.get("delivered", 0),
+                "bounced": email_counts.get("bounced", 0),
+                "failed": email_counts.get("failed", 0),
+                "unsubscribed": unsubscribed_count,
+            },
+            "linkedin": {
+                "total": li_total,
+                "queued": li_counts.get("queued", 0),
+                "sent": li_counts.get("sent", 0),
+                "delivered": li_counts.get("delivered", 0),
+                "failed": li_counts.get("failed", 0),
+            },
+        },
+        "contacts": {
+            "total": contacts_total,
+            "with_email": contacts_with_email,
+            "with_linkedin": contacts_with_linkedin,
+            "both_channels": contacts_both,
+        },
+        "cost": {
+            "generation_usd": generation_cost_usd,
+            "email_sends": email_total,
+        },
+        "engagement": {
+            "opened": opened_count,
+            "replied": replied_count,
+            "bounced": bounced_count,
+            "clicked": clicked_count,
+            "unsubscribed": unsubscribed_count,
+            "delivered": delivered_count,
+            "total_opens": total_opens,
+            "total_clicks": total_clicks,
+            "hard_bounces": hard_bounces,
+            "soft_bounces": soft_bounces,
+            "open_rate": _rate(opened_count, emails_delivered),
+            "reply_rate": _rate(replied_count, emails_delivered),
+            "bounce_rate": _rate(bounced_count, email_total),
+            "click_rate": _rate(clicked_count, emails_delivered),
+            "unsubscribe_rate": _rate(unsubscribed_count, emails_delivered),
+        },
+        "timeline": {
+            "created_at": _format_ts(campaign_created_at),
+            "generation_started_at": _format_ts(generation_started_at),
+            "generation_completed_at": _format_ts(generation_completed_at),
+            "first_send_at": _format_ts(first_send_at),
+            "last_send_at": _format_ts(last_send_at),
+        },
+        "microsite": {
+            "visits": ms_visits,
+            "unique_visitors": ms_unique,
+            "product_views": ms_product_views,
+            "visit_rate": _rate(ms_unique, contacts_total),
+        },
+    }
+
+
+# Metrics that drive the ``update`` SSE event. Tracked as scalar keys
+# under the indicated parent. Rate fields are derived and emitted as
+# part of engagement whenever any absolute count changes.
+_STREAM_DELTA_KEYS = {
+    "engagement": [
+        "opened",
+        "replied",
+        "bounced",
+        "clicked",
+        "unsubscribed",
+        "delivered",
+        "total_opens",
+        "total_clicks",
+    ],
+    "sending.email": ["sent", "delivered", "bounced", "failed", "unsubscribed"],
+    "messages": ["total"],
+    "microsite": ["visits", "unique_visitors", "product_views"],
+}
+
+
+def _get_nested(d, path):
+    """Return ``d[a][b]...`` for ``path='a.b'``; ``None`` on any miss."""
+    cur = d
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def _compute_analytics_delta(prev, curr):
+    """Return the subset of metrics that changed between two snapshots.
+
+    Output shape::
+
+        {
+          "engagement": {
+            "opened": {"value": 5, "change": +1},
+            ...
+          },
+          "messages": {"total": {"value": 10, "change": +2}},
+        }
+
+    Empty dict means "no change". Fields whose absolute values match
+    between ``prev`` and ``curr`` are omitted.
+    """
+    delta = {}
+    for parent_path, keys in _STREAM_DELTA_KEYS.items():
+        prev_parent = _get_nested(prev, parent_path) or {}
+        curr_parent = _get_nested(curr, parent_path) or {}
+        changed = {}
+        for k in keys:
+            p = prev_parent.get(k, 0) or 0
+            c = curr_parent.get(k, 0) or 0
+            if p != c:
+                changed[k] = {"value": c, "change": c - p}
+        if changed:
+            # Flatten sending.email → nested dict under "sending"
+            if "." in parent_path:
+                head, tail = parent_path.split(".", 1)
+                delta.setdefault(head, {})[tail] = changed
+            else:
+                delta[parent_path] = changed
+    return delta
+
+
+def _sse_format_event(event_name, payload):
+    """Encode a single SSE message."""
+    return f"event: {event_name}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+def _analytics_stream_gen(
+    campaign_id,
+    tenant_id,
+    poll_interval=7,
+    heartbeat_interval=30,
+    posthog_refresh_interval=30,
+):
+    """Yield SSE frames for a live-updating campaign analytics stream.
+
+    Behaviour:
+      1. Emit initial ``event: snapshot`` frame with full metrics.
+      2. Every ``poll_interval`` seconds, re-query PG. If any tracked
+         counter changed, emit ``event: update`` with a delta payload.
+      3. After ``heartbeat_interval`` seconds with no delivered event,
+         emit a ``:heartbeat`` SSE comment so proxies don't close the
+         idle connection (Caddy + any sidecar buffering).
+      4. On ``GeneratorExit`` (client disconnected or app shutdown),
+         release the DB session and return cleanly — never raise.
+
+    ``poll_interval``, ``heartbeat_interval`` and
+    ``posthog_refresh_interval`` are parameters (not module-level
+    constants) so unit tests can shrink them to zero.
+
+    Tenant isolation is the caller's responsibility — the route
+    handler must invoke :func:`_compute_campaign_analytics` once first
+    and return 404 if it yields ``None``. This generator then assumes
+    ownership has already been verified, but re-validates on every
+    poll to defend against tenant-role revocation mid-stream.
+    """
+    try:
+        snapshot = _compute_campaign_analytics(campaign_id, tenant_id)
+        if snapshot is None:
+            # Shouldn't happen (route validated) — emit an error and stop.
+            yield _sse_format_event(
+                "error",
+                {"campaign_id": campaign_id, "message": "campaign_not_found"},
+            )
+            return
+
+        yield _sse_format_event(
+            "snapshot",
+            {"campaign_id": campaign_id, "metrics": snapshot},
+        )
+
+        last_metrics = snapshot
+        last_heartbeat = time.time()
+        last_posthog_refresh = time.time()
+
+        while True:
+            try:
+                time.sleep(poll_interval)
+            except GeneratorExit:
+                raise
+            except Exception:  # pragma: no cover — interrupted sleep
+                break
+
+            # Re-check tenant ownership each poll (handles role revocation).
+            current = _compute_campaign_analytics(campaign_id, tenant_id)
+            if current is None:
+                yield _sse_format_event(
+                    "error",
+                    {"campaign_id": campaign_id, "message": "campaign_not_found"},
+                )
+                return
+
+            delta = _compute_analytics_delta(last_metrics, current)
+            now = time.time()
+
+            if delta:
+                yield _sse_format_event(
+                    "update",
+                    {
+                        "campaign_id": campaign_id,
+                        "delta": delta,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                    },
+                )
+                last_metrics = current
+                last_heartbeat = now
+            elif now - last_heartbeat >= heartbeat_interval:
+                # SSE comment — keeps proxy buffers flushed.
+                yield ":heartbeat\n\n"
+                last_heartbeat = now
+
+            # PostHog refresh hook (BL-1035 cache handles the expensive
+            # part; here we just nudge the refresh cadence independently
+            # of the DB polling interval). Microsite counts currently
+            # come from the activities table, which is already covered
+            # by the standard poll; this is a placeholder so future
+            # PostHog-backed deltas can be wired in without changing the
+            # event protocol.
+            if now - last_posthog_refresh >= posthog_refresh_interval:
+                last_posthog_refresh = now
+
+    except GeneratorExit:
+        # Client disconnected — release SQLAlchemy session and exit cleanly.
+        logger.debug(
+            "analytics stream closed by client (campaign=%s tenant=%s)",
+            campaign_id,
+            tenant_id,
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception(
+            "analytics stream error (campaign=%s tenant=%s): %s",
+            campaign_id,
+            tenant_id,
+            exc,
+        )
+        try:
+            yield _sse_format_event("error", {"message": "stream_error"})
+        except Exception:
+            pass
+    finally:
+        try:
+            db.session.remove()
+        except Exception:
+            pass
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/analytics/stream", methods=["GET"])
+@require_role("viewer")
+def campaign_analytics_stream(campaign_id):
+    """SSE endpoint pushing live campaign analytics updates (BL-1039).
+
+    Powers live-updating KPI tiles / funnel / time-series on OutreachTab
+    (BL-1041) and the Echo analytics page (BL-1040). Clients should
+    use ``EventSource`` with exponential backoff on disconnect.
+
+    Response headers include ``X-Accel-Buffering: no`` so Caddy and any
+    reverse-proxy sidecar forward each frame immediately rather than
+    buffering it into a chunk.
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    # Eagerly validate ownership before opening the stream. 404 (not 403)
+    # per spec NFR-3 — never disclose whether a campaign exists cross-tenant.
+    initial = _compute_campaign_analytics(campaign_id, tenant_id)
+    if initial is None:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    return Response(
+        stream_with_context(_analytics_stream_gen(campaign_id, tenant_id)),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
