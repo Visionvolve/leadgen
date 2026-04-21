@@ -156,200 +156,84 @@ class TestTemplateIntegrity:
 
 
 class TestFeaturedActsGrid:
-    """Tests for the 2x2 thumbnail grid section."""
+    """Tests for the v4-approved hardcoded 2x2 thumbnail grid.
 
-    SAMPLE_ACTS = [
-        {
-            "name": "Complicité",
-            "slug": "complicite",
-            "image_url": "https://booking.loserscirque.cz/api/media/file/complicite-01.jpg",
-            "category": "performances",
-        },
-        {
-            "name": "Glamour in Red",
-            "slug": "glamour-in-red",
-            "image_url": "https://booking.loserscirque.cz/api/media/file/glamour-01.jpg",
-            "category": "animations",
-        },
-        {
-            "name": "Onyx",
-            "slug": "onyx",
-            "image_url": "https://booking.loserscirque.cz/api/media/file/onyx-01.jpg",
-            "category": "performances",
-        },
-    ]
+    The v4 template hardcodes the 4 featured acts (Complicité, Glamour in
+    Red, Aerial Hoop — Armagedon, Onyx). All thumbnail cards link to
+    ``{{microsite_link}}`` (partner home) rather than per-slug detail
+    pages — this keeps the template simple and avoids the per-slug URL
+    complexity for the 357-partner send.
+    """
 
-    def test_empty_featured_acts_renders_without_thumbnail_section(self):
-        """If featured_acts=[], no empty table/placeholder leaks into output."""
-        _, html, plain = render_eventfest_email(
+    # The four hardcoded thumbnail URLs — part of the v4 contract.
+    EXPECTED_THUMBNAIL_URLS = (
+        "https://booking.loserscirque.cz/api/media/file/01-2-768x512.jpg",
+        "https://booking.loserscirque.cz/api/media/file/01-11-768x512.jpg",
+        "https://booking.loserscirque.cz/api/media/file/40_1-768x512.jpg",
+        "https://booking.loserscirque.cz/api/media/file/01-17-768x512.jpg",
+    )
+    EXPECTED_THUMBNAIL_CAPTIONS = (
+        "Complicité",
+        "Glamour in Red",
+        "Aerial Hoop — Armagedon",
+        "Onyx",
+    )
+
+    def test_hardcoded_thumbnails_render_regardless_of_featured_acts_kwarg(self):
+        """Thumbnails are hardcoded — not affected by featured_acts kwarg."""
+        _, html, _ = render_eventfest_email(
             "Jano",
             "https://booking.loserscirque.cz/invite/tok",
-            recipient_token="tok",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=[],
+            featured_acts=[],  # Ignored by v4 template
         )
-        assert "{{featured_acts_section}}" not in html
-        assert "{{featured_acts_plain}}" not in plain
-        # No placeholder <img> or grid table should appear
-        assert "/cs/performances/" not in html
-        assert "/cs/animations/" not in html
-        # Plain text should not contain the acts header
-        assert "Vybraná vystoupení" not in plain
+        for url in self.EXPECTED_THUMBNAIL_URLS:
+            assert url in html, f"missing hardcoded thumbnail {url!r}"
 
-    def test_none_featured_acts_renders_without_thumbnail_section(self):
+    def test_none_featured_acts_still_renders_hardcoded_thumbnails(self):
         _, html, _ = render_eventfest_email(
             "Jano",
             "https://example.com/invite/tok",
-            recipient_token="tok",
-            site_url="https://booking.loserscirque.cz",
             featured_acts=None,
         )
-        assert "{{featured_acts_section}}" not in html
-        assert "/cs/performances/" not in html
+        # v4: thumbnails are hardcoded, so they render even with None
+        for url in self.EXPECTED_THUMBNAIL_URLS:
+            assert url in html
 
-    def test_html_contains_img_for_each_act(self):
+    def test_html_contains_four_thumbnail_images(self):
         _, html, _ = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="abc123",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=self.SAMPLE_ACTS,
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
         )
-        # One <img> per entry
-        assert html.count("<img ") == len(self.SAMPLE_ACTS)
-        # Each image URL appears
-        for act in self.SAMPLE_ACTS:
-            assert act["image_url"] in html
-        # Each act name appears as caption
-        for act in self.SAMPLE_ACTS:
-            assert act["name"] in html
+        for url in self.EXPECTED_THUMBNAIL_URLS:
+            assert url in html
+        for caption in self.EXPECTED_THUMBNAIL_CAPTIONS:
+            assert caption in html
 
-    def test_each_link_contains_recipient_token_query_param(self):
+    def test_thumbnail_cards_link_to_microsite_link(self):
+        """All 4 thumbnail <a href> resolve to microsite_link, not detail pages."""
         _, html, _ = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="abc123",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=self.SAMPLE_ACTS,
+            "Jano", "https://booking.loserscirque.cz/invite/tok-abc"
         )
-        # Count hrefs that include the token query param
-        token_href_count = html.count("?t=abc123")
-        assert token_href_count == len(self.SAMPLE_ACTS)
+        # microsite_link should appear many times (logo, wordmark, 4 thumbs,
+        # CTA mso, CTA non-mso, nabidce-link). At least the 4 thumb links.
+        assert html.count("https://booking.loserscirque.cz/invite/tok-abc") >= 8
+        # No legacy per-slug detail-page hrefs bleed through
+        assert "/cs/performances/complicite?t=" not in html
+        assert "/cs/animations/glamour-in-red?t=" not in html
 
-    def test_links_point_to_detail_pages_not_invite_route(self):
-        _, html, _ = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="abc123",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=self.SAMPLE_ACTS,
-        )
-        # Detail page URLs, not /invite/{token} — the ?t mechanism is
-        # additive on the detail page.
-        assert (
-            'href="https://booking.loserscirque.cz/cs/performances/complicite?t=abc123"'
-            in html
-        )
-        assert (
-            'href="https://booking.loserscirque.cz/cs/animations/glamour-in-red?t=abc123"'
-            in html
-        )
-        assert (
-            'href="https://booking.loserscirque.cz/cs/performances/onyx?t=abc123"'
-            in html
-        )
-
-    def test_site_url_trailing_slash_is_normalised(self):
-        _, html, _ = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="xyz",
-            site_url="https://booking.loserscirque.cz/",
-            featured_acts=[self.SAMPLE_ACTS[0]],
-        )
-        # No double slash in the constructed URL
-        assert "cz//cs/performances" not in html
-        assert (
-            "https://booking.loserscirque.cz/cs/performances/complicite?t=xyz"
-            in html
-        )
-
-    def test_caps_at_four_acts(self):
-        five_acts = self.SAMPLE_ACTS + [
-            {
-                "name": "Aerial silk Armagedon",
-                "slug": "aerial-silk-armagedon",
-                "image_url": "https://x/a.jpg",
-                "category": "performances",
-            },
-            {
-                "name": "Fifth Act",
-                "slug": "fifth",
-                "image_url": "https://x/5.jpg",
-                "category": "performances",
-            },
-        ]
-        _, html, _ = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="tok",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=five_acts,
-        )
-        assert html.count("<img ") == 4
-        assert "Fifth Act" not in html
-
-    def test_plain_text_lists_acts_with_urls(self):
+    def test_plain_text_lists_all_four_acts(self):
         _, _, plain = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="abc123",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=self.SAMPLE_ACTS,
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
         )
-        assert "Vybraná vystoupení" in plain
-        for act in self.SAMPLE_ACTS:
-            # Each name appears in the bullet list
-            assert f"- {act['name']}:" in plain
-        # Each URL appears with the token
-        assert (
-            "https://booking.loserscirque.cz/cs/performances/complicite?t=abc123"
-            in plain
-        )
-        assert (
-            "https://booking.loserscirque.cz/cs/animations/glamour-in-red?t=abc123"
-            in plain
-        )
+        for caption in self.EXPECTED_THUMBNAIL_CAPTIONS:
+            assert caption in plain
 
     def test_plain_text_no_html_tags_in_acts(self):
         _, _, plain = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="abc123",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=self.SAMPLE_ACTS,
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
         )
         assert "<img" not in plain
         assert "<a " not in plain
         assert "<table" not in plain
-
-    def test_default_category_is_performances(self):
-        """If caller omits 'category', default to performances."""
-        acts = [
-            {
-                "name": "Onyx",
-                "slug": "onyx",
-                "image_url": "https://x.jpg",
-            }
-        ]
-        _, html, _ = render_eventfest_email(
-            "Jano",
-            "https://example.com/invite/tok",
-            recipient_token="t",
-            site_url="https://booking.loserscirque.cz",
-            featured_acts=acts,
-        )
-        assert "/cs/performances/onyx?t=t" in html
 
     def test_backwards_compat_no_featured_acts_kwarg(self):
         """Existing callers that pass only (name, microsite_link) still work."""
@@ -361,6 +245,75 @@ class TestFeaturedActsGrid:
         assert "}}" not in html
         assert "{{" not in plain
         assert "}}" not in plain
+
+    def test_backwards_compat_recipient_token_and_site_url_accepted(self):
+        """Legacy callers that pass recipient_token/site_url don't crash."""
+        subject, html, _ = render_eventfest_email(
+            "Jano",
+            "https://booking.loserscirque.cz/invite/tok",
+            recipient_token="abc123",
+            site_url="https://booking.loserscirque.cz",
+            featured_acts=[
+                {
+                    "name": "ignored",
+                    "slug": "ignored",
+                    "image_url": "https://x/ignored.jpg",
+                }
+            ],
+        )
+        # v4 template ignores these — hardcoded thumbs still present
+        assert subject == EVENTFEST_SUBJECT
+        assert "ignored" not in html
+
+
+class TestV4BrandContract:
+    """Tests that pin down the v4-approved visual/brand contract.
+
+    These two tests are the canary for the rich template — if they fail
+    we're rendering the plain minimal template again.
+    """
+
+    def test_eventfest_template_contains_logo_and_wordmark(self):
+        """Rendered HTML must contain the circular logo + LOSERS CIRQUE wordmark."""
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
+        )
+        assert (
+            "https://booking.loserscirque.cz/images/lcc-logo-2025.png" in html
+        ), "logo image URL missing"
+        assert "LOSERS" in html, "LOSERS wordmark missing"
+        assert "CIRQUE" in html, "CIRQUE wordmark missing"
+        # Deep blue header band colour present
+        assert "#0A0066" in html, "deep-blue brand colour missing"
+        # Red accent present
+        assert "#FF0000" in html, "red accent/CTA colour missing"
+
+    def test_eventfest_template_contains_4_thumbnails(self):
+        """Rendered HTML must contain all 4 hardcoded thumbnail URLs."""
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
+        )
+        required = (
+            "https://booking.loserscirque.cz/api/media/file/01-2-768x512.jpg",
+            "https://booking.loserscirque.cz/api/media/file/01-11-768x512.jpg",
+            "https://booking.loserscirque.cz/api/media/file/40_1-768x512.jpg",
+            "https://booking.loserscirque.cz/api/media/file/01-17-768x512.jpg",
+        )
+        for url in required:
+            assert url in html, f"missing thumbnail URL {url!r}"
+        # CTA button text
+        assert "Prohlédněte si celou nabídku" in html
+
+    def test_eventfest_template_contains_signature_block(self):
+        """Signature block with Hana's contact details is present."""
+        _, html, _ = render_eventfest_email(
+            "Jano", "https://booking.loserscirque.cz/invite/tok"
+        )
+        assert "Hana Faková" in html
+        assert "Event Producer" in html
+        assert "+420 737 853 490" in html
+        assert "hana@unitedarts.cz" in html
+        assert "www.loserscirque.cz" in html
 
 
 # NOTE: tests for get_or_create_invite moved to tests/unit/test_microsite_invites.py
