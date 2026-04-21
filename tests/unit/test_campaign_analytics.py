@@ -9,7 +9,6 @@ from api.models import (
     EmailSendLog,
     LinkedInSendQueue,
     Message,
-    Owner,
 )
 from tests.conftest import auth_header
 
