@@ -261,6 +261,42 @@ users ── user_tenant_roles ── tenants
      └── oauth_connections (per-user, per-provider)
 ```
 
+## Campaign Analytics
+
+Delivered in Sprint 24 (BL-1043). See ADR-010 for the decision record; this section covers operational detail.
+
+**Data source split**:
+- **Email events** (sent, delivered, opened, clicked) — our DB, `email_send_log` table, populated by Resend webhook (`api/routes/webhook_routes.py`). `kind` column excludes previews; `superseded_at` marks retries so each recipient is counted once.
+- **Microsite engagement** (visits, CTA clicks, conversions) — PostHog HogQL Query API (`https://us.i.posthog.com`). We never mirror microsite events into our DB.
+- **Attribution**: microsite links carry `?utm_campaign=<campaign_short_id>&utm_source=leadgen`; HogQL filters on `properties.$current_url`.
+
+**Key endpoints** (all tenant-scoped via `X-Namespace` + JWT):
+- `GET /api/campaigns/:id/analytics` — legacy combined response, shares `_compute_campaign_analytics` helper with the split endpoints
+- `GET /api/campaigns/:id/analytics/timeseries` — daily series from `email_send_log`
+- `GET /api/campaigns/:id/analytics/microsite` — PostHog microsite metrics
+- `GET /api/campaigns/:id/analytics/stream` — SSE stream
+
+**SSE stream lifecycle** (`/analytics/stream`):
+1. On connect → emit `snapshot` event with full current state
+2. Every 10s → emit `update` event if metrics changed
+3. Every 30s → emit `heartbeat` to keep proxies alive
+4. On client disconnect → generator exits cleanly, DB session released
+
+**Tenant isolation guarantee**: unknown or cross-tenant campaign IDs return **404, never 403** — we do not leak existence of another tenant's resources via authz error codes.
+
+**PostHog degraded behavior**: provider 5xx, timeout, or malformed JSON is caught and returned as `microsite_metrics: {visits: 0, cta_clicks: 0, conversion_rate: 0, posthog_available: false}` with HTTP 200. The funnel UI renders a partial view plus a "Microsite data unavailable" notice instead of failing the whole analytics tab.
+
+**Secrets** (1Password):
+- `op://visionvolve-prod/PostHog - leadgen-pipeline/project_api_key`
+- `op://visionvolve-prod/PostHog - leadgen-pipeline/personal_api_key`
+- `op://visionvolve-prod/Resend - leadgen-pipeline/webhook_secret`
+
+**Log lines to grep** (ops/oncall):
+- `posthog: query failed` — PostHog provider error (degraded response served)
+- `webhook: rejected — invalid svix signature` — fail-closed Resend rejection (BL-1034)
+- `analytics/stream: client disconnected` — expected on tab close, not an error
+- `deploy: image tag mismatch` — staging pipeline refused to restart container (BL-1046)
+
 ## Deployment
 
 | Component | Deploy Command | Container |
