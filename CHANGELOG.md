@@ -4,7 +4,30 @@ All notable changes to the Leadgen Pipeline project.
 
 ## [Unreleased]
 
+### Added
+- **Campaign Analytics v1** (Sprint 24): funnel + time-series + microsite engagement in a single view with live SSE updates. New endpoints under `/api/campaigns/:id/analytics/`:
+  - `GET /timeseries` — per-day email-lifecycle counts from `email_send_log` (BL-1037, PR #158)
+  - `GET /microsite` — visits, CTA clicks, conversion rate from PostHog HogQL Query API (BL-1038, PR #157)
+  - `GET /stream` — Server-Sent Events: `snapshot` on connect, `update` every 10s, `heartbeat` every 30s (BL-1039, PR #156)
+  - PostHog backend integration with US region (`https://us.i.posthog.com`), graceful degradation on provider failure (BL-1035, PR #153)
+  - Microsite link builder now stamps `?utm_campaign=<short_id>&utm_source=leadgen` so PostHog events attribute back to the campaign (BL-1036a, PR #155)
+- **Deploy skill integration** — `.claude/deploy.yml` wires the `/deploy` skill to this repo's staging pipeline (PR #148).
+
+### Changed
+- **`email_send_log` schema**: added `kind` column (preview | send | retry — excludes previews from analytics, BL-1026, PR #152) and `superseded_at` column (marks earlier attempts after a successful retry so the funnel counts each recipient once, BL-1029, PR #154).
+- **Legacy `/api/campaigns/:id/analytics` endpoint** refactored to share `_compute_campaign_analytics` helper with the new split endpoints. Existing dashboards unaffected.
+
 ### Fixed
+- **Resend webhook timestamp semantics** (BL-1028, PR #149): earliest-observed semantics for `delivered_at`, `opened_at`, `clicked_at` so retries never overwrite real engagement with later send timestamps.
+- **Staging deploy silent-no-op** (BL-1046, PR #151): GHCR org drift made the pipeline pull a stale image and report success; now fails loudly and verifies the expected image tag before restarting the container.
+- **Werkzeug header case bug** in svix signature verification path (BL-1034).
+
+### Security
+- **Fail-closed Resend webhook verification** (BL-1034, PR #150): requests without a valid svix signature header are rejected with 401, never silently accepted. Previous behavior logged and accepted on missing secret.
+- **PostHog credentials** stored in 1Password (`op://visionvolve-prod/PostHog - leadgen-pipeline/*`), never in the repo.
+- **PostHog JSON error handling**: malformed responses return zeroed microsite metrics + `posthog_available: false` flag rather than propagating raw provider errors to the UI.
+
+### Fixed (pre-Sprint-24 items still Unreleased)
 - **Resend webhook tracking** (BL-1028): `email_send_log.opened_at` / `clicked_at` / `delivered_at` / `bounced_at` / `complained_at` / `unsubscribed_at` were being overwritten on duplicate webhook deliveries (or silently populated with wall-clock time rather than the Resend event time). All timestamp columns now follow **earliest-observed** semantics — a duplicate webhook never shifts a set timestamp. The handler also now parses the payload's top-level `created_at` so the persisted time matches the real engagement moment. Lookup is deterministic under pathological multi-tenant `resend_message_id` collisions (orders by `sent_at`). Unmatched `email_id` logs at WARNING level so production log dashboards surface the problem. Runbook added to `docs/ARCHITECTURE.md` for the "opens stay NULL" triage path.
 - **Preview Pollution in Campaign Analytics** (BL-1026): Added `kind` column to `email_send_log` (values: `production`/`preview`) — the `send-test` endpoint now tags rows `kind='preview'` and campaign analytics (`/api/campaigns/:id/analytics`, `/recipients`) filter preview rows out of sending/engagement/timeline rollups by default. Preview rows are retained for audit. Migration 062.
 - **Triage Estimate Rejected** (BL-228): Added `triage` to valid enrichment stages so the estimate endpoint accepts it

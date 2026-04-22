@@ -564,3 +564,31 @@ Unresolved items needing sponsor or EM input during plan phase:
 - Microsite ingest (deprecated for reads): `api/routes/tracking_routes.py:86-200` (commit `256d531`)
 - Cost display rule: MEMORY.md — "Cost Display Rules"
 - Copy discipline: `docs/vision/index.html` — "Never show harsh/judgmental language about prospects or companies"
+
+---
+
+## 13. Sprint 24 delivery
+
+Merged PRs (in order onto `staging`):
+
+| PR | Commit | Backlog item | What it delivered |
+|----|--------|--------------|-------------------|
+| #148 | `f1a795f` | (chore) | `.claude/deploy.yml` for `/deploy` skill integration |
+| #149 | `521acfc` | BL-1028 | Earliest-observed semantics for Resend webhook timestamps |
+| #150 | `738c1e7` | BL-1034 | Fail-closed Resend webhook signature verification |
+| #151 | `faffa2e` | BL-1046 | Staging deploy loud-failure + image-tag verification |
+| #152 | `aae93dc` | BL-1026 | `kind` column on `email_send_log`, excludes previews from analytics |
+| #153 | `5436689` | BL-1035 | PostHog backend integration (US region, HogQL) |
+| #154 | `a641bfa` | BL-1029 | `superseded_at` column; mark earlier attempts after successful retry |
+| #155 | `1e4d59a` | BL-1036a | Campaign attribution URL params on microsite links |
+| #156 | `431e639` | BL-1039 | SSE `/analytics/stream` endpoint |
+| #157 | `020eae7` | BL-1038 | `/analytics/microsite` endpoint |
+| #158 | `8a070b8` | BL-1037 | `/analytics/timeseries` endpoint |
+
+**Resolved open questions**: hero KPI locked as CTR (§10), PostHog region = US (§5.5), reply tracking scoped out to BL-1044 (§9).
+
+**Deferred**:
+- **BL-1036 part B** — in-app deep-link attribution beyond URL params (e.g., persisted per-session attribution across microsite subpages).
+- **BL-1044** — Gmail integration for reply-rate signal. Reply-rate tile still renders `—` + "Connect Gmail" CTA.
+- **BL-1045** — Resend historical backfill for campaigns sent before BL-1028's webhook-secret hardening landed.
+
