@@ -10,6 +10,7 @@ import {
   type CampaignRecipient,
   type RecipientTimelineEvent,
 } from '../../../api/queries/useCampaigns'
+import { useCampaignAnalyticsStream } from '../../../api/hooks/useCampaignAnalyticsStream'
 import { useToast } from '../../../components/ui/Toast'
 import { Modal } from '../../../components/ui/Modal'
 import { SectionDivider } from '../../../components/ui/DetailField'
@@ -98,7 +99,17 @@ export function OutreachTab({ campaign }: Props) {
   const { toast } = useToast()
   const sendEmails = useSendEmails()
   const queueLinkedIn = useQueueLinkedIn()
-  const { data: analytics, isLoading: analyticsLoading } = useCampaignAnalytics(campaign.id)
+  // Live SSE stream (BL-1039). The polling query is kept as a fallback
+  // and is disabled while the stream is open so we don't hammer the API
+  // with redundant requests. If the stream drops, `enabled` flips back
+  // to true and the 10s cadence resumes automatically.
+  const { metrics: streamMetrics, connected: streamConnected } =
+    useCampaignAnalyticsStream<CampaignAnalyticsData>(campaign.id)
+  const { data: polledAnalytics, isLoading: analyticsLoading } = useCampaignAnalytics(
+    campaign.id,
+    !streamConnected,
+  )
+  const analytics = streamMetrics ?? polledAnalytics
 
   // Confirmation dialog state
   const [confirmAction, setConfirmAction] = useState<'email' | 'linkedin' | null>(null)
@@ -181,10 +192,12 @@ export function OutreachTab({ campaign }: Props) {
     <div className="max-w-3xl space-y-6">
       {/* Inline analytics block (BL-1041) — compact performance summary at top.
           Uses the same data sources as the Echo page: /analytics for KPIs and
-          /analytics/timeseries for the real per-bucket time series. */}
+          /analytics/timeseries for the real per-bucket time series. Live
+          updates flow in via the shared SSE stream (BL-1039). */}
       <AnalyticsBlock
         analytics={analytics as AnalyticsWithMicrosite}
         campaignId={campaign.id}
+        live={streamConnected}
       />
 
       {/* Outreach Summary */}
@@ -533,9 +546,12 @@ function RecipientCard({ recipient }: { recipient: CampaignRecipient }) {
 function AnalyticsBlock({
   analytics,
   campaignId,
+  live,
 }: {
   analytics: AnalyticsWithMicrosite
   campaignId: string
+  /** True when the SSE stream is open; drives the inline Live/Polling pill. */
+  live: boolean
 }) {
   const { namespace } = useParams<{ namespace: string }>()
   // TODO(BL-1044): route to the Gmail-connect flow once settings page exists.
@@ -569,6 +585,11 @@ function AnalyticsBlock({
 
   return (
     <div data-testid="outreach-analytics-block" className="space-y-4">
+      {/* Live/Polling pill — sits above the hero so users understand the
+          source of truth at a glance. */}
+      <div className="flex justify-end">
+        <LivePill connected={live} />
+      </div>
       {/* Hero CTR */}
       <AnalyticsHeroKpi
         label="Click-through rate"
@@ -671,6 +692,30 @@ function AnalyticsHeroKpi({
       </p>
       {sub && <p className="text-[11px] text-text-dim mt-1.5">{sub}</p>}
     </div>
+  )
+}
+
+/** Green "Live" pill when SSE stream is open, grey "Polling" otherwise. */
+function LivePill({ connected }: { connected: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-text-dim"
+      title={
+        connected
+          ? 'Live stream — analytics update as events arrive'
+          : 'Polling every 10s — live stream disconnected'
+      }
+      aria-live="polite"
+      data-testid="outreach-analytics-live-indicator"
+    >
+      <span
+        className={`inline-block w-1.5 h-1.5 rounded-full ${
+          connected ? 'bg-success' : 'bg-text-dim'
+        }`}
+        aria-hidden="true"
+      />
+      {connected ? 'Live' : 'Polling'}
+    </span>
   )
 }
 

@@ -16,8 +16,9 @@
  *   - `/api/campaigns/:id/analytics/timeseries` via
  *     `useCampaignAnalyticsTimeseries` (BL-1037) for the real per-bucket
  *     time series, rendered inside the lazy-loaded TimeSeriesBlock.
- *   - SSE upgrade is a follow-up once the backend auth-token handling is
- *     decided (TODO BL-1040 follow-up).
+ *   - Live updates via `useCampaignAnalyticsStream` (BL-1039 consumer) —
+ *     SSE on `/api/campaigns/:id/analytics/stream`. Polling is kept as
+ *     a fallback so disconnects never blank the UI.
  *
  * Bundle hygiene: Recharts lives only in `./echo/TimeSeriesBlock.tsx` and
  * is split out via `React.lazy` so it does not weigh on the main bundle.
@@ -32,6 +33,7 @@ import {
   type Campaign,
   type CampaignAnalyticsData,
 } from '../api/queries/useCampaigns'
+import { useCampaignAnalyticsStream } from '../api/hooks/useCampaignAnalyticsStream'
 
 // Recharts (~95 kB) is lazy-loaded so it does not bloat the main bundle.
 // Only imported for the campaign-detail view's time series.
@@ -206,15 +208,30 @@ function KpiMini({
 function CampaignDetailView({ id }: { id: string }) {
   const { namespace } = useParams<{ namespace: string }>()
   const [range, setRange] = useState<RangeKey>('7d')
-  const { data, isLoading, error, refetch } = useCampaignAnalytics(id)
+  // Live SSE stream (BL-1039). When connected, it pushes snapshot + deltas
+  // and we disable the polling refetch cadence. When disconnected (initial
+  // boot, transient error, server ended stream), polling takes over so the
+  // UI never goes stale.
+  const { metrics: streamMetrics, connected: streamConnected } =
+    useCampaignAnalyticsStream<CampaignAnalyticsData>(id)
+  const {
+    data: polledData,
+    isLoading,
+    error,
+    refetch,
+  } = useCampaignAnalytics(id, !streamConnected)
+  const data = streamMetrics ?? polledData ?? null
   const echoHomePath = namespace ? `/${namespace}/echo` : '/echo'
   // TODO(BL-1044): route to the Gmail-connect flow once settings page exists.
   const gmailConnectPath = namespace ? `/${namespace}/preferences` : '/preferences'
 
-  if (isLoading) {
+  // Only show the skeleton on the very first load — once a stream
+  // snapshot or a polled payload has arrived we always prefer the live
+  // UI over a blank loading state.
+  if (isLoading && !data) {
     return <DetailSkeleton />
   }
-  if (error) {
+  if (error && !data) {
     return (
       <ErrorCard
         message={error instanceof Error ? error.message : 'Failed to load analytics'}
@@ -262,7 +279,10 @@ function CampaignDetailView({ id }: { id: string }) {
           </svg>
           All campaigns
         </Link>
-        <RangeSelector value={range} onChange={setRange} />
+        <div className="flex items-center gap-3">
+          <LiveIndicator connected={streamConnected} />
+          <RangeSelector value={range} onChange={setRange} />
+        </div>
       </div>
 
       {/* Hero KPI — CTR */}
@@ -347,6 +367,37 @@ function CampaignDetailView({ id }: { id: string }) {
         <ContactDrillTable campaignId={id} />
       </Section>
     </div>
+  )
+}
+
+// ── Live indicator ───────────────────────────────────────
+
+/**
+ * Small badge showing whether the SSE analytics stream is open.
+ * Green "Live" when connected, grey "Polling" when the 10s fallback
+ * is driving the numbers. Static — the colour-coded dot does the
+ * "pulsing" heavy lifting; no animation needed.
+ */
+function LiveIndicator({ connected }: { connected: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-text-dim"
+      title={
+        connected
+          ? 'Live stream — analytics update as events arrive'
+          : 'Polling every 10s — live stream disconnected'
+      }
+      aria-live="polite"
+      data-testid="analytics-live-indicator"
+    >
+      <span
+        className={`inline-block w-2 h-2 rounded-full ${
+          connected ? 'bg-success' : 'bg-text-dim'
+        }`}
+        aria-hidden="true"
+      />
+      {connected ? 'Live' : 'Polling'}
+    </span>
   )
 }
 
