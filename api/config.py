@@ -20,6 +20,20 @@ class Config:
     # Token encryption (Fernet key)
     OAUTH_ENCRYPTION_KEY = os.environ.get("OAUTH_ENCRYPTION_KEY", "")
 
+    # Gmail OAuth (BL-1044) -- separate credentials for the inbound-mail
+    # connection flow so the reply-tracking integration can be managed
+    # independently from the generic OAuth store.
+    GOOGLE_GMAIL_CLIENT_ID = os.environ.get("GOOGLE_GMAIL_CLIENT_ID", "")
+    GOOGLE_GMAIL_CLIENT_SECRET = os.environ.get("GOOGLE_GMAIL_CLIENT_SECRET", "")
+    # Defaults derived from request host when unset.
+    GMAIL_OAUTH_REDIRECT_URI = os.environ.get("GMAIL_OAUTH_REDIRECT_URI", "")
+    # Fernet key for BL-1044 Gmail connection tokens (keep isolated from the
+    # generic OAUTH_ENCRYPTION_KEY so Gmail keys can be rotated separately).
+    GMAIL_TOKEN_ENCRYPTION_KEY = os.environ.get("GMAIL_TOKEN_ENCRYPTION_KEY", "")
+    # Frontend origin used when building the post-callback redirect URL.
+    # Falls back to the request origin when unset.
+    FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
+
     # Perplexity API
     PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
     PERPLEXITY_BASE_URL = os.environ.get(

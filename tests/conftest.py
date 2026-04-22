@@ -35,7 +35,10 @@ def _patch_pg_types_for_sqlite(app):
             for column in table.columns:
                 if isinstance(column.type, UUID):
                     column.type = String(36)
-                    if column.server_default is not None and "uuid_generate" in str(column.server_default.arg):
+                    if column.server_default is not None and (
+                        "uuid_generate" in str(column.server_default.arg)
+                        or "gen_random_uuid" in str(column.server_default.arg)
+                    ):
                         column.server_default = None
                         column.default = ColumnDefault(_uuid_default)
                 elif isinstance(column.type, ARRAY):

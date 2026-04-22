@@ -17,6 +17,7 @@ import { EnrichPage } from './pages/enrich/EnrichPage'
 import { ImportPage } from './pages/import/ImportPage'
 import { AdminPage } from './pages/admin/AdminPage'
 import { PreferencesPage } from './pages/preferences/PreferencesPage'
+import { GmailIntegrationPage } from './pages/settings/GmailIntegrationPage'
 import { PlaybookPage } from './pages/playbook/PlaybookPage'
 import { PlaybookDemo } from './pages/playbook/PlaybookDemo'
 import { LlmCostsPage } from './pages/llm-costs/LlmCostsPage'
@@ -69,6 +70,7 @@ export default function App() {
               <Route path="admin" element={<AdminPage />} />
               <Route path="admin/tokens" element={<TokensPage />} />
               <Route path="preferences" element={<PreferencesPage />} />
+              <Route path="settings/gmail" element={<GmailIntegrationPage />} />
               <Route path="llm-costs" element={<LlmCostsPage />} />
             </Route>
           </Routes>

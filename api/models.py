@@ -2020,3 +2020,68 @@ class MessageFeedback(db.Model):
             "edit_reason_text": self.edit_reason_text,
             "created_at": (self.created_at.isoformat() if self.created_at else None),
         }
+
+
+class GmailConnection(db.Model):
+    """Per-tenant Gmail connection used by the inbound-mail poller.
+
+    Stores encrypted OAuth tokens for the `gmail.readonly` scope. The inbound
+    polling worker (follow-up sub-item BL-1044-b) will read tokens, fetch new
+    messages, and feed them into reply-rate attribution. Outbound send /
+    Google Contacts flows continue to use the generic `OAuthConnection`.
+    """
+
+    __tablename__ = "gmail_connections"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("gen_random_uuid()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False),
+        db.ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = db.Column(
+        UUID(as_uuid=False),
+        db.ForeignKey("users.id"),
+        nullable=False,
+    )
+    email_address = db.Column(db.Text, nullable=False)
+    access_token_encrypted = db.Column(db.LargeBinary, nullable=False)
+    refresh_token_encrypted = db.Column(db.LargeBinary, nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    scopes = db.Column(ARRAY(db.Text), nullable=False, default=list)
+    created_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.text("now()")
+    )
+    last_synced_at = db.Column(db.DateTime(timezone=True))
+    disconnected_at = db.Column(db.DateTime(timezone=True))
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "tenant_id",
+            "email_address",
+            name="uq_gmail_connections_tenant_email",
+        ),
+        db.Index("idx_gmail_connections_tenant", "tenant_id"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "user_id": str(self.user_id),
+            "email_address": self.email_address,
+            "scopes": self.scopes if isinstance(self.scopes, list) else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "last_synced_at": (
+                self.last_synced_at.isoformat() if self.last_synced_at else None
+            ),
+            "disconnected_at": (
+                self.disconnected_at.isoformat() if self.disconnected_at else None
+            ),
+            "connected": self.disconnected_at is None,
+        }
