@@ -334,11 +334,68 @@ export interface CampaignAnalyticsData {
   }
 }
 
-export function useCampaignAnalytics(campaignId: string | null, enabled = true) {
+export interface UseCampaignAnalyticsOptions {
+  enabled?: boolean
+  /** Override query stale time (ms). Defaults to 0 (always refetch on mount). */
+  staleTime?: number
+  /** Override refetch interval (ms). Pass `false` to disable polling. */
+  refetchInterval?: number | false
+}
+
+export function useCampaignAnalytics(
+  campaignId: string | null,
+  optionsOrEnabled: boolean | UseCampaignAnalyticsOptions = true,
+) {
+  const opts: UseCampaignAnalyticsOptions =
+    typeof optionsOrEnabled === 'boolean' ? { enabled: optionsOrEnabled } : optionsOrEnabled
+  const { enabled = true, staleTime, refetchInterval = 10_000 } = opts
   return useQuery({
     queryKey: ['campaign-analytics', campaignId],
     queryFn: () => apiFetch<CampaignAnalyticsData>(`/campaigns/${campaignId}/analytics`),
     enabled: enabled && !!campaignId,
+    refetchInterval,
+    ...(staleTime !== undefined ? { staleTime } : {}),
+  })
+}
+
+// ── Campaign Analytics: Time-Series (BL-1037) ──────────
+
+export type TimeSeriesRange = '24h' | '7d' | '30d' | 'all'
+export type TimeSeriesBucket = 'hour' | 'day'
+
+export interface TimeSeriesBucketPoint {
+  bucket_start: string
+  sent: number
+  delivered: number
+  opened: number
+  clicked: number
+  bounced: number
+  unsubscribed: number
+}
+
+export interface CampaignTimeSeriesResponse {
+  campaign_id: string
+  range: TimeSeriesRange
+  bucket: TimeSeriesBucket
+  buckets: TimeSeriesBucketPoint[]
+}
+
+export function useCampaignAnalyticsTimeseries(
+  campaignId: string | null,
+  range: TimeSeriesRange = '7d',
+  bucket?: TimeSeriesBucket,
+) {
+  // Auto-select bucket when caller doesn't override (mirrors backend default).
+  const resolvedBucket: TimeSeriesBucket = bucket ?? (range === '24h' ? 'hour' : 'day')
+  return useQuery({
+    queryKey: ['campaign-analytics-timeseries', campaignId, range, resolvedBucket],
+    queryFn: () =>
+      apiFetch<CampaignTimeSeriesResponse>(
+        `/campaigns/${campaignId}/analytics/timeseries`,
+        { params: { range, bucket: resolvedBucket } },
+      ),
+    enabled: !!campaignId,
+    staleTime: 10_000,
     refetchInterval: 10_000,
   })
 }
