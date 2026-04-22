@@ -12,6 +12,7 @@ All notable changes to the Leadgen Pipeline project.
   - PostHog backend integration with US region (`https://us.i.posthog.com`), graceful degradation on provider failure (BL-1035, PR #153)
   - Microsite link builder now stamps `?utm_campaign=<short_id>&utm_source=leadgen` so PostHog events attribute back to the campaign (BL-1036a, PR #155)
 - **Deploy skill integration** — `.claude/deploy.yml` wires the `/deploy` skill to this repo's staging pipeline (PR #148).
+- **Gmail OAuth foundation** (BL-1044): New `gmail_connections` table + dedicated OAuth flow (`/api/auth/gmail/connect|callback|disconnect|status`) with Fernet-encrypted access/refresh tokens and JWT-signed `state` for CSRF protection. Frontend settings page at `/:namespace/settings/gmail` (menu entry under Personal). Sets up the storage + consent surface for reply-rate tracking; inbound polling and reply attribution follow in BL-1044-b / BL-1044-c. Runbook: `docs/runbooks/gmail-oauth-setup.md`.
 
 ### Changed
 - **`email_send_log` schema**: added `kind` column (preview | send | retry — excludes previews from analytics, BL-1026, PR #152) and `superseded_at` column (marks earlier attempts after a successful retry so the funnel counts each recipient once, BL-1029, PR #154).

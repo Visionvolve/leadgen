@@ -63,7 +63,7 @@ Leadgen Pipeline is a multi-tenant B2B lead enrichment and outreach platform. It
 ### 2. Flask API
 - **Tech**: Flask + SQLAlchemy + Gunicorn
 - **Container**: `leadgen-api` (Docker, port 5000)
-- **Routes**: `/api/auth/*`, `/api/tenants/*`, `/api/users/*`, `/api/tags/*`, `/api/companies/*`, `/api/contacts/*`, `/api/messages/*`, `/api/campaigns/*`, `/api/campaign-templates`, `/api/pipeline/*`, `/api/enrich/*`, `/api/imports/*`, `/api/llm-usage/*`, `/api/oauth/*`, `/api/gmail/*`, `/api/bulk/*`, `/api/extension/*`, `/api/health`
+- **Routes**: `/api/auth/*`, `/api/auth/gmail/*` (BL-1044), `/api/tenants/*`, `/api/users/*`, `/api/tags/*`, `/api/companies/*`, `/api/contacts/*`, `/api/messages/*`, `/api/campaigns/*`, `/api/campaign-templates`, `/api/pipeline/*`, `/api/enrich/*`, `/api/imports/*`, `/api/llm-usage/*`, `/api/oauth/*`, `/api/gmail/*`, `/api/bulk/*`, `/api/extension/*`, `/api/health`
 - **Services**: `pipeline_engine.py` (stage orchestration), `dag_executor.py` (DAG-based executor with completion-record eligibility, see ADR-005), `stage_registry.py` (configurable DAG of enrichment stages), `qc_checker.py` (end-of-pipeline quality checks), `l1_enricher.py` (native L1 via Perplexity, see ADR-003), `registries/` (EU registry adapters + unified orchestrator — see ADR-004, ADR-005), `csv_mapper.py` (AI column mapping), `dedup.py` (contact/company deduplication), `llm_logger.py` (LLM usage cost tracking), `google_oauth.py` (OAuth token management), `google_contacts.py` (People API fetch/mapping), `gmail_scanner.py` (background Gmail scan + AI signature extraction), `message_generator.py` (campaign message generation via Claude API), `generation_prompts.py` (channel-specific prompt templates)
 - **Auth**: JWT Bearer tokens, bcrypt password hashing
 - **Multi-tenant**: Shared PG schema, `tenant_id` on all entity tables
@@ -224,13 +224,49 @@ Gmail Scan: POST /api/gmail/scan/start → background thread:
     └── dedup preview → import
 ```
 
+### Gmail OAuth Foundation (BL-1044) — Inbound Mail Tracking
+
+Separate from the generic OAuth flow above, this integration backs reply-rate
+tracking. It uses a dedicated `gmail_connections` table, its own Fernet
+encryption key (`GMAIL_TOKEN_ENCRYPTION_KEY`), and routes under
+`/api/auth/gmail/*`.
+
+```
+Settings → GmailIntegrationPage → GET /api/auth/gmail/connect?format=json  (authed)
+    │
+    ▼
+Frontend → window.location = auth_url (top-level navigation to Google consent)
+    │
+    ▼
+Google callback → GET /api/auth/gmail/callback?code=...&state=<JWT>
+    │   (public route — CSRF protection = signed state JWT, 10-min TTL)
+    ▼
+Flask API → exchange code → fetch userinfo → Fernet-encrypt tokens → upsert
+           gmail_connections (unique on tenant_id + email_address)
+    │
+    ▼
+302 → /:namespace/settings/gmail?connected=1
+
+/api/auth/gmail/status    → { connected, email, last_synced_at }
+/api/auth/gmail/disconnect → best-effort Google revoke + zero ciphertext +
+                             set disconnected_at
+```
+
+Scope granted: `https://www.googleapis.com/auth/gmail.readonly` only. Tokens
+in `access_token_encrypted` / `refresh_token_encrypted` are BYTEA columns
+storing Fernet ciphertext; plaintext is never persisted.
+
+Follow-up: BL-1044-b wires the inbound polling worker (reads tokens, updates
+`last_synced_at`) and BL-1044-c wires reply attribution to the reply-rate KPI.
+
 ## Database Schema (High Level)
 
 ```
 tenants ─┬── owners
          ├── tags (renamed from batches)
          ├── import_jobs (CSV/Gmail import lifecycle tracking)
-         ├── oauth_connections (Google OAuth tokens, Fernet-encrypted)
+         ├── oauth_connections (generic Google OAuth tokens, Fernet-encrypted)
+         ├── gmail_connections (BL-1044: inbound-mail Gmail tokens, Fernet-encrypted with a dedicated key)
          ├── companies ─┬── company_enrichment_l1 (1:1, L1 triage detail)
          │              ├── company_enrichment_profile (1:1, L2 company intel)
          │              ├── company_enrichment_signals (1:1, L2 strategic signals)

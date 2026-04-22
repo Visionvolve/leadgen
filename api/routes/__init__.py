@@ -10,6 +10,7 @@ from .custom_field_routes import custom_fields_bp
 from .enrich_routes import enrich_bp
 from .enrichment_config_routes import enrichment_config_bp
 from .extension_routes import extension_bp
+from .gmail_auth_routes import gmail_auth_bp
 from .gmail_routes import gmail_bp
 from .health import health_bp
 from .import_routes import imports_bp
@@ -48,6 +49,7 @@ def register_blueprints(app):
     app.register_blueprint(llm_usage_bp)
     app.register_blueprint(oauth_bp)
     app.register_blueprint(gmail_bp)
+    app.register_blueprint(gmail_auth_bp)
     app.register_blueprint(extension_bp)
     app.register_blueprint(playbook_bp)
     app.register_blueprint(token_bp)

@@ -498,7 +498,7 @@ Explicit non-goals so the sprint doesn't drift:
 - **AI coaching / recommendations** — BL-048 thread, downstream consumer of this data
 - **Mobile-optimized layout** — page scrolls, nothing breaks, no investment in <768px charts
 - **Reply detection from inbound mail** — inbound pipeline not yet wired; Reply rate tile renders with `—` placeholder + "Connect Gmail to track replies" prompt (see §4.5 UI States) until Gmail integration lands
-- **Gmail OAuth + inbound mail ingestion + reply attribution** — tracked in **BL-1044** for a follow-up sprint. The UI tile + placeholder affordance ship this sprint so the slot auto-populates when Gmail ingestion arrives
+- **Gmail OAuth + inbound mail ingestion + reply attribution** — Gmail OAuth foundation **landed as BL-1044** (`gmail_connections` table, encrypted tokens, connect/callback/disconnect/status routes, `/:namespace/settings/gmail` UI). **Still deferred**: inbound mail polling worker (BL-1044-b) and reply attribution + reply-rate KPI wiring (BL-1044-c). The UI tile placeholder continues to render `—` until those land; once BL-1044-b populates `last_synced_at` and inbound messages, the tile auto-upgrades.
 - **Deprecation of existing `microsite_event` table + ingest endpoint** — leave in place this sprint; formal removal later
 - **Materialized daily rollup tables** — on-the-fly PG aggregation is sufficient at current scale
 - **LangSmith / LLM-ops telemetry** — separate surface (super-admin), BL-272 thread
