@@ -27,20 +27,39 @@ import {
 export interface TimeSeriesBlockProps {
   campaignId: string
   range: TimeSeriesRange
+  /**
+   * When true, renders a denser chart suitable for embedding in a tab or
+   * side-by-side grid (shorter height, smaller tick fonts, tighter padding).
+   * The accessibility <details> table is preserved in both modes.
+   */
+  compact?: boolean
 }
 
-export default function TimeSeriesBlock({ campaignId, range }: TimeSeriesBlockProps) {
+export default function TimeSeriesBlock({
+  campaignId,
+  range,
+  compact = false,
+}: TimeSeriesBlockProps) {
   const { data, isLoading, error } = useCampaignAnalyticsTimeseries(campaignId, range)
+
+  const wrapperSize = compact ? 'h-[200px] p-2' : 'h-64 p-3'
+  const tickFont = compact ? 10 : 11
 
   if (isLoading && !data) {
     return (
-      <div className="bg-surface-alt border border-border rounded-lg h-64 animate-pulse" />
+      <div
+        className={`bg-surface-alt border border-border rounded-lg ${wrapperSize} animate-pulse`}
+      />
     )
   }
 
   if (error) {
     return (
-      <div className="bg-surface-alt border border-border rounded-lg px-4 py-8 text-center">
+      <div
+        className={`bg-surface-alt border border-border rounded-lg px-4 ${
+          compact ? 'py-6' : 'py-8'
+        } text-center`}
+      >
         <p className="text-xs text-text-dim">
           Unable to load activity time series.
         </p>
@@ -57,7 +76,11 @@ export default function TimeSeriesBlock({ campaignId, range }: TimeSeriesBlockPr
 
   if (!hasData) {
     return (
-      <div className="bg-surface-alt border border-border rounded-lg px-4 py-8 text-center">
+      <div
+        className={`bg-surface-alt border border-border rounded-lg px-4 ${
+          compact ? 'py-6' : 'py-8'
+        } text-center`}
+      >
         <p className="text-xs text-text-dim">
           No activity yet in the selected {range} window.
         </p>
@@ -74,17 +97,28 @@ export default function TimeSeriesBlock({ campaignId, range }: TimeSeriesBlockPr
 
   return (
     <>
-      <div className="bg-surface-alt border border-border rounded-lg p-3 h-64">
+      <div className={`bg-surface-alt border border-border rounded-lg ${wrapperSize}`}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={series} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
+          <LineChart
+            data={series}
+            margin={
+              compact
+                ? { top: 6, right: 12, bottom: 2, left: -12 }
+                : { top: 8, right: 16, bottom: 4, left: -8 }
+            }
+          >
             <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
             <XAxis
               dataKey="label"
-              tick={{ fontSize: 11 }}
+              tick={{ fontSize: tickFont }}
               stroke="currentColor"
               strokeOpacity={0.4}
             />
-            <YAxis tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.4} />
+            <YAxis
+              tick={{ fontSize: tickFont }}
+              stroke="currentColor"
+              strokeOpacity={0.4}
+            />
             <Tooltip
               contentStyle={{
                 background: 'var(--color-surface, #1a1f2e)',
