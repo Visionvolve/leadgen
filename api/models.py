@@ -2085,3 +2085,22 @@ class GmailConnection(db.Model):
             ),
             "connected": self.disconnected_at is None,
         }
+
+
+class OAuthStateNonce(db.Model):
+    """Single-use nonce store for OAuth `state` JWT replay protection.
+
+    Issued at `connect` time and deleted at `callback` time. A second
+    redemption of the same state finds no row and is rejected as already-used.
+    See migration 064_oauth_state_nonces.sql.
+    """
+
+    __tablename__ = "oauth_state_nonces"
+
+    nonce = db.Column(db.String(64), primary_key=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.text("now()")
+    )
+
+    __table_args__ = (db.Index("idx_oauth_state_nonces_expires", "expires_at"),)

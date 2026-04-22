@@ -27,8 +27,9 @@ Follow-up sub-items (explicitly NOT in this PR):
 
 from __future__ import annotations
 
+import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
 
 import jwt
@@ -36,7 +37,7 @@ import requests
 from flask import Blueprint, current_app, g, jsonify, redirect, request
 
 from ..auth import require_auth, resolve_tenant
-from ..models import GmailConnection, Tenant, db
+from ..models import GmailConnection, OAuthStateNonce, Tenant, db
 from ..utils.crypto import decrypt_token, encrypt_token
 
 gmail_auth_bp = Blueprint("gmail_auth", __name__)
@@ -66,18 +67,67 @@ _SAFE_RETURN_SCHEMES = {"http", "https"}
 
 
 def _encode_state(user_id: str, tenant_id: str, return_url: str) -> str:
+    """Issue a signed state JWT and persist its single-use nonce.
+
+    The nonce row is consumed at callback time (_consume_nonce) to prevent
+    replay of a leaked/captured state. Rows are deleted opportunistically
+    when expired (see _consume_nonce) -- scheduled GC can be added later.
+    """
+    nonce = secrets.token_urlsafe(24)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=STATE_TTL_SECONDS)
     payload = {
         "user_id": str(user_id),
         "tenant_id": str(tenant_id),
         "return_url": return_url or "",
-        "nonce": int(time.time() * 1000),
-        "exp": int(time.time()) + STATE_TTL_SECONDS,
+        "nonce": nonce,
+        "exp": int(expires_at.timestamp()),
     }
+    # Persist the nonce before returning the state so any concurrent callback
+    # sees it. A failure here falls through the transaction and callers get
+    # a 500, which is correct: without the nonce row the flow is unsafe.
+    db.session.add(OAuthStateNonce(nonce=nonce, expires_at=expires_at))
+    db.session.commit()
     return jwt.encode(payload, current_app.config["JWT_SECRET_KEY"], algorithm="HS256")
 
 
 def _decode_state(state: str) -> dict:
     return jwt.decode(state, current_app.config["JWT_SECRET_KEY"], algorithms=["HS256"])
+
+
+def _consume_nonce(nonce: str | None) -> bool:
+    """Atomically consume a state nonce. Returns True if valid and unused.
+
+    Also opportunistically reaps expired rows so the table does not grow
+    unbounded if no scheduled GC is wired up.
+    """
+    if not nonce:
+        return False
+
+    now = datetime.now(timezone.utc)
+    # Opportunistic GC of expired rows. Cheap -- indexed on expires_at.
+    try:
+        OAuthStateNonce.query.filter(OAuthStateNonce.expires_at < now).delete(
+            synchronize_session=False
+        )
+    except Exception:
+        # GC failure must not block a valid callback.
+        db.session.rollback()
+
+    row = OAuthStateNonce.query.filter_by(nonce=nonce).first()
+    if row is None:
+        return False
+    # Reject if expired (defence in depth; exp claim also enforced by JWT).
+    # SQLite drops tz info on TIMESTAMP columns, so normalize before comparing.
+    row_exp = row.expires_at
+    if row_exp.tzinfo is None:
+        row_exp = row_exp.replace(tzinfo=timezone.utc)
+    if row_exp < now:
+        db.session.delete(row)
+        db.session.commit()
+        return False
+    db.session.delete(row)
+    db.session.commit()
+    return True
 
 
 def _redirect_uri() -> str:
@@ -91,6 +141,23 @@ def _redirect_uri() -> str:
         return configured
     # Fallback: derive from request host. Useful for local dev / staging.
     return f"{request.host_url.rstrip('/')}/api/auth/gmail/callback"
+
+
+def _allowed_return_hosts() -> list[str]:
+    """Hostnames (optionally with :port) permitted in return_url redirects.
+
+    Pulled from FRONTEND_ORIGIN config. `request.host` is always accepted
+    as a fallback so dev without explicit config still works.
+    """
+    raw = current_app.config.get("FRONTEND_ORIGIN") or ""
+    allowed = [h.strip() for h in raw.split(",") if h.strip()]
+    # Always trust the current request host (dev, same-origin cases).
+    try:
+        allowed.append(request.host)
+    except RuntimeError:
+        # Outside request context -- ignore.
+        pass
+    return allowed
 
 
 def _safe_return_url(raw: str | None) -> str:
@@ -108,9 +175,26 @@ def _safe_return_url(raw: str | None) -> str:
     # Absolute URL -- only allow same host and standard schemes.
     if parsed.scheme not in _SAFE_RETURN_SCHEMES:
         return ""
-    if parsed.netloc != request.host:
+    if parsed.netloc not in _allowed_return_hosts():
         return ""
     return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
+
+def _is_safe_return_url(url: str | None) -> bool:
+    """Strict same-origin / allowlist check for redirect targets.
+
+    Used at callback time before performing the 302 so an attacker who leaks
+    a state JWT cannot pivot the user off-site.
+    """
+    if not url:
+        return False
+    p = urlparse(url)
+    if not p.scheme and not p.netloc:
+        # Relative path -- safe.
+        return True
+    if p.scheme not in _SAFE_RETURN_SCHEMES:
+        return False
+    return p.netloc in _allowed_return_hosts()
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +268,10 @@ def gmail_callback():
     except jwt.InvalidTokenError:
         return jsonify({"error": "Invalid OAuth state"}), 400
 
+    # Single-use nonce check -- rejects replayed/leaked states.
+    if not _consume_nonce(state_data.get("nonce")):
+        return jsonify({"error": "Invalid or already-used OAuth state"}), 400
+
     user_id = state_data["user_id"]
     tenant_id = state_data["tenant_id"]
     return_url = state_data.get("return_url") or ""
@@ -209,20 +297,35 @@ def gmail_callback():
         )
         token_resp.raise_for_status()
         tokens = token_resp.json()
-    except requests.RequestException as exc:
-        return jsonify({"error": f"Token exchange failed: {exc}"}), 400
+    except Exception:
+        # Log full context internally; return a generic message to avoid
+        # leaking upstream provider responses (e.g. Google error bodies).
+        current_app.logger.exception("Gmail OAuth token exchange failed")
+        return jsonify({"error": "OAuth connection failed. Please try again."}), 400
 
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
     expires_in = int(tokens.get("expires_in", 3600))
     scope_granted = (tokens.get("scope") or "").split()
 
-    if not access_token or not refresh_token:
-        # Without refresh_token we cannot poll -- surface a clear error so
-        # the user can reconnect (Google sometimes omits refresh_token if the
-        # user has already granted consent; `prompt=consent` above forces it).
+    if not access_token:
+        current_app.logger.error("Gmail OAuth token response missing access_token")
+        return jsonify({"error": "OAuth connection failed. Please try again."}), 400
+
+    if not refresh_token:
+        # Without refresh_token we cannot poll -- surface a clear, actionable
+        # error. Google typically omits refresh_token when the user has
+        # already granted consent to this client; revoking at
+        # https://myaccount.google.com/permissions forces a fresh refresh
+        # token on next consent.
         return jsonify(
-            {"error": "Google did not return a refresh_token; try reconnecting."}
+            {
+                "error": (
+                    "Google did not issue a refresh token. Please revoke app "
+                    "access at https://myaccount.google.com/permissions and "
+                    "try connecting again."
+                )
+            }
         ), 400
 
     # Fetch user info to discover which Gmail address was authorized.
@@ -234,8 +337,9 @@ def gmail_callback():
         )
         userinfo_resp.raise_for_status()
         userinfo = userinfo_resp.json()
-    except requests.RequestException as exc:
-        return jsonify({"error": f"Failed to fetch user info: {exc}"}), 400
+    except Exception:
+        current_app.logger.exception("Gmail OAuth userinfo fetch failed")
+        return jsonify({"error": "OAuth connection failed. Please try again."}), 400
 
     email_address = (userinfo.get("email") or "").lower()
     if not email_address:
@@ -280,7 +384,10 @@ def gmail_callback():
     tenant = db.session.get(Tenant, tenant_id)
     namespace = tenant.slug if tenant else ""
 
-    if return_url:
+    # Defence in depth: re-validate return_url before the 302. Even though
+    # connect() filters the value on input, the JWT signer could be abused
+    # or the config could change between issue and redeem, so we re-check.
+    if return_url and _is_safe_return_url(return_url):
         destination = return_url
     elif namespace:
         destination = f"/{namespace}/settings/gmail?connected=1"

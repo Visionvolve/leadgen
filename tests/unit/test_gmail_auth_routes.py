@@ -7,7 +7,7 @@ import jwt as pyjwt
 import pytest
 from cryptography.fernet import Fernet
 
-from api.models import GmailConnection, UserTenantRole
+from api.models import GmailConnection, OAuthStateNonce, UserTenantRole, db as _db
 from api.utils.crypto import decrypt_token, encrypt_token
 from tests.conftest import auth_header
 
@@ -124,16 +124,37 @@ class TestCallback:
             gmail_auth_routes.requests, "get", lambda *a, **kw: user_resp
         )
 
-    def _make_state(self, app, user_id, tenant_id, return_url=""):
+    def _make_state(
+        self, app, user_id, tenant_id, return_url="", *, nonce=None, persist=True
+    ):
+        """Build a state JWT that matches production _encode_state.
+
+        If `persist` is True (default), an OAuthStateNonce row is seeded so
+        the callback's single-use consumption succeeds. Tests that want to
+        exercise the replay/invalid-nonce paths pass persist=False or reuse
+        a consumed nonce.
+        """
+        import secrets
         import time as _time
 
+        if nonce is None:
+            nonce = secrets.token_urlsafe(24)
         payload = {
             "user_id": str(user_id),
             "tenant_id": str(tenant_id),
             "return_url": return_url,
-            "nonce": 1,
+            "nonce": nonce,
             "exp": int(_time.time()) + 600,
         }
+        if persist:
+            with app.app_context():
+                _db.session.add(
+                    OAuthStateNonce(
+                        nonce=nonce,
+                        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+                    )
+                )
+                _db.session.commit()
         return pyjwt.encode(payload, app.config["JWT_SECRET_KEY"], algorithm="HS256")
 
     def test_callback_stores_encrypted_tokens(
@@ -240,6 +261,125 @@ class TestCallback:
         db.session.refresh(prior)
         assert prior.disconnected_at is None
         assert decrypt_token(prior.access_token_encrypted, key) == "ya29.fresh-access"
+
+    def test_callback_rejects_missing_refresh_token(
+        self, client, app, seed_tenant, seed_admin_on_tenant, monkeypatch
+    ):
+        """Google sometimes omits refresh_token -- must reject with a clear
+        actionable error rather than silently store None."""
+        token_resp = MagicMock()
+        token_resp.raise_for_status = MagicMock()
+        token_resp.json.return_value = {
+            "access_token": "ya29.access-only",
+            "expires_in": 3600,
+            # refresh_token deliberately absent
+        }
+        from api.routes import gmail_auth_routes
+
+        monkeypatch.setattr(
+            gmail_auth_routes.requests, "post", lambda *a, **kw: token_resp
+        )
+        state = self._make_state(app, seed_admin_on_tenant.id, seed_tenant.id)
+        resp = client.get(
+            f"/api/auth/gmail/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        body = resp.get_json()
+        # Actionable error message points user at Google permissions page
+        assert "refresh token" in body["error"].lower()
+        assert "myaccount.google.com" in body["error"]
+
+    def test_callback_rejects_replayed_state(
+        self, client, app, db, seed_tenant, seed_admin_on_tenant, monkeypatch
+    ):
+        """Second redemption of the same state JWT must be rejected (nonce
+        consumed on first use)."""
+        self._mock_google_responses(monkeypatch)
+        state = self._make_state(app, seed_admin_on_tenant.id, seed_tenant.id)
+
+        # First call succeeds and consumes the nonce
+        resp1 = client.get(
+            f"/api/auth/gmail/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        assert resp1.status_code == 302
+
+        # Second call with the same state must fail
+        resp2 = client.get(
+            f"/api/auth/gmail/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        assert resp2.status_code == 400
+        body = resp2.get_json()
+        assert (
+            "already-used" in body["error"].lower()
+            or "invalid" in body["error"].lower()
+        )
+
+    def test_callback_rejects_unknown_nonce(
+        self, client, app, seed_tenant, seed_admin_on_tenant, monkeypatch
+    ):
+        """State JWT with a nonce that was never persisted (forged or
+        dropped) must be rejected before token exchange."""
+        self._mock_google_responses(monkeypatch)
+        # Build a state whose nonce is NOT persisted in the nonce table
+        state = self._make_state(
+            app, seed_admin_on_tenant.id, seed_tenant.id, persist=False
+        )
+        resp = client.get(
+            f"/api/auth/gmail/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert (
+            "invalid" in resp.get_json()["error"].lower()
+            or "already" in resp.get_json()["error"].lower()
+        )
+
+    def test_callback_rejects_external_return_url(
+        self, client, app, db, seed_tenant, seed_admin_on_tenant, monkeypatch
+    ):
+        """An attacker who leaks a state JWT cannot pivot the post-OAuth
+        redirect to an external host -- the callback must fall back to the
+        safe default."""
+        self._mock_google_responses(monkeypatch)
+        # FRONTEND_ORIGIN does NOT include evil.example.com
+        app.config["FRONTEND_ORIGIN"] = "trusted.example.com"
+        state = self._make_state(
+            app,
+            seed_admin_on_tenant.id,
+            seed_tenant.id,
+            return_url="https://evil.example.com/steal",
+        )
+        resp = client.get(
+            f"/api/auth/gmail/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        # Must NOT redirect to the external evil host
+        assert "evil.example.com" not in (resp.location or "")
+        # Must redirect to the safe default (settings page) instead
+        assert "/settings/gmail" in (resp.location or "")
+
+    def test_callback_allows_same_origin_return_url(
+        self, client, app, db, seed_tenant, seed_admin_on_tenant, monkeypatch
+    ):
+        """A return_url pointing at an allowed host is preserved."""
+        self._mock_google_responses(monkeypatch)
+        app.config["FRONTEND_ORIGIN"] = "trusted.example.com,localhost"
+        state = self._make_state(
+            app,
+            seed_admin_on_tenant.id,
+            seed_tenant.id,
+            return_url="https://trusted.example.com/test-corp/settings",
+        )
+        resp = client.get(
+            f"/api/auth/gmail/callback?code=abc&state={state}",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "trusted.example.com" in (resp.location or "")
 
 
 class TestStatus:

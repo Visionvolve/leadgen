@@ -33,6 +33,13 @@ class Config:
     # Frontend origin used when building the post-callback redirect URL.
     # Falls back to the request origin when unset.
     FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
+    # Comma-separated list of allowed hostnames (with optional :port) for
+    # post-OAuth redirect targets. Used to validate `return_url` extracted
+    # from the signed OAuth state JWT against an allowlist, preventing
+    # open-redirect abuse even if the JWT itself is valid. Relative paths
+    # (no netloc) are always safe and do NOT need to match this list.
+    # Example: "leadgen.visionvolve.com,leadgen-staging.visionvolve.com,localhost:5173"
+    FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "")
 
     # Perplexity API
     PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
