@@ -10,25 +10,21 @@
  * This file keeps all sub-components inline so the shared abstractions stay
  * deferred (BL-1041 can copy patterns or we refactor once both views exist).
  *
- * Data strategy: uses the existing `/api/campaigns/:id/analytics` endpoint
- * via `useCampaignAnalytics` (already polls every 10s). New hooks for
- * timeseries / microsite / SSE are intentionally NOT added here — backend
- * endpoints for those don't exist yet and polling the single `/analytics`
- * endpoint gives us live-enough updates. TODO(BL-1040 follow-up): split
- * payload into timeseries + dedicated microsite endpoints, upgrade to SSE.
+ * Data strategy:
+ *   - `/api/campaigns/:id/analytics` via `useCampaignAnalytics` (10s poll)
+ *     for hero KPIs, funnel totals, and microsite tile values.
+ *   - `/api/campaigns/:id/analytics/timeseries` via
+ *     `useCampaignAnalyticsTimeseries` (BL-1037) for the real per-bucket
+ *     time series, rendered inside the lazy-loaded TimeSeriesBlock.
+ *   - SSE upgrade is a follow-up once the backend auth-token handling is
+ *     decided (TODO BL-1040 follow-up).
+ *
+ * Bundle hygiene: Recharts lives only in `./echo/TimeSeriesBlock.tsx` and
+ * is split out via `React.lazy` so it does not weigh on the main bundle.
  */
 
-import { useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from 'recharts'
+import { lazy, Suspense, useState } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router'
 import {
   useCampaigns,
   useCampaignAnalytics,
@@ -36,6 +32,10 @@ import {
   type Campaign,
   type CampaignAnalyticsData,
 } from '../api/queries/useCampaigns'
+
+// Recharts (~95 kB) is lazy-loaded so it does not bloat the main bundle.
+// Only imported for the campaign-detail view's time series.
+const TimeSeriesBlock = lazy(() => import('./echo/TimeSeriesBlock'))
 
 // ── Types ────────────────────────────────────────────────
 
@@ -135,15 +135,32 @@ function CampaignListView() {
 }
 
 function CampaignPreviewCard({ campaign }: { campaign: Campaign }) {
-  const { data } = useCampaignAnalytics(campaign.id)
-  const sent = data?.sending?.email?.sent ?? 0
-  const delivered = data?.sending?.email?.delivered ?? 0
+  const { namespace } = useParams<{ namespace: string }>()
+  // List view: throttle aggressively to avoid N parallel 10s polls when
+  // many cards render. Cards pull from cache; users see fresh data when
+  // they open the detail view (which keeps the 10s cadence).
+  const { data } = useCampaignAnalytics(campaign.id, {
+    staleTime: 60_000,
+    refetchInterval: false,
+  })
+  const email = data?.sending?.email
+  // `total` = queued + sent + delivered + bounced + failed. Matches the
+  // sentTotal computation in CampaignDetailView; avoids the old
+  // sent+delivered double-count.
+  const sentTotal = email
+    ? (email.sent ?? 0) + (email.delivered ?? 0) + (email.bounced ?? 0) + (email.failed ?? 0)
+    : 0
+  const delivered = email?.delivered ?? 0
   const clicked = data?.engagement?.clicked ?? 0
   const ctr = pct(clicked, delivered)
 
+  const campaignPath = namespace
+    ? `/${namespace}/echo?campaign=${encodeURIComponent(campaign.id)}`
+    : `/echo?campaign=${encodeURIComponent(campaign.id)}`
+
   return (
     <Link
-      to={`/echo?campaign=${encodeURIComponent(campaign.id)}`}
+      to={campaignPath}
       className="block bg-surface border border-border rounded-lg p-4 hover:border-accent transition-colors no-underline"
     >
       <div className="flex items-start justify-between gap-2 mb-3">
@@ -151,7 +168,7 @@ function CampaignPreviewCard({ campaign }: { campaign: Campaign }) {
         <span className="text-[11px] text-text-dim whitespace-nowrap">{campaign.status}</span>
       </div>
       <div className="grid grid-cols-3 gap-2 text-center">
-        <KpiMini label="Sent" value={formatNumber(sent + delivered)} />
+        <KpiMini label="Sent" value={formatNumber(sentTotal)} />
         <KpiMini label="CTR" value={`${ctr}%`} highlight />
         <KpiMini label="Reply" value="—" muted />
       </div>
@@ -187,8 +204,12 @@ function KpiMini({
 // ── Campaign detail view ─────────────────────────────────
 
 function CampaignDetailView({ id }: { id: string }) {
+  const { namespace } = useParams<{ namespace: string }>()
   const [range, setRange] = useState<RangeKey>('7d')
   const { data, isLoading, error, refetch } = useCampaignAnalytics(id)
+  const echoHomePath = namespace ? `/${namespace}/echo` : '/echo'
+  // TODO(BL-1044): route to the Gmail-connect flow once settings page exists.
+  const gmailConnectPath = namespace ? `/${namespace}/preferences` : '/preferences'
 
   if (isLoading) {
     return <DetailSkeleton />
@@ -233,7 +254,7 @@ function CampaignDetailView({ id }: { id: string }) {
       {/* Header row */}
       <div className="flex items-center justify-between gap-4">
         <Link
-          to="/echo"
+          to={echoHomePath}
           className="flex items-center gap-1 text-xs text-text-muted hover:text-accent-cyan no-underline"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -274,9 +295,15 @@ function CampaignDetailView({ id }: { id: string }) {
           label="Reply rate"
           value="—"
           sub={
-            <Link to="/preferences" className="text-accent-cyan hover:underline no-underline">
-              Connect Gmail →
-            </Link>
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[11px] text-text-dim">Connect Gmail to track replies</span>
+              <Link
+                to={gmailConnectPath}
+                className="text-[11px] text-accent-cyan hover:underline no-underline"
+              >
+                Connect →
+              </Link>
+            </span>
           }
         />
       </div>
@@ -296,7 +323,13 @@ function CampaignDetailView({ id }: { id: string }) {
 
       {/* Time series */}
       <Section title="Activity over time">
-        <TimeSeriesBlock data={analytics} range={range} />
+        <Suspense
+          fallback={
+            <div className="bg-surface-alt border border-border rounded-lg h-64 animate-pulse" />
+          }
+        >
+          <TimeSeriesBlock campaignId={id} range={range} />
+        </Suspense>
       </Section>
 
       {/* Microsite metrics */}
@@ -374,7 +407,13 @@ function KpiTile({
       <p className="text-xl font-semibold text-text tabular-nums">{value}</p>
       <p className="text-xs text-text-muted mt-0.5">{label}</p>
       {sub !== undefined && sub !== null && (
-        <p className="text-[11px] text-text-dim mt-0.5">{sub}</p>
+        // Only wrap plain strings in a <p>; ReactNode children may include block
+        // elements (e.g., flex-column Link), so we can't nest inside <p>.
+        typeof sub === 'string' ? (
+          <p className="text-[11px] text-text-dim mt-0.5">{sub}</p>
+        ) : (
+          <div className="text-[11px] text-text-dim mt-0.5">{sub}</div>
+        )
       )}
     </div>
   )
@@ -398,107 +437,89 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function FunnelChart({ stages }: { stages: Array<{ label: string; value: number }> }) {
   const max = Math.max(1, ...stages.map((s) => s.value))
   return (
-    <div className="space-y-2">
-      {stages.map((s, idx) => {
-        const width = (s.value / max) * 100
-        const prev = idx > 0 ? stages[idx - 1].value : max
-        const dropoff = idx > 0 ? prev - s.value : 0
-        const rate = idx > 0 ? pct(s.value, prev) : 100
-        return (
-          <div key={s.label} className="flex items-center gap-3">
-            <span className="text-xs text-text-muted w-24 shrink-0">{s.label}</span>
-            <div className="flex-1 h-6 bg-surface-alt rounded-md overflow-hidden border border-border">
-              <div
-                className="h-full bg-accent-cyan transition-all duration-500"
-                style={{ width: `${Math.max(width, 2)}%` }}
-              />
+    <div>
+      <div className="space-y-2">
+        {stages.map((s, idx) => {
+          const width = (s.value / max) * 100
+          const prev = idx > 0 ? stages[idx - 1].value : max
+          const dropoff = idx > 0 ? prev - s.value : 0
+          const rate = idx > 0 ? pct(s.value, prev) : 100
+          return (
+            <div key={s.label} className="flex items-center gap-3">
+              <span className="text-xs text-text-muted w-24 shrink-0">{s.label}</span>
+              <div className="flex-1 h-6 bg-surface-alt rounded-md overflow-hidden border border-border">
+                <div
+                  className="h-full bg-accent-cyan transition-all duration-500"
+                  style={{ width: `${Math.max(width, 2)}%` }}
+                />
+              </div>
+              <span className="text-xs text-text tabular-nums w-20 text-right">
+                {formatNumber(s.value)}
+              </span>
+              <span className="text-[11px] text-text-dim tabular-nums w-12 text-right">
+                {idx === 0 ? '' : `${rate}%`}
+              </span>
+              <span className="text-[11px] text-text-dim tabular-nums w-16 text-right">
+                {idx === 0 || dropoff === 0 ? '' : `-${formatNumber(dropoff)}`}
+              </span>
             </div>
-            <span className="text-xs text-text tabular-nums w-20 text-right">
-              {formatNumber(s.value)}
-            </span>
-            <span className="text-[11px] text-text-dim tabular-nums w-12 text-right">
-              {idx === 0 ? '' : `${rate}%`}
-            </span>
-            <span className="text-[11px] text-text-dim tabular-nums w-16 text-right">
-              {idx === 0 || dropoff === 0 ? '' : `-${formatNumber(dropoff)}`}
-            </span>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
+
+      <details className="mt-2">
+        <summary className="cursor-pointer text-text-muted hover:text-text text-xs">
+          View as table
+        </summary>
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="py-1 pr-3 font-semibold text-text-dim uppercase tracking-wider">
+                  Stage
+                </th>
+                <th className="py-1 pr-3 font-semibold text-text-dim uppercase tracking-wider text-right">
+                  Count
+                </th>
+                <th className="py-1 pr-3 font-semibold text-text-dim uppercase tracking-wider text-right">
+                  Stage rate
+                </th>
+                <th className="py-1 font-semibold text-text-dim uppercase tracking-wider text-right">
+                  Drop-off
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {stages.map((s, idx) => {
+                const prev = idx > 0 ? stages[idx - 1].value : max
+                const dropoff = idx > 0 ? prev - s.value : 0
+                const rate = idx > 0 ? pct(s.value, prev) : 100
+                return (
+                  <tr key={s.label}>
+                    <td className="py-1 pr-3 text-text-muted">{s.label}</td>
+                    <td className="py-1 pr-3 text-text tabular-nums text-right">
+                      {s.value}
+                    </td>
+                    <td className="py-1 pr-3 text-text tabular-nums text-right">
+                      {idx === 0 ? '—' : `${rate}%`}
+                    </td>
+                    <td className="py-1 text-text tabular-nums text-right">
+                      {idx === 0 || dropoff === 0 ? '—' : `-${dropoff}`}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
   )
 }
 
 // ── Time series ──────────────────────────────────────────
-
-function TimeSeriesBlock({
-  data,
-  range,
-}: {
-  data: AnalyticsWithMicrosite
-  range: RangeKey
-}) {
-  // Until the backend ships per-bucket timeseries, derive an aggregate single-
-  // point view from the cumulative metrics. This keeps the page shipping and
-  // lets BL-1040 follow-up plumb the real endpoint.
-  const series = useMemo(() => {
-    const delivered = data.sending?.email?.delivered ?? 0
-    const opened = data.engagement?.opened ?? 0
-    const clicked = data.engagement?.clicked ?? 0
-    const today = new Date()
-    // Fake 7 bucket distribution so the chart isn't empty. Last bucket holds
-    // the actual cumulative totals; earlier buckets ramp up linearly for shape.
-    const buckets = 7
-    return Array.from({ length: buckets }).map((_, i) => {
-      const d = new Date(today)
-      d.setDate(today.getDate() - (buckets - 1 - i))
-      const factor = (i + 1) / buckets
-      return {
-        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        Delivered: Math.round(delivered * factor),
-        Opened: Math.round(opened * factor),
-        Clicked: Math.round(clicked * factor),
-      }
-    })
-  }, [data])
-
-  const hasData =
-    (data.sending?.email?.delivered ?? 0) +
-      (data.engagement?.opened ?? 0) +
-      (data.engagement?.clicked ?? 0) >
-    0
-
-  if (!hasData) {
-    return (
-      <div className="bg-surface-alt border border-border rounded-lg px-4 py-8 text-center">
-        <p className="text-xs text-text-dim">No activity yet in the selected {range} window.</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="bg-surface-alt border border-border rounded-lg p-3 h-64">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={series} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
-          <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-          <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.4} />
-          <YAxis tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.4} />
-          <Tooltip
-            contentStyle={{
-              background: 'var(--color-surface, #1a1f2e)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '6px',
-              fontSize: '11px',
-            }}
-          />
-          <Line type="monotone" dataKey="Delivered" stroke="#00B8CF" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Opened" stroke="#8b5cf6" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Clicked" stroke="#10b981" strokeWidth={2} dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
+// Component extracted to ./echo/TimeSeriesBlock.tsx and lazy-loaded above.
+// Data source: /api/campaigns/:id/analytics/timeseries (BL-1037).
 
 // ── Microsite block ──────────────────────────────────────
 
