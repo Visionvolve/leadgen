@@ -48,8 +48,16 @@ type RangeKey = '24h' | '7d' | '30d' | 'all'
 interface MicrositePayload {
   visits: number
   unique_visitors: number
+  // BL-1047: PostHog-sourced fields — `null` when PostHog is offline
+  // so the UI can distinguish "zero" from "no data".
+  cta_clicks?: number | null
+  form_submits?: number | null
+  avg_time_on_page_sec?: number | null
+  // Legacy activities-table field — kept through Phase 2.
   product_views: number
   visit_rate: number
+  // Diagnostic — `'posthog'` or `'activities'`.
+  source?: 'posthog' | 'activities'
 }
 
 interface AnalyticsWithMicrosite extends CampaignAnalyticsData {
@@ -589,11 +597,33 @@ function MicrositeBlock({
     )
   }
 
+  // BL-1047: prefer PostHog-sourced cta_clicks + form_submits tiles.
+  // Fall back to the legacy product_views tile when PostHog is offline so
+  // the block is never blank. `null` means "no data" — render an em dash.
+  const ctaDisplay =
+    microsite.cta_clicks == null
+      ? microsite.product_views > 0
+        ? String(microsite.product_views)
+        : '—'
+      : String(microsite.cta_clicks)
+  const ctaLabel =
+    microsite.cta_clicks == null && microsite.product_views > 0
+      ? 'Product views'
+      : 'CTA clicks'
+  const formSubmitsDisplay =
+    microsite.form_submits == null ? '—' : String(microsite.form_submits)
+  const avgTimeDisplay =
+    microsite.avg_time_on_page_sec == null
+      ? '—'
+      : `${Math.round(microsite.avg_time_on_page_sec)}s`
+
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
       <KpiTile label="Total visits" value={microsite.visits} />
       <KpiTile label="Unique visitors" value={microsite.unique_visitors} />
-      <KpiTile label="Product views" value={microsite.product_views} />
+      <KpiTile label={ctaLabel} value={ctaDisplay} />
+      <KpiTile label="Form submits" value={formSubmitsDisplay} />
+      <KpiTile label="Avg time" value={avgTimeDisplay} />
       <KpiTile
         label="Visit rate"
         value={`${microsite.visit_rate ?? pct(microsite.unique_visitors, contactsTotal)}%`}

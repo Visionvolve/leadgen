@@ -581,7 +581,15 @@ function AnalyticsBlock({
 
   const micrositeVisits = microsite?.visits ?? 0
   const micrositeUnique = microsite?.unique_visitors ?? 0
-  const ctaActions = microsite?.product_views ?? 0
+  // BL-1047: prefer PostHog-sourced `cta_clicks`; fall back to the
+  // legacy activities-derived `product_views` for pre-migration campaigns.
+  // `null` means "no data" (PostHog unreachable, no legacy fallback value).
+  const ctaClicksRaw =
+    (microsite as { cta_clicks?: number | null } | undefined)?.cta_clicks
+  const ctaActions =
+    typeof ctaClicksRaw === 'number' ? ctaClicksRaw : (microsite?.product_views ?? 0)
+  const ctaLabel =
+    typeof ctaClicksRaw === 'number' ? 'CTA clicks' : 'CTA actions'
 
   return (
     <div data-testid="outreach-analytics-block" className="space-y-4">
@@ -621,7 +629,7 @@ function AnalyticsBlock({
           sub={micrositeAvailable ? `${micrositeUnique} unique` : 'offline'}
         />
         <AnalyticsKpiTile
-          label="CTA actions"
+          label={ctaLabel}
           value={micrositeAvailable ? formatNumber(ctaActions) : '—'}
         />
         <AnalyticsKpiTile

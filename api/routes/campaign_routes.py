@@ -4529,7 +4529,12 @@ def _compute_campaign_analytics(campaign_id, tenant_id):
         else email_counts.get("delivered", 0) + email_counts.get("sent", 0)
     )
 
-    # Microsite
+    # Microsite — activities-table counts are the legacy fallback path.
+    # Preserved during BL-1047 migration so pre-PostHog campaigns continue
+    # to render metrics, and so a PostHog outage degrades gracefully to
+    # locally-owned data rather than zeroes. `product_views` is the
+    # legacy-only field (activities event_type) — still emitted for
+    # backward compatibility until ua-microsite stops emitting it.
     microsite_row = db.session.execute(
         db.text(
             """
@@ -4546,9 +4551,63 @@ def _compute_campaign_analytics(campaign_id, tenant_id):
         ),
         {"cid": campaign_id, "t": tenant_id},
     ).fetchone()
-    ms_visits = int(microsite_row[0]) if microsite_row else 0
-    ms_unique = int(microsite_row[1]) if microsite_row else 0
+    legacy_ms_visits = int(microsite_row[0]) if microsite_row else 0
+    legacy_ms_unique = int(microsite_row[1]) if microsite_row else 0
     ms_product_views = int(microsite_row[2]) if microsite_row else 0
+
+    # BL-1047: merge PostHog-sourced microsite metrics. PostHog is the
+    # canonical source for visits/unique/CTA/form metrics — activities-
+    # table rows stay as a fallback while ua-microsite finishes moving
+    # off the partner-token ingest path. `microsite_source` tells the UI
+    # which data it is looking at (for banner copy, not for filtering).
+    ms_visits = legacy_ms_visits
+    ms_unique = legacy_ms_unique
+    ms_cta_clicks: int | None = None
+    ms_form_submits: int | None = None
+    ms_avg_time_sec: float | None = None
+    posthog_available = False
+    microsite_source = "activities"
+    try:
+        # Import locally — keeps the integrations module off the cold-start
+        # path for routes that don't touch analytics (mirrors the pattern
+        # in `campaign_analytics_microsite`).
+        from ..integrations.posthog import PostHogClient, PostHogUnavailableError
+
+        since, until = _range_to_window("7d")
+        client = PostHogClient()
+        ph_metrics = client.get_campaign_microsite_metrics(
+            str(campaign_id), since, until
+        )
+        # PostHog is authoritative when it answers. Legacy counts remain
+        # available via `microsite_source="merged"` semantics — i.e. the
+        # Activity-table counts are exposed only when PostHog is offline.
+        ms_visits = ph_metrics.visits
+        ms_unique = ph_metrics.unique_visitors
+        ms_cta_clicks = ph_metrics.cta_clicks
+        ms_form_submits = ph_metrics.form_submits
+        ms_avg_time_sec = ph_metrics.avg_time_on_page_sec
+        posthog_available = True
+        microsite_source = "posthog"
+    except (PostHogUnavailableError, RuntimeError) as exc:
+        # RuntimeError covers PostHogClient.__init__ when env is unset.
+        # PostHogUnavailableError covers transient failures.
+        # Both degrade to legacy activities counts + `posthog_available=False`
+        # so the frontend can render a banner without hiding the rest of
+        # the analytics surface.
+        logger.debug(
+            "Microsite PostHog degraded for campaign %s (%s) — falling back "
+            "to activities table",
+            campaign_id,
+            type(exc).__name__,
+        )
+        posthog_available = False
+        microsite_source = "activities"
+    except Exception:  # pragma: no cover — defensive; never break analytics
+        logger.exception(
+            "Unexpected PostHog error for campaign %s — falling back", campaign_id
+        )
+        posthog_available = False
+        microsite_source = "activities"
 
     def _rate(num, den):
         if den == 0:
@@ -4619,9 +4678,27 @@ def _compute_campaign_analytics(campaign_id, tenant_id):
         "microsite": {
             "visits": ms_visits,
             "unique_visitors": ms_unique,
+            # BL-1047: PostHog-sourced engagement metrics. `None` when
+            # PostHog is unreachable so the frontend can distinguish
+            # "we have no data" from "the data is zero".
+            "cta_clicks": ms_cta_clicks,
+            "form_submits": ms_form_submits,
+            "avg_time_on_page_sec": ms_avg_time_sec,
+            # Legacy activities-table count — kept for backward compat
+            # until ua-microsite drops the `product_viewed` event. See
+            # ADR-010 §8 for Phase-2 removal plan.
             "product_views": ms_product_views,
             "visit_rate": _rate(ms_unique, contacts_total),
+            # Diagnostic field: tells the UI which data source it is
+            # looking at so it can show the correct banner copy.
+            "source": microsite_source,
         },
+        # Top-level flag so the frontend can render a single "PostHog
+        # offline" banner without inspecting the microsite block. Set to
+        # `False` both when the env is unset and when PostHog returns a
+        # transient error — from the UI's perspective these are the same
+        # state (fall back to activities-table counts + show banner).
+        "posthog_available": posthog_available,
     }
 
 
@@ -4647,7 +4724,15 @@ _STREAM_DELTA_KEYS = {
     ],
     "sending.email": ["sent", "delivered", "bounced", "failed", "unsubscribed"],
     "messages": ["total"],
-    "microsite": ["visits", "unique_visitors", "product_views"],
+    # BL-1047: cta_clicks + form_submits added for PostHog-sourced
+    # engagement. product_views remains for legacy activities-table data.
+    "microsite": [
+        "visits",
+        "unique_visitors",
+        "cta_clicks",
+        "form_submits",
+        "product_views",
+    ],
 }
 
 
