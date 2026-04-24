@@ -17,6 +17,7 @@ All notable changes to the Leadgen Pipeline project.
 ### Changed
 - **`email_send_log` schema**: added `kind` column (preview | send | retry — excludes previews from analytics, BL-1026, PR #152) and `superseded_at` column (marks earlier attempts after a successful retry so the funnel counts each recipient once, BL-1029, PR #154).
 - **Legacy `/api/campaigns/:id/analytics` endpoint** refactored to share `_compute_campaign_analytics` helper with the new split endpoints. Existing dashboards unaffected.
+- **`/api/campaigns/:id/analytics` microsite block now PostHog-sourced** (BL-1047): the main analytics endpoint merges PostHog metrics (`visits`, `unique_visitors`, new `cta_clicks` / `form_submits` / `avg_time_on_page_sec`) into the `microsite` block. Legacy activities-table `product_views` field preserved. Top-level `posthog_available` flag tells the frontend whether to render the degraded-data banner. On PostHog failure/unavailable env, the block degrades to activities-table counts — no 5xx. Echo + OutreachTab updated to prefer `cta_clicks` over `product_views` with graceful fallback for pre-migration campaigns.
 
 ### Fixed
 - **Resend webhook timestamp semantics** (BL-1028, PR #149): earliest-observed semantics for `delivered_at`, `opened_at`, `clicked_at` so retries never overwrite real engagement with later send timestamps.

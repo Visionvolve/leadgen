@@ -480,3 +480,141 @@ class TestCampaignAnalyticsLinkedIn:
         assert li["total"] == 2
         assert li["sent"] == 1
         assert li["queued"] == 1
+
+
+class TestCampaignAnalyticsMicrositePostHogMerge:
+    """BL-1047: /analytics microsite block merges PostHog + activities.
+
+    Verifies:
+    - When PostHog responds, `visits` / `unique_visitors` come from PostHog
+      and new `cta_clicks` / `form_submits` / `avg_time_on_page_sec` fields
+      are populated.
+    - When PostHog is unreachable (RuntimeError from missing env or
+      PostHogUnavailableError), response falls back to activities-table
+      counts and sets `posthog_available=False`.
+    - `product_views` (legacy activities-derived) is preserved in both
+      paths for backward compatibility.
+    """
+
+    def test_merges_posthog_metrics_when_available(
+        self, client, seed_companies_contacts, db, monkeypatch
+    ):
+        from datetime import datetime, timezone
+
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        tenant = seed_companies_contacts["tenant"]
+
+        campaign = _make_campaign(db, tenant.id)
+        db.session.commit()
+
+        # Patch PostHogClient.get_campaign_microsite_metrics at the route
+        # import site. The helper imports the module lazily inside
+        # _compute_campaign_analytics so we monkeypatch the module-level
+        # symbol and cover both the `PostHogClient` and
+        # `get_campaign_microsite_metrics` lookups.
+        from api.integrations import posthog as posthog_mod
+
+        fake_metrics = posthog_mod.CampaignMicrositeMetrics(
+            campaign_id=str(campaign.id),
+            since=datetime(2026, 4, 17, tzinfo=timezone.utc),
+            until=datetime(2026, 4, 24, tzinfo=timezone.utc),
+            visits=42,
+            unique_visitors=17,
+            cta_clicks=9,
+            form_submits=3,
+            avg_time_on_page_sec=12.5,
+        )
+
+        class _FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_campaign_microsite_metrics(self, *a, **kw):
+                return fake_metrics
+
+        monkeypatch.setattr(posthog_mod, "PostHogClient", _FakeClient)
+
+        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data["posthog_available"] is True
+        ms = data["microsite"]
+        assert ms["visits"] == 42
+        assert ms["unique_visitors"] == 17
+        assert ms["cta_clicks"] == 9
+        assert ms["form_submits"] == 3
+        assert ms["avg_time_on_page_sec"] == 12.5
+        # Legacy compat: product_views always present (zero for empty
+        # activities table in this test).
+        assert "product_views" in ms
+        assert ms["source"] == "posthog"
+
+    def test_falls_back_to_activities_when_posthog_missing_env(
+        self, client, seed_companies_contacts, db, monkeypatch
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        tenant = seed_companies_contacts["tenant"]
+
+        campaign = _make_campaign(db, tenant.id)
+        db.session.commit()
+
+        from api.integrations import posthog as posthog_mod
+
+        # Simulate the env-missing case by having PostHogClient.__init__
+        # raise RuntimeError — this is the actual behavior of the real
+        # client when POSTHOG_PERSONAL_API_KEY is unset.
+        class _BrokenClient:
+            def __init__(self, *a, **kw):
+                raise RuntimeError("POSTHOG_PERSONAL_API_KEY not configured")
+
+        monkeypatch.setattr(posthog_mod, "PostHogClient", _BrokenClient)
+
+        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        # Degradation contract: response still 200, flag tells UI the bad
+        # news, and microsite block has activities-table counts (zeros
+        # here because the empty test campaign has no activities).
+        assert data["posthog_available"] is False
+        ms = data["microsite"]
+        assert ms["visits"] == 0
+        assert ms["unique_visitors"] == 0
+        # New PostHog fields degrade to None so the UI can distinguish
+        # "no data" from "legitimately zero".
+        assert ms["cta_clicks"] is None
+        assert ms["form_submits"] is None
+        assert ms["avg_time_on_page_sec"] is None
+        assert ms["product_views"] == 0
+        assert ms["source"] == "activities"
+
+    def test_falls_back_on_posthog_unavailable_error(
+        self, client, seed_companies_contacts, db, monkeypatch
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        tenant = seed_companies_contacts["tenant"]
+
+        campaign = _make_campaign(db, tenant.id)
+        db.session.commit()
+
+        from api.integrations import posthog as posthog_mod
+
+        class _FlakyClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_campaign_microsite_metrics(self, *a, **kw):
+                raise posthog_mod.PostHogUnavailableError("transient 502")
+
+        monkeypatch.setattr(posthog_mod, "PostHogClient", _FlakyClient)
+
+        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data["posthog_available"] is False
+        assert data["microsite"]["source"] == "activities"
