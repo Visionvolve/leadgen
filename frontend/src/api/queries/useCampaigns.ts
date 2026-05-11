@@ -394,6 +394,95 @@ export function useCampaignBounces(
   })
 }
 
+// ── Campaign Reach (BL-1114) ───────────────────────────
+
+export interface CampaignReachTotals {
+  targeted: number
+  sent: number
+  delivered: number
+  opened: number
+  clicked: number
+  bounced: number
+  complained: number
+  unsubscribed: number
+}
+
+export interface CampaignReachRates {
+  send_rate: number
+  delivery_rate: number
+  open_rate: number
+  click_rate: number
+  bounce_rate: number
+  complaint_rate: number
+  unsubscribe_rate: number
+}
+
+export interface CampaignReachLanguageRow {
+  language: string
+  fallback: boolean
+  sent: number
+  delivered: number
+  opened: number
+  clicked: number
+  bounced: number
+  complained: number
+  unsubscribed: number
+}
+
+export interface CampaignReachTimelineRow {
+  date: string
+  sent: number
+  opened: number
+  clicked: number
+}
+
+export interface CampaignReachData {
+  campaign_id: string
+  totals: CampaignReachTotals
+  rates: CampaignReachRates
+  by_language: CampaignReachLanguageRow[]
+  timeline: CampaignReachTimelineRow[]
+}
+
+/** Per-campaign reach rollup — drives the Reach section on the
+ *  CampaignDetailPage Analytics tab. */
+export function useCampaignReach(
+  campaignId: string | null,
+  enabled: boolean = true,
+) {
+  return useQuery({
+    queryKey: ['campaign-reach', campaignId],
+    queryFn: () => apiFetch<CampaignReachData>(`/campaigns/${campaignId}/reach`),
+    enabled: enabled && !!campaignId,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  })
+}
+
+export interface CampaignReachSummaryRow {
+  campaign_id: string
+  name: string
+  status: string | null
+  totals: CampaignReachTotals
+  rates: CampaignReachRates
+}
+
+export interface CampaignReachSummaryData {
+  campaigns: CampaignReachSummaryRow[]
+}
+
+/** Tenant-wide reach rollup. Powers the optional "Campaigns reach
+ *  overview" page. */
+export function useCampaignReachSummary(enabled: boolean = true) {
+  return useQuery({
+    queryKey: ['campaign-reach-summary'],
+    queryFn: () => apiFetch<CampaignReachSummaryData>(`/campaigns/reach/summary`),
+    enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+}
+
 // ── Campaign Analytics: Time-Series (BL-1037) ──────────
 
 export type TimeSeriesRange = '24h' | '7d' | '30d' | 'all'
