@@ -2237,3 +2237,75 @@ class RefToken(db.Model):
                 self.last_visited_at.isoformat() if self.last_visited_at else None
             ),
         }
+
+
+class SmartList(db.Model):
+    """Saved audience filter for picking campaign targets.
+
+    A smart list is a tenant-scoped, named JSON filter spec over either
+    contacts or companies. Operators define the filter once (e.g. "CZ B2B
+    agencies that are cold") and re-run on demand. The ``filters`` JSON
+    document is interpreted by ``api/routes/smart_list_routes.py``; the
+    filter keys mirror the existing list endpoints (``/api/companies`` and
+    ``/api/contacts``).
+
+    See migration 071_saved_smart_lists.sql; BL-1111 / BL-1112 / BL-1113
+    (v25 Phase 10 — Campaign Database Foundations).
+    """
+
+    __tablename__ = "smart_lists"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("uuid_generate_v4()"),
+    )
+    tenant_id = db.Column(
+        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    name = db.Column(db.Text, nullable=False)
+    description = db.Column(db.Text)
+    # 'contact' or 'company' — controls which list endpoint backs the run.
+    target = db.Column(db.Text, nullable=False)
+    # AND-of-conditions filter spec; keys match list endpoint query params.
+    filters = db.Column(JSONB, nullable=False, server_default=db.text("'{}'::jsonb"))
+    created_by = db.Column(UUID(as_uuid=False), db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+    last_run_at = db.Column(db.DateTime(timezone=True))
+    last_run_count = db.Column(db.Integer)
+
+    __table_args__ = (
+        # Mirrors the case-insensitive uniqueness enforced by migration 071's
+        # ``UNIQUE INDEX idx_smart_lists_tenant_name ON smart_lists(tenant_id,
+        # LOWER(name))``. SQLAlchemy can't express the LOWER() expression in a
+        # portable UniqueConstraint, so we rely on the migration for the
+        # case-insensitive variant in PostgreSQL and on this case-sensitive
+        # constraint for SQLite (test-time) parity.
+        db.UniqueConstraint("tenant_id", "name", name="uq_smart_lists_tenant_name"),
+    )
+
+    def to_dict(self, include_filters=True):
+        out = {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "name": self.name,
+            "description": self.description,
+            "target": self.target,
+            "created_by": str(self.created_by) if self.created_by else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+            "last_run_count": self.last_run_count,
+        }
+        if include_filters:
+            import json as _json
+
+            raw = self.filters
+            if isinstance(raw, str):
+                try:
+                    raw = _json.loads(raw) if raw else {}
+                except (TypeError, ValueError):
+                    raw = {}
+            out["filters"] = raw or {}
+        return out
