@@ -26,6 +26,7 @@ from ..display import (
 )
 from ..models import db
 from ..services.contact_helpers import write_field_change
+from ..utils.safe_lookup import is_valid_uuid
 
 companies_bp = Blueprint("companies", __name__)
 
@@ -712,6 +713,9 @@ def get_company(company_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(company_id):
+        return jsonify({"error": "invalid_company_id"}), 400
+
     row = db.session.execute(
         db.text("""
             SELECT
@@ -1190,6 +1194,9 @@ def delete_company(company_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(company_id):
+        return jsonify({"error": "invalid_company_id"}), 400
+
     # Verify company belongs to tenant
     row = db.session.execute(
         db.text("SELECT id FROM companies WHERE id = :id AND tenant_id = :tid"),
@@ -1224,6 +1231,9 @@ def update_company(company_id):
     tenant_id = resolve_tenant()
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
+
+    if not is_valid_uuid(company_id):
+        return jsonify({"error": "invalid_company_id"}), 400
 
     body = request.get_json(silent=True) or {}
     allowed = {

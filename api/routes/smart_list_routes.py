@@ -39,6 +39,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..models import SmartList, db
+from ..utils.safe_lookup import is_valid_uuid, safe_first
 
 smart_lists_bp = Blueprint("smart_lists", __name__)
 
@@ -293,7 +294,10 @@ def get_smart_list(list_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    sl = SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)).first()
+    if not is_valid_uuid(list_id):
+        return jsonify({"error": "invalid_list_id"}), 400
+
+    sl = safe_first(SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)))
     if not sl:
         return jsonify({"error": "Smart list not found"}), 404
     return jsonify(sl.to_dict())
@@ -352,7 +356,10 @@ def update_smart_list(list_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    sl = SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)).first()
+    if not is_valid_uuid(list_id):
+        return jsonify({"error": "invalid_list_id"}), 400
+
+    sl = safe_first(SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)))
     if not sl:
         return jsonify({"error": "Smart list not found"}), 404
 
@@ -402,7 +409,10 @@ def delete_smart_list(list_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    sl = SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)).first()
+    if not is_valid_uuid(list_id):
+        return jsonify({"error": "invalid_list_id"}), 400
+
+    sl = safe_first(SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)))
     if not sl:
         return jsonify({"error": "Smart list not found"}), 404
     db.session.delete(sl)
@@ -421,7 +431,10 @@ def run_smart_list(list_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    sl = SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)).first()
+    if not is_valid_uuid(list_id):
+        return jsonify({"error": "invalid_list_id"}), 400
+
+    sl = safe_first(SmartList.query.filter_by(id=list_id, tenant_id=str(tenant_id)))
     if not sl:
         return jsonify({"error": "Smart list not found"}), 404
 

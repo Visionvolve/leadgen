@@ -48,6 +48,7 @@ from ..services.send_service import (
     send_campaign_emails,
     send_campaign_emails_gmail,
 )
+from ..utils.safe_lookup import is_valid_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -3133,6 +3134,9 @@ def list_campaign_bounces(campaign_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(campaign_id):
+        return jsonify({"error": "invalid_campaign_id"}), 400
+
     campaign_name, bounce_rows = _fetch_campaign_bounces(campaign_id, tenant_id)
     if campaign_name is None:
         return jsonify({"error": "Campaign not found"}), 404
@@ -3158,6 +3162,9 @@ def export_campaign_bounces_csv(campaign_id):
     tenant_id = resolve_tenant()
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
+
+    if not is_valid_uuid(campaign_id):
+        return jsonify({"error": "invalid_campaign_id"}), 400
 
     campaign_name, bounce_rows = _fetch_campaign_bounces(campaign_id, tenant_id)
     if campaign_name is None:

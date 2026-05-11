@@ -375,3 +375,41 @@ class TestFilterNormalization:
         assert "organization_type" in body["filters"]
         assert "definitely_not_a_column" not in body["filters"]
         assert "; DROP TABLE companies" not in body["filters"]
+
+
+class TestSmartListBadInputHardening:
+    """Hotfix v25 — endpoints must NOT 500 on malformed list_id path params."""
+
+    def test_get_smart_list_bad_format_returns_400(self, client, seed_org_types):
+        resp = client.get(
+            "/api/smart-lists/not-a-uuid", headers=_headers(client)
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_list_id"}
+
+    def test_get_smart_list_unknown_id_returns_404(self, client, seed_org_types):
+        unknown_uuid = "00000000-0000-0000-0000-000000000000"
+        resp = client.get(
+            f"/api/smart-lists/{unknown_uuid}", headers=_headers(client)
+        )
+        assert resp.status_code == 404
+
+    def test_patch_smart_list_bad_format_returns_400(self, client, seed_org_types):
+        resp = client.patch(
+            "/api/smart-lists/not-a-uuid",
+            json={"name": "new"},
+            headers=_headers(client),
+        )
+        assert resp.status_code == 400
+
+    def test_delete_smart_list_bad_format_returns_400(self, client, seed_org_types):
+        resp = client.delete(
+            "/api/smart-lists/not-a-uuid", headers=_headers(client)
+        )
+        assert resp.status_code == 400
+
+    def test_run_smart_list_bad_format_returns_400(self, client, seed_org_types):
+        resp = client.post(
+            "/api/smart-lists/not-a-uuid/run", headers=_headers(client)
+        )
+        assert resp.status_code == 400

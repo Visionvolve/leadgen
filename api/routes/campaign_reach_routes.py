@@ -45,6 +45,7 @@ from flask import Blueprint, jsonify
 
 from ..auth import require_role, resolve_tenant
 from ..models import db
+from ..utils.safe_lookup import is_valid_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,11 @@ def campaign_reach(campaign_id):
     tenant_id = resolve_tenant()
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
+
+    # Reject malformed campaign_id before the DB query — PostgreSQL's UUID
+    # column would otherwise raise InvalidTextRepresentation → 500.
+    if not is_valid_uuid(campaign_id):
+        return jsonify({"error": "invalid_campaign_id"}), 400
 
     # Verify campaign membership in tenant + capture ``total_contacts``
     # (used as the ``targeted`` denominator). We use total_contacts so

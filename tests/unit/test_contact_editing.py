@@ -224,3 +224,58 @@ class TestAuditLog:
         assert len(name_rows) == 1
         assert name_rows[0][1] == "Acme Corp"
         assert name_rows[0][2] == "ACME s.r.o."
+
+
+class TestContactCompanyBadInputHardening:
+    """Hotfix v25 — contact/company endpoints must NOT 500 on bad UUID."""
+
+    def test_get_contact_bad_format_returns_400(self, client, seed_companies_contacts):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        resp = client.get("/api/contacts/not-a-uuid", headers=headers)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_contact_id"}
+
+    def test_patch_contact_bad_format_returns_400(
+        self, client, seed_companies_contacts
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        resp = client.patch(
+            "/api/contacts/not-a-uuid",
+            json={"first_name": "X"},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+
+    def test_patch_contact_unknown_wellformed_returns_404(
+        self, client, seed_companies_contacts
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        unknown = "00000000-0000-0000-0000-000000000000"
+        resp = client.patch(
+            f"/api/contacts/{unknown}",
+            json={"first_name": "X"},
+            headers=headers,
+        )
+        assert resp.status_code == 404
+
+    def test_get_company_bad_format_returns_400(self, client, seed_companies_contacts):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        resp = client.get("/api/companies/not-a-uuid", headers=headers)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_company_id"}
+
+    def test_patch_company_bad_format_returns_400(
+        self, client, seed_companies_contacts
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        resp = client.patch(
+            "/api/companies/not-a-uuid",
+            json={"name": "X"},
+            headers=headers,
+        )
+        assert resp.status_code == 400

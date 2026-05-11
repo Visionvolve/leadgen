@@ -32,6 +32,12 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from ..auth import require_role, resolve_tenant
 from ..models import Activity, Contact, RefToken, db
+from ..utils.safe_lookup import (
+    is_valid_ref_token,
+    is_valid_uuid,
+    safe_first,
+    safe_get,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +107,11 @@ def create_ref_token(contact_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    # Reject malformed contact_id before the DB query so PostgreSQL never
+    # raises InvalidTextRepresentation. See api/utils/safe_lookup.py.
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
+
     body = request.get_json(silent=True) or {}
     variant = (body.get("variant") or "with_prices").strip()
     if variant not in VALID_VARIANTS:
@@ -109,7 +120,9 @@ def create_ref_token(contact_id):
         ), 400
 
     # Validate that the contact belongs to the resolved tenant.
-    contact = Contact.query.filter_by(id=contact_id, tenant_id=str(tenant_id)).first()
+    contact = safe_first(
+        Contact.query.filter_by(id=contact_id, tenant_id=str(tenant_id))
+    )
     if not contact:
         return jsonify({"error": "Contact not found"}), 404
 
@@ -187,7 +200,12 @@ def list_ref_tokens(contact_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    contact = Contact.query.filter_by(id=contact_id, tenant_id=str(tenant_id)).first()
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
+
+    contact = safe_first(
+        Contact.query.filter_by(id=contact_id, tenant_id=str(tenant_id))
+    )
     if not contact:
         return jsonify({"error": "Contact not found"}), 404
 
@@ -216,15 +234,21 @@ def get_token_preferences(token):
     the token is unknown or expired so the microsite falls through to the
     no-cookie path silently. Never reveals tenant slugs or sensitive
     contact data — just the strictly necessary fields to render the page.
-    """
-    if not token:
-        return jsonify({"error": "Not found"}), 404
 
-    tok = db.session.get(RefToken, token)
+    Returns 400 ``invalid_token`` if the token shape is obviously wrong;
+    the public surface MUST NOT 500 on malformed input (PR #175 fixed the
+    same anti-pattern in the unsubscribe endpoint).
+    """
+    # Reject obviously malformed tokens up-front so we never touch the DB
+    # with garbage that could trip InvalidTextRepresentation on PG.
+    if not is_valid_ref_token(token):
+        return jsonify({"error": "invalid_token"}), 400
+
+    tok = safe_get(RefToken, token)
     if not tok or tok.is_expired():
         return jsonify({"error": "Not found"}), 404
 
-    contact = db.session.get(Contact, tok.contact_id)
+    contact = safe_get(Contact, tok.contact_id)
     first_name = contact.first_name if contact else None
 
     return jsonify(
@@ -246,14 +270,16 @@ def record_token_visit(token):
     ``event_type='catalog_ref_visited'`` so the visit flows through the
     same downstream analytics as other engagement events.
 
-    Returns 204 on success, 404 on unknown/expired token. The endpoint is
-    intentionally non-throwing for any other failure mode — the microsite
-    visit must never break because the visit emit failed.
+    Returns 204 on success, 404 on unknown/expired token, 400 on a
+    malformed token shape. The endpoint is intentionally non-throwing
+    for any other failure mode — the microsite visit must never break
+    because the visit emit failed.
     """
-    if not token:
-        return ("", 204)
+    # Reject malformed tokens before DB touch (avoids 500 on PG cast errors).
+    if not is_valid_ref_token(token):
+        return jsonify({"error": "invalid_token"}), 400
 
-    tok = db.session.get(RefToken, token)
+    tok = safe_get(RefToken, token)
     if not tok or tok.is_expired():
         return jsonify({"error": "Not found"}), 404
 

@@ -324,3 +324,60 @@ class TestCrossTenant:
             f"/api/contacts/{other_contact.id}/ref-tokens", headers=headers
         )
         assert resp.status_code == 404
+
+
+class TestRefTokenBadInputHardening:
+    """Hotfix v25 — endpoints must NOT 500 on malformed path params.
+
+    Reproduces the bug class fixed in PR #175 for /api/unsubscribe.
+    Without format-validation a malformed UUID/token would reach the
+    PostgreSQL driver and trip InvalidTextRepresentation → Flask 500.
+    SQLite (used in tests) tolerates the bad string, so we assert on
+    the expected 400/404 returned by the format check itself rather
+    than relying on the driver to crash.
+    """
+
+    def test_preferences_bogus_token_returns_400(self, client):
+        resp = client.get("/api/ref-tokens/bogus/preferences")
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_token"}
+
+    def test_preferences_wellformed_unknown_token_returns_404(self, client):
+        # 32 uppercase base32 chars — passes format check, but no row exists.
+        resp = client.get(
+            "/api/ref-tokens/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/preferences"
+        )
+        assert resp.status_code == 404
+
+    def test_visit_bogus_token_returns_400(self, client):
+        resp = client.post("/api/ref-tokens/not-a-token/visit")
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_token"}
+
+    def test_visit_wellformed_unknown_token_returns_404(self, client):
+        resp = client.post(
+            "/api/ref-tokens/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/visit"
+        )
+        assert resp.status_code == 404
+
+    def test_create_ref_token_bad_contact_id_returns_400(
+        self, client, seed_companies_contacts
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        resp = client.post(
+            "/api/contacts/not-a-uuid/ref-token",
+            json={"variant": "with_prices"},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_contact_id"}
+
+    def test_list_ref_tokens_bad_contact_id_returns_400(
+        self, client, seed_companies_contacts
+    ):
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        resp = client.get("/api/contacts/not-a-uuid/ref-tokens", headers=headers)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_contact_id"}
