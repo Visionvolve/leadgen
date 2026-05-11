@@ -527,3 +527,66 @@ class TestUnsubscribeEndpoint:
 
         c = _db.session.get(Contact, contact.id)
         assert c.is_suppressed is False
+
+
+# ---------------------------------------------------------------------------
+# Bad-input handling — hotfix for the 500 reported on staging (BL hotfix
+# 2026-05-12).  Every malformed-input path must return a 4xx, never a 500,
+# even when the request bypasses the dashboard (e.g. a corporate link scanner
+# fetching a tampered URL).
+# ---------------------------------------------------------------------------
+
+
+class TestUnsubscribeBadInput:
+    """The endpoint must never 500 on garbage input."""
+
+    def test_get_invalid_contact_id_format_returns_400(self, client):
+        resp = client.get(
+            "/api/unsubscribe?contact_id=not-a-uuid&token=whatever",
+            headers={"Accept": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_contact_id"}
+
+    def test_get_missing_contact_id_returns_400(self, client):
+        resp = client.get(
+            "/api/unsubscribe?token=whatever",
+            headers={"Accept": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_get_nil_uuid_returns_404(self, client):
+        """The all-zeros UUID is well-formed but won't exist — must be 404."""
+        resp = client.get(
+            "/api/unsubscribe?contact_id=00000000-0000-0000-0000-000000000000"
+            "&token=bogus",
+            headers={"Accept": "application/json"},
+        )
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "not_found"}
+
+    def test_post_invalid_contact_id_format_returns_400(self, client):
+        resp = client.post(
+            "/api/unsubscribe",
+            data={"contact_id": "not-a-uuid", "token": "whatever"},
+        )
+        assert resp.status_code == 400
+
+    def test_post_nil_uuid_returns_404(self, client):
+        resp = client.post(
+            "/api/unsubscribe",
+            data={
+                "contact_id": "00000000-0000-0000-0000-000000000000",
+                "token": "bogus",
+            },
+        )
+        assert resp.status_code == 404
+
+    def test_get_html_response_for_bad_input(self, client):
+        """Browsers (no Accept: json) get the HTML error page, still 400."""
+        resp = client.get(
+            "/api/unsubscribe?contact_id=not-a-uuid&token=whatever",
+        )
+        assert resp.status_code == 400
+        body = resp.get_data(as_text=True)
+        assert "invalid" in body.lower() or "expired" in body.lower()
