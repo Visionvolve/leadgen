@@ -23,6 +23,7 @@ from ..services.contact_helpers import (
     write_field_change,
 )
 from ..services.phone_normalize import normalize_phone
+from ..utils.safe_lookup import is_valid_uuid
 
 contacts_bp = Blueprint("contacts", __name__)
 
@@ -585,6 +586,9 @@ def get_contact(contact_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
+
     row = db.session.execute(
         db.text("""
             SELECT
@@ -838,6 +842,9 @@ def delete_contact(contact_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
+
     # Verify contact belongs to tenant
     row = db.session.execute(
         db.text("SELECT id FROM contacts WHERE id = :id AND tenant_id = :tid"),
@@ -878,6 +885,9 @@ def update_contact(contact_id):
     tenant_id = resolve_tenant()
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
+
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
 
     body = request.get_json(silent=True) or {}
     allowed = {

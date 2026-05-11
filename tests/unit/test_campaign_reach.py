@@ -447,3 +447,19 @@ class TestCampaignReachSummary:
         resp = client.get("/api/campaigns/reach/summary", headers=_auth(client))
         names = [c["name"] for c in resp.get_json()["campaigns"]]
         assert "Foreign Campaign" not in names
+
+
+class TestCampaignReachBadInputHardening:
+    """Hotfix v25 — endpoints must NOT 500 on malformed campaign_id."""
+
+    def test_reach_bad_campaign_id_returns_400(self, client, reach_campaign):
+        resp = client.get("/api/campaigns/not-a-uuid/reach", headers=_auth(client))
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "invalid_campaign_id"}
+
+    def test_reach_unknown_wellformed_campaign_id_returns_404(
+        self, client, reach_campaign
+    ):
+        unknown = "00000000-0000-0000-0000-000000000000"
+        resp = client.get(f"/api/campaigns/{unknown}/reach", headers=_auth(client))
+        assert resp.status_code == 404
