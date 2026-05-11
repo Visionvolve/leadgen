@@ -31,6 +31,7 @@ export interface CompanyListItem {
   website_url: string | null
   data_quality_score: number | null
   last_enriched_at: string | null
+  organization_type: string | null
 }
 
 interface CompaniesPage {
@@ -211,6 +212,7 @@ export interface CompanyDetail {
   logo_url: string | null
   last_enriched_at: string | null
   data_quality_score: number | null
+  organization_type: string | null
   enrichment_l1: CompanyEnrichmentL1 | null
   enrichment_l2: CompanyEnrichmentL2 | null
   registry_data: Record<string, unknown> | null
@@ -239,6 +241,8 @@ export interface CompanyFilters {
   geo_region_exclude?: string
   revenue_range?: string
   revenue_range_exclude?: string
+  organization_type?: string
+  organization_type_exclude?: string
   [key: string]: string | undefined
 }
 
@@ -275,8 +279,15 @@ export function useCompany(id: string | null) {
 export function useUpdateCompany() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
-      apiFetch(`/companies/${id}`, { method: 'PATCH', body: data }),
+    mutationFn: ({
+      id,
+      data,
+      params,
+    }: {
+      id: string
+      data: Record<string, unknown>
+      params?: Record<string, string>
+    }) => apiFetch(`/companies/${id}`, { method: 'PATCH', body: data, params }),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['company', id] })
       qc.invalidateQueries({ queryKey: ['companies'] })

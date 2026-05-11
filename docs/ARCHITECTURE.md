@@ -63,7 +63,7 @@ Leadgen Pipeline is a multi-tenant B2B lead enrichment and outreach platform. It
 ### 2. Flask API
 - **Tech**: Flask + SQLAlchemy + Gunicorn
 - **Container**: `leadgen-api` (Docker, port 5000)
-- **Routes**: `/api/auth/*`, `/api/tenants/*`, `/api/users/*`, `/api/tags/*`, `/api/companies/*`, `/api/contacts/*`, `/api/messages/*`, `/api/campaigns/*`, `/api/campaign-templates`, `/api/pipeline/*`, `/api/enrich/*`, `/api/imports/*`, `/api/llm-usage/*`, `/api/oauth/*`, `/api/gmail/*`, `/api/bulk/*`, `/api/extension/*`, `/api/health`
+- **Routes**: `/api/auth/*`, `/api/auth/gmail/*` (BL-1044), `/api/tenants/*`, `/api/users/*`, `/api/tags/*`, `/api/companies/*`, `/api/contacts/*`, `/api/messages/*`, `/api/campaigns/*`, `/api/campaign-templates`, `/api/pipeline/*`, `/api/enrich/*`, `/api/imports/*`, `/api/llm-usage/*`, `/api/oauth/*`, `/api/gmail/*`, `/api/bulk/*`, `/api/extension/*`, `/api/health`
 - **Services**: `pipeline_engine.py` (stage orchestration), `dag_executor.py` (DAG-based executor with completion-record eligibility, see ADR-005), `stage_registry.py` (configurable DAG of enrichment stages), `qc_checker.py` (end-of-pipeline quality checks), `l1_enricher.py` (native L1 via Perplexity, see ADR-003), `registries/` (EU registry adapters + unified orchestrator — see ADR-004, ADR-005), `csv_mapper.py` (AI column mapping), `dedup.py` (contact/company deduplication), `llm_logger.py` (LLM usage cost tracking), `google_oauth.py` (OAuth token management), `google_contacts.py` (People API fetch/mapping), `gmail_scanner.py` (background Gmail scan + AI signature extraction), `message_generator.py` (campaign message generation via Claude API), `generation_prompts.py` (channel-specific prompt templates)
 - **Auth**: JWT Bearer tokens, bcrypt password hashing
 - **Multi-tenant**: Shared PG schema, `tenant_id` on all entity tables
@@ -122,6 +122,23 @@ Leadgen Pipeline is a multi-tenant B2B lead enrichment and outreach platform. It
 - **Leadgen routing**: `/api/*` → Flask API, everything else → static dashboard files
 - **Namespace routing**: `/{slug}/page` → strips prefix → serves `/page.html`
 - **TLS**: Automatic via Let's Encrypt
+
+### 9. Email Engagement Tracking (BL-1028)
+Two tables record email-related events; they are *not* duplicates. Analytics reads `email_send_log` for channel-level funnels and joins `activities` for per-contact timelines.
+
+| Table | Purpose | Write path |
+|---|---|---|
+| `email_send_log` | One row per outbound email send. Holds `sent_at`, `delivered_at`, `opened_at`, `clicked_at`, `bounced_at`, `complained_at`, `unsubscribed_at`, `replied_at`, `open_count`, `click_count`, `bounce_type`, `status`, `resend_message_id`. Sole source of truth for **channel funnels** (sent → delivered → opened → clicked → replied / bounced / unsubscribed). | Send: `api/services/send_service.py` inserts a `queued` row, then updates with `resend_message_id` + `status='sent'` + `sent_at`. Engagement: `api/routes/webhook_routes.py` (`POST /api/webhooks/resend`) matches on `resend_message_id` and sets the appropriate timestamp. Earliest-observed semantics — a duplicate webhook never overwrites an existing non-null timestamp. |
+| `activities` | Per-contact timeline event log (from browser extension, microsite, and other channels). Analytics uses it only for the contact-level history tab, not for funnels. | Extension `POST /api/extension/activities`, microsite `POST /api/events/microsite`. |
+
+The webhook handler is the *only* write path for `email_send_log.opened_at` / `clicked_at`. If either column is consistently NULL, the likely cause is **Resend dashboard → Domains → tracking toggles being off**, not a code bug — see the runbook below.
+
+#### Runbook: "opened_at is NULL everywhere"
+
+1. **Check Resend tracking toggles first.** Resend dashboard → Domains → select the sending domain → verify "Track opens" and "Track clicks" are enabled. If either is off, flip it on. No webhooks are emitted for disabled trackers.
+2. **Verify webhooks reach the app.** Resend dashboard → Webhooks → the endpoint → "Recent deliveries". Any `200 OK` response means the handler accepted the event. `4xx` means svix verification failed (check `RESEND_WEBHOOK_SECRET` in `STAGING_DOTENV` / 1Password prod vault — see BL-1034).
+3. **Verify the `resend_message_id` link.** If webhooks are 200-ing but DB rows stay NULL, query `SELECT resend_message_id, sent_at, opened_at FROM email_send_log WHERE resend_message_id = '<event email_id from Resend>';`. No row means the send flow didn't persist the id — check `api/services/send_service.py` around the `log.resend_message_id = result.get("id")` line.
+4. **Replay historical events.** Resend stores webhook deliveries for 30 days. Re-deliver from Resend dashboard → Webhooks → select event → "Redeliver". The handler is idempotent so replaying is safe.
 
 ## Data Flow
 
@@ -207,13 +224,49 @@ Gmail Scan: POST /api/gmail/scan/start → background thread:
     └── dedup preview → import
 ```
 
+### Gmail OAuth Foundation (BL-1044) — Inbound Mail Tracking
+
+Separate from the generic OAuth flow above, this integration backs reply-rate
+tracking. It uses a dedicated `gmail_connections` table, its own Fernet
+encryption key (`GMAIL_TOKEN_ENCRYPTION_KEY`), and routes under
+`/api/auth/gmail/*`.
+
+```
+Settings → GmailIntegrationPage → GET /api/auth/gmail/connect?format=json  (authed)
+    │
+    ▼
+Frontend → window.location = auth_url (top-level navigation to Google consent)
+    │
+    ▼
+Google callback → GET /api/auth/gmail/callback?code=...&state=<JWT>
+    │   (public route — CSRF protection = signed state JWT, 10-min TTL)
+    ▼
+Flask API → exchange code → fetch userinfo → Fernet-encrypt tokens → upsert
+           gmail_connections (unique on tenant_id + email_address)
+    │
+    ▼
+302 → /:namespace/settings/gmail?connected=1
+
+/api/auth/gmail/status    → { connected, email, last_synced_at }
+/api/auth/gmail/disconnect → best-effort Google revoke + zero ciphertext +
+                             set disconnected_at
+```
+
+Scope granted: `https://www.googleapis.com/auth/gmail.readonly` only. Tokens
+in `access_token_encrypted` / `refresh_token_encrypted` are BYTEA columns
+storing Fernet ciphertext; plaintext is never persisted.
+
+Follow-up: BL-1044-b wires the inbound polling worker (reads tokens, updates
+`last_synced_at`) and BL-1044-c wires reply attribution to the reply-rate KPI.
+
 ## Database Schema (High Level)
 
 ```
 tenants ─┬── owners
          ├── tags (renamed from batches)
          ├── import_jobs (CSV/Gmail import lifecycle tracking)
-         ├── oauth_connections (Google OAuth tokens, Fernet-encrypted)
+         ├── oauth_connections (generic Google OAuth tokens, Fernet-encrypted)
+         ├── gmail_connections (BL-1044: inbound-mail Gmail tokens, Fernet-encrypted with a dedicated key)
          ├── companies ─┬── company_enrichment_l1 (1:1, L1 triage detail)
          │              ├── company_enrichment_profile (1:1, L2 company intel)
          │              ├── company_enrichment_signals (1:1, L2 strategic signals)
@@ -243,6 +296,42 @@ tenants ─┬── owners
 users ── user_tenant_roles ── tenants
      └── oauth_connections (per-user, per-provider)
 ```
+
+## Campaign Analytics
+
+Delivered in Sprint 24 (BL-1043). See ADR-010 for the decision record; this section covers operational detail.
+
+**Data source split**:
+- **Email events** (sent, delivered, opened, clicked) — our DB, `email_send_log` table, populated by Resend webhook (`api/routes/webhook_routes.py`). `kind` column excludes previews; `superseded_at` marks retries so each recipient is counted once.
+- **Microsite engagement** (visits, CTA clicks, conversions) — PostHog HogQL Query API (`https://us.i.posthog.com`). We never mirror microsite events into our DB.
+- **Attribution**: microsite links carry `?utm_campaign=<campaign_short_id>&utm_source=leadgen`; HogQL filters on `properties.$current_url`.
+
+**Key endpoints** (all tenant-scoped via `X-Namespace` + JWT):
+- `GET /api/campaigns/:id/analytics` — legacy combined response, shares `_compute_campaign_analytics` helper with the split endpoints
+- `GET /api/campaigns/:id/analytics/timeseries` — daily series from `email_send_log`
+- `GET /api/campaigns/:id/analytics/microsite` — PostHog microsite metrics
+- `GET /api/campaigns/:id/analytics/stream` — SSE stream
+
+**SSE stream lifecycle** (`/analytics/stream`):
+1. On connect → emit `snapshot` event with full current state
+2. Every 10s → emit `update` event if metrics changed
+3. Every 30s → emit `heartbeat` to keep proxies alive
+4. On client disconnect → generator exits cleanly, DB session released
+
+**Tenant isolation guarantee**: unknown or cross-tenant campaign IDs return **404, never 403** — we do not leak existence of another tenant's resources via authz error codes.
+
+**PostHog degraded behavior**: provider 5xx, timeout, or malformed JSON is caught and returned as `microsite_metrics: {visits: 0, cta_clicks: 0, conversion_rate: 0, posthog_available: false}` with HTTP 200. The funnel UI renders a partial view plus a "Microsite data unavailable" notice instead of failing the whole analytics tab.
+
+**Secrets** (1Password):
+- `op://visionvolve-prod/PostHog - leadgen-pipeline/project_api_key`
+- `op://visionvolve-prod/PostHog - leadgen-pipeline/personal_api_key`
+- `op://visionvolve-prod/Resend - leadgen-pipeline/webhook_secret`
+
+**Log lines to grep** (ops/oncall):
+- `posthog: query failed` — PostHog provider error (degraded response served)
+- `webhook: rejected — invalid svix signature` — fail-closed Resend rejection (BL-1034)
+- `analytics/stream: client disconnected` — expected on tab close, not an error
+- `deploy: image tag mismatch` — staging pipeline refused to restart container (BL-1046)
 
 ## Deployment
 

@@ -20,6 +20,27 @@ class Config:
     # Token encryption (Fernet key)
     OAUTH_ENCRYPTION_KEY = os.environ.get("OAUTH_ENCRYPTION_KEY", "")
 
+    # Gmail OAuth (BL-1044) -- separate credentials for the inbound-mail
+    # connection flow so the reply-tracking integration can be managed
+    # independently from the generic OAuth store.
+    GOOGLE_GMAIL_CLIENT_ID = os.environ.get("GOOGLE_GMAIL_CLIENT_ID", "")
+    GOOGLE_GMAIL_CLIENT_SECRET = os.environ.get("GOOGLE_GMAIL_CLIENT_SECRET", "")
+    # Defaults derived from request host when unset.
+    GMAIL_OAUTH_REDIRECT_URI = os.environ.get("GMAIL_OAUTH_REDIRECT_URI", "")
+    # Fernet key for BL-1044 Gmail connection tokens (keep isolated from the
+    # generic OAUTH_ENCRYPTION_KEY so Gmail keys can be rotated separately).
+    GMAIL_TOKEN_ENCRYPTION_KEY = os.environ.get("GMAIL_TOKEN_ENCRYPTION_KEY", "")
+    # Frontend origin used when building the post-callback redirect URL.
+    # Falls back to the request origin when unset.
+    FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
+    # Comma-separated list of allowed hostnames (with optional :port) for
+    # post-OAuth redirect targets. Used to validate `return_url` extracted
+    # from the signed OAuth state JWT against an allowlist, preventing
+    # open-redirect abuse even if the JWT itself is valid. Relative paths
+    # (no netloc) are always safe and do NOT need to match this list.
+    # Example: "leadgen.visionvolve.com,leadgen-staging.visionvolve.com,localhost:5173"
+    FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "")
+
     # Perplexity API
     PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
     PERPLEXITY_BASE_URL = os.environ.get(
@@ -48,6 +69,19 @@ class Config:
         "UA_MICROSITE_URL", "https://demo.visionvolve.com"
     )
     UA_INVITE_API_KEY = os.environ.get("UA_INVITE_API_KEY", "")
+
+    # PostHog — campaign analytics microsite metrics (BL-1035)
+    # Region = US (account was created US-side). Override POSTHOG_HOST if
+    # pointing at an EU project. All keys are optional here: when unset the
+    # integration raises a clear RuntimeError only at call time, so dev
+    # without PostHog still boots cleanly.
+    POSTHOG_HOST = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
+    POSTHOG_PROJECT_ID = os.environ.get("POSTHOG_PROJECT_ID", "")
+    # Public key — ships to the browser via posthog-js in ua-microsite. Safe
+    # exposure, but still belongs in env/1P, not in git.
+    POSTHOG_PROJECT_API_KEY = os.environ.get("POSTHOG_PROJECT_API_KEY", "")
+    # Secret key — backend Query API only. NEVER expose to frontend. NEVER log.
+    POSTHOG_PERSONAL_API_KEY = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
 
     # SQLAlchemy connection pool — sized for parallel enrichment workers
     # Only set pool options for PostgreSQL; SQLite uses StaticPool (no pool_size)

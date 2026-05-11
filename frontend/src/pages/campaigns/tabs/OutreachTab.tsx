@@ -1,16 +1,50 @@
-import { useState, useCallback } from 'react'
+import { lazy, Suspense, useState, useCallback } from 'react'
+import { Link, useParams } from 'react-router'
 import {
   useCampaignAnalytics,
   useCampaignRecipients,
   useSendEmails,
   useQueueLinkedIn,
   type CampaignDetail,
+  type CampaignAnalyticsData,
   type CampaignRecipient,
   type RecipientTimelineEvent,
 } from '../../../api/queries/useCampaigns'
+import { useCampaignAnalyticsStream } from '../../../api/hooks/useCampaignAnalyticsStream'
 import { useToast } from '../../../components/ui/Toast'
 import { Modal } from '../../../components/ui/Modal'
 import { SectionDivider } from '../../../components/ui/DetailField'
+
+// Lazy-load Recharts through the shared TimeSeriesBlock so it stays out of
+// the main bundle. Same component that EchoPage uses — here with compact=true.
+const TimeSeriesBlock = lazy(() => import('../../echo/TimeSeriesBlock'))
+
+// Extend the analytics payload locally — backend returns `microsite` and
+// `posthog_available` but they aren't modelled in the shared type yet
+// (same shape used by EchoPage; see BL-1040).
+interface MicrositePayload {
+  visits: number
+  unique_visitors: number
+  product_views: number
+  visit_rate: number
+}
+
+interface AnalyticsWithMicrosite extends CampaignAnalyticsData {
+  microsite?: MicrositePayload
+  posthog_available?: boolean
+}
+
+// ── Analytics block helpers (BL-1041, patterns mirrored from EchoPage) ──
+
+function pct(num: number, den: number): number {
+  if (den <= 0) return 0
+  return Math.round((num / den) * 100 * 10) / 10
+}
+
+function formatNumber(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
 
 interface Props {
   campaign: CampaignDetail
@@ -65,7 +99,17 @@ export function OutreachTab({ campaign }: Props) {
   const { toast } = useToast()
   const sendEmails = useSendEmails()
   const queueLinkedIn = useQueueLinkedIn()
-  const { data: analytics, isLoading: analyticsLoading } = useCampaignAnalytics(campaign.id)
+  // Live SSE stream (BL-1039). The polling query is kept as a fallback
+  // and is disabled while the stream is open so we don't hammer the API
+  // with redundant requests. If the stream drops, `enabled` flips back
+  // to true and the 10s cadence resumes automatically.
+  const { metrics: streamMetrics, connected: streamConnected } =
+    useCampaignAnalyticsStream<CampaignAnalyticsData>(campaign.id)
+  const { data: polledAnalytics, isLoading: analyticsLoading } = useCampaignAnalytics(
+    campaign.id,
+    !streamConnected,
+  )
+  const analytics = streamMetrics ?? polledAnalytics
 
   // Confirmation dialog state
   const [confirmAction, setConfirmAction] = useState<'email' | 'linkedin' | null>(null)
@@ -146,6 +190,16 @@ export function OutreachTab({ campaign }: Props) {
 
   return (
     <div className="max-w-3xl space-y-6">
+      {/* Inline analytics block (BL-1041) — compact performance summary at top.
+          Uses the same data sources as the Echo page: /analytics for KPIs and
+          /analytics/timeseries for the real per-bucket time series. Live
+          updates flow in via the shared SSE stream (BL-1039). */}
+      <AnalyticsBlock
+        analytics={analytics as AnalyticsWithMicrosite}
+        campaignId={campaign.id}
+        live={streamConnected}
+      />
+
       {/* Outreach Summary */}
       <div>
         <SectionDivider title="Outreach Summary" />
@@ -476,6 +530,263 @@ function RecipientCard({ recipient }: { recipient: CampaignRecipient }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Inline analytics block (BL-1041) ─────────────────────
+//
+// Compact summary at the top of OutreachTab — hero CTR, supporting tiles,
+// funnel, and a small time-series chart backed by the real
+// /campaigns/:id/analytics/timeseries endpoint (BL-1037). Patterns mirrored
+// from EchoPage (BL-1040); the shared TimeSeriesBlock is reused in compact
+// mode so we don't duplicate Recharts code. Drill-down is intentionally NOT
+// duplicated — OutreachTab already renders the recipient timeline below.
+
+function AnalyticsBlock({
+  analytics,
+  campaignId,
+  live,
+}: {
+  analytics: AnalyticsWithMicrosite
+  campaignId: string
+  /** True when the SSE stream is open; drives the inline Live/Polling pill. */
+  live: boolean
+}) {
+  const { namespace } = useParams<{ namespace: string }>()
+  // TODO(BL-1044): route to the Gmail-connect flow once settings page exists.
+  const gmailConnectPath = namespace ? `/${namespace}/preferences` : '/preferences'
+
+  const email = analytics.sending?.email ?? {
+    total: 0,
+    queued: 0,
+    sent: 0,
+    delivered: 0,
+    bounced: 0,
+    failed: 0,
+  }
+  const engagement = analytics.engagement
+  const microsite = analytics.microsite
+  const micrositeAvailable = analytics.posthog_available !== false
+
+  // Total emails dispatched = all non-queued terminal states. Prefer the
+  // backend-provided `total` when present; otherwise fall back to the sum
+  // (mirrors EchoPage and avoids the old sent+delivered double-count).
+  const sentTotal =
+    email.total ?? email.sent + email.delivered + email.bounced + email.failed
+  const deliveryRate = pct(email.delivered, sentTotal)
+  const openRate = engagement?.open_rate ?? 0
+  const clickRate = engagement?.click_rate ?? 0
+  const ctr = clickRate // hero KPI per spec (BL-1040 lock)
+
+  const micrositeVisits = microsite?.visits ?? 0
+  const micrositeUnique = microsite?.unique_visitors ?? 0
+  // BL-1047: prefer PostHog-sourced `cta_clicks`; fall back to the
+  // legacy activities-derived `product_views` for pre-migration campaigns.
+  // `null` means "no data" (PostHog unreachable, no legacy fallback value).
+  const ctaClicksRaw =
+    (microsite as { cta_clicks?: number | null } | undefined)?.cta_clicks
+  const ctaActions =
+    typeof ctaClicksRaw === 'number' ? ctaClicksRaw : (microsite?.product_views ?? 0)
+  const ctaLabel =
+    typeof ctaClicksRaw === 'number' ? 'CTA clicks' : 'CTA actions'
+
+  return (
+    <div data-testid="outreach-analytics-block" className="space-y-4">
+      {/* Live/Polling pill — sits above the hero so users understand the
+          source of truth at a glance. */}
+      <div className="flex justify-end">
+        <LivePill connected={live} />
+      </div>
+      {/* Hero CTR */}
+      <AnalyticsHeroKpi
+        label="Click-through rate"
+        value={`${ctr}%`}
+        sub={`${engagement?.clicked ?? 0} clicks on ${email.delivered} delivered`}
+      />
+
+      {/* Supporting tiles */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
+        <AnalyticsKpiTile label="Sent" value={formatNumber(sentTotal)} />
+        <AnalyticsKpiTile
+          label="Delivery %"
+          value={`${deliveryRate}%`}
+          sub={`${email.delivered} delivered`}
+        />
+        <AnalyticsKpiTile
+          label="Open %"
+          value={`${openRate}%`}
+          sub={`${engagement?.opened ?? 0} opens`}
+        />
+        <AnalyticsKpiTile
+          label="Click %"
+          value={`${clickRate}%`}
+          sub={`${engagement?.clicked ?? 0} clicks`}
+        />
+        <AnalyticsKpiTile
+          label="Microsite"
+          value={micrositeAvailable ? formatNumber(micrositeVisits) : '—'}
+          sub={micrositeAvailable ? `${micrositeUnique} unique` : 'offline'}
+        />
+        <AnalyticsKpiTile
+          label={ctaLabel}
+          value={micrositeAvailable ? formatNumber(ctaActions) : '—'}
+        />
+        <AnalyticsKpiTile
+          label="Reply rate"
+          value="—"
+          sub={
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-text-dim">Connect Gmail to track</span>
+              <Link
+                to={gmailConnectPath}
+                className="text-[10px] text-accent-cyan hover:underline no-underline"
+              >
+                Connect →
+              </Link>
+            </span>
+          }
+        />
+      </div>
+
+      {/* Funnel + Time series row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div>
+          <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-2">
+            Funnel
+          </p>
+          <AnalyticsFunnel
+            stages={[
+              { label: 'Sent', value: sentTotal },
+              { label: 'Delivered', value: email.delivered },
+              { label: 'Opened', value: engagement?.opened ?? 0 },
+              { label: 'Clicked', value: engagement?.clicked ?? 0 },
+              { label: 'Microsite', value: micrositeUnique },
+              { label: 'CTA action', value: ctaActions },
+            ]}
+          />
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-2">
+            Activity over time
+          </p>
+          <Suspense
+            fallback={
+              <div className="h-[200px] animate-pulse rounded-lg bg-surface-alt border border-border" />
+            }
+          >
+            <TimeSeriesBlock campaignId={campaignId} range="7d" compact />
+          </Suspense>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AnalyticsHeroKpi({
+  label,
+  value,
+  sub,
+}: {
+  label: string
+  value: string
+  sub?: string
+}) {
+  return (
+    <div className="bg-surface border border-border rounded-lg px-5 py-4">
+      <p className="text-[11px] text-text-muted uppercase tracking-wider">{label}</p>
+      <p className="text-3xl font-semibold text-accent-cyan tabular-nums mt-1">
+        {value}
+      </p>
+      {sub && <p className="text-[11px] text-text-dim mt-1.5">{sub}</p>}
+    </div>
+  )
+}
+
+/** Green "Live" pill when SSE stream is open, grey "Polling" otherwise. */
+function LivePill({ connected }: { connected: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-text-dim"
+      title={
+        connected
+          ? 'Live stream — analytics update as events arrive'
+          : 'Polling every 10s — live stream disconnected'
+      }
+      aria-live="polite"
+      data-testid="outreach-analytics-live-indicator"
+    >
+      <span
+        className={`inline-block w-1.5 h-1.5 rounded-full ${
+          connected ? 'bg-success' : 'bg-text-dim'
+        }`}
+        aria-hidden="true"
+      />
+      {connected ? 'Live' : 'Polling'}
+    </span>
+  )
+}
+
+function AnalyticsKpiTile({
+  label,
+  value,
+  sub,
+}: {
+  label: string
+  value: string | number
+  sub?: React.ReactNode
+}) {
+  return (
+    <div className="bg-surface-alt border border-border rounded-lg px-3 py-2.5">
+      <p className="text-base font-semibold text-text tabular-nums leading-tight">
+        {value}
+      </p>
+      <p className="text-[11px] text-text-muted mt-0.5">{label}</p>
+      {sub !== undefined && sub !== null && (
+        // Wrap plain strings in <p>; ReactNode children may contain block
+        // elements (e.g. flex-column Link), which can't nest inside <p>.
+        typeof sub === 'string' ? (
+          <p className="text-[10px] text-text-dim mt-0.5 truncate">{sub}</p>
+        ) : (
+          <div className="text-[10px] text-text-dim mt-0.5 truncate">{sub}</div>
+        )
+      )}
+    </div>
+  )
+}
+
+function AnalyticsFunnel({
+  stages,
+}: {
+  stages: Array<{ label: string; value: number }>
+}) {
+  const max = Math.max(1, ...stages.map((s) => s.value))
+  return (
+    <div className="space-y-1.5">
+      {stages.map((s, idx) => {
+        const width = (s.value / max) * 100
+        const prev = idx > 0 ? stages[idx - 1].value : max
+        const rate = idx > 0 ? pct(s.value, prev) : 100
+        return (
+          <div key={s.label} className="flex items-center gap-2">
+            <span className="text-[11px] text-text-muted w-20 shrink-0">
+              {s.label}
+            </span>
+            <div className="flex-1 h-5 bg-surface-alt rounded-md overflow-hidden border border-border">
+              <div
+                className="h-full bg-accent-cyan transition-all duration-500"
+                style={{ width: `${Math.max(width, 2)}%` }}
+              />
+            </div>
+            <span className="text-[11px] text-text tabular-nums w-12 text-right">
+              {formatNumber(s.value)}
+            </span>
+            <span className="text-[10px] text-text-dim tabular-nums w-10 text-right">
+              {idx === 0 ? '' : `${rate}%`}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }

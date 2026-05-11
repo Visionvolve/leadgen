@@ -18,6 +18,7 @@ import {
   TIER_DISPLAY, TIER_REVERSE,
   BUYING_STAGE_DISPLAY, BUYING_STAGE_REVERSE,
   ENGAGEMENT_STATUS_DISPLAY, ENGAGEMENT_STATUS_REVERSE,
+  ORGANIZATION_TYPE_DISPLAY, ORGANIZATION_TYPE_REVERSE,
   filterOptions,
 } from '../../lib/display'
 
@@ -52,6 +53,7 @@ export function CompanyDetail({ company, onNavigate }: Props) {
       tier: TIER_REVERSE,
       buying_stage: BUYING_STAGE_REVERSE,
       engagement_status: ENGAGEMENT_STATUS_REVERSE,
+      organization_type: ORGANIZATION_TYPE_REVERSE,
     }
 
     const payload: Record<string, unknown> = {}
@@ -157,6 +159,19 @@ export function CompanyDetail({ company, onNavigate }: Props) {
           <Field label="Industry Category" value={company.industry_category} source={l1Source} />
           <Field label="Revenue Range" value={company.revenue_range} source={l1Source} />
           <Field label="Business Type" value={company.business_type} source={l1Source} />
+          {/* BL-1108: market-facing categorization (operator-edited) */}
+          <EditableSelect
+            label="Organization Type"
+            name="organization_type"
+            value={getEditableValue(
+              'organization_type',
+              company.organization_type
+                ? (ORGANIZATION_TYPE_DISPLAY[company.organization_type] ?? company.organization_type)
+                : '',
+            )}
+            options={filterOptions(ORGANIZATION_TYPE_DISPLAY)}
+            onChange={handleFieldChange}
+          />
         </FieldGrid>
 
         <SectionDivider title="CRM" />

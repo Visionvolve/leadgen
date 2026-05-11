@@ -71,15 +71,56 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_IMAGE: ghcr.io/michallicko/leadgen-pipeline:staging
         run: |
-          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 "
-            echo '${GH_TOKEN}' | docker login ghcr.io -u '${GH_ACTOR}' --password-stdin
-            cd ~/staging
-            COMPOSE_CMD=\"docker compose \$(ls ~/staging/docker-compose*.yml | sed 's/^/-f /' | tr '\n' ' ')\"
-            eval \"\$COMPOSE_CMD pull leadgen-api\"
-            eval \"\$COMPOSE_CMD up -d --no-deps leadgen-api\"
-            docker system prune -f --filter 'until=1h'
-          "
+          set -euo pipefail
+          # BL-1046: fail loudly. Previously the SSH heredoc succeeded even when
+          # `docker compose pull` failed with "manifest unknown", leaving the old
+          # container running and the GHA run reporting success. The remote script
+          # now runs under `bash -euo pipefail` and we explicitly verify:
+          #   1. The expected image is present after pull
+          #   2. The running leadgen-api container was (re)started from that image
+          #
+          # We build the remote script in a local variable so the runner expands the
+          # GH_* / EXPECTED_* env vars before transport, then pipe it to `bash -s`
+          # on the remote host. No reliance on sshd AcceptEnv.
+          REMOTE_SCRIPT=$(cat <<EOF
+          set -euo pipefail
+
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+          cd ~/staging
+
+          COMPOSE_CMD="docker compose \$(ls ~/staging/docker-compose*.yml | sed 's/^/-f /' | tr '\n' ' ')"
+
+          echo "==> Pulling $EXPECTED_IMAGE"
+          eval "\$COMPOSE_CMD pull leadgen-api"
+
+          echo "==> Verifying image is present locally"
+          if ! docker image inspect "$EXPECTED_IMAGE" >/dev/null 2>&1; then
+            echo "::error::Expected image $EXPECTED_IMAGE not present after pull. GHCR org mismatch or auth failure."
+            exit 1
+          fi
+
+          EXPECTED_DIGEST="\$(docker image inspect "$EXPECTED_IMAGE" --format '{{.Id}}')"
+          echo "    expected digest: \$EXPECTED_DIGEST"
+
+          echo "==> Restarting leadgen-api (commit $EXPECTED_SHA)"
+          eval "\$COMPOSE_CMD up -d --no-deps leadgen-api"
+
+          echo "==> Verifying running container image matches pulled digest"
+          RUNNING_DIGEST="\$(docker inspect --format '{{.Image}}' leadgen-api)"
+          echo "    running  digest: \$RUNNING_DIGEST"
+          if [ "\$RUNNING_DIGEST" != "\$EXPECTED_DIGEST" ]; then
+            echo "::error::leadgen-api is running digest \$RUNNING_DIGEST but we just pulled \$EXPECTED_DIGEST."
+            echo "::error::This means the restart did not pick up the new image (silent no-op deploy)."
+            exit 1
+          fi
+
+          docker system prune -f --filter 'until=1h' || true
+          EOF
+          )
+          ssh -i ~/.ssh/staging.pem ec2-user@3.124.110.199 bash -s <<< "$REMOTE_SCRIPT"
 
       - name: Health check
         run: |
