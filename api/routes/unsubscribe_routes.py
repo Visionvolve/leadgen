@@ -33,9 +33,11 @@ import base64
 import hashlib
 import hmac
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, render_template_string, request
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..models import Activity, Contact, Tenant, db
 
@@ -178,6 +180,56 @@ def _wants_json() -> bool:
     return False
 
 
+def _is_valid_uuid(value: str) -> bool:
+    """Return True if *value* parses as a UUID — never raises."""
+    if not value or not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def _safe_get_contact(contact_id: str):
+    """Look up a Contact by id, treating bad input as not-found rather than 500.
+
+    Returns a tuple ``(contact_or_none, status)`` where ``status`` is one of
+    ``"ok"``, ``"bad_input"`` (caller should 400) or ``"not_found"`` (caller
+    should 404). Any DB error rolls back the session so a single bad request
+    cannot poison the connection for subsequent ones.
+    """
+    if not contact_id or not _is_valid_uuid(contact_id):
+        return None, "bad_input"
+
+    try:
+        contact = db.session.get(Contact, contact_id)
+    except SQLAlchemyError:
+        # Defensive: an invalid bind or other DB error must not surface as
+        # 500. Roll back so the session isn't stuck in an aborted state.
+        logger.warning(
+            "Unsubscribe: DB lookup failed for contact_id=%s",
+            contact_id,
+            exc_info=True,
+        )
+        try:
+            db.session.rollback()
+        except SQLAlchemyError:
+            logger.exception("Unsubscribe: session rollback also failed")
+        return None, "bad_input"
+
+    if contact is None:
+        return None, "not_found"
+    return contact, "ok"
+
+
+def _error_response(status_code: int, json_error: str):
+    """Render the appropriate error body for the requested content type."""
+    if _wants_json():
+        return jsonify({"error": json_error}), status_code
+    return render_template_string(_ERROR_PAGE_TMPL), status_code
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -194,14 +246,21 @@ def unsubscribe_page():
     contact_id = (request.args.get("contact_id") or "").strip()
     token = (request.args.get("token") or "").strip()
 
-    contact = db.session.get(Contact, contact_id) if contact_id else None
-    if not contact:
-        return render_template_string(_ERROR_PAGE_TMPL), 404
+    contact, status = _safe_get_contact(contact_id)
+    if status == "bad_input":
+        return _error_response(400, "invalid_contact_id")
+    if status == "not_found":
+        return _error_response(404, "not_found")
 
     if not _verify_unsubscribe_token(contact.id, contact.tenant_id, token):
-        return render_template_string(_ERROR_PAGE_TMPL), 403
+        return _error_response(403, "invalid_token")
 
-    tenant = db.session.get(Tenant, contact.tenant_id)
+    try:
+        tenant = db.session.get(Tenant, contact.tenant_id)
+    except SQLAlchemyError:
+        logger.exception("Unsubscribe GET: tenant lookup failed")
+        db.session.rollback()
+        tenant = None
     tenant_name = (tenant.name if tenant else "our team") or "our team"
 
     return render_template_string(
@@ -232,19 +291,22 @@ def unsubscribe_submit():
         contact_id = (request.form.get("contact_id") or "").strip()
         token = (request.form.get("token") or "").strip()
 
-    contact = db.session.get(Contact, contact_id) if contact_id else None
-    if not contact:
-        if _wants_json():
-            return jsonify({"error": "not_found"}), 404
-        return render_template_string(_ERROR_PAGE_TMPL), 404
+    contact, status = _safe_get_contact(contact_id)
+    if status == "bad_input":
+        return _error_response(400, "invalid_contact_id")
+    if status == "not_found":
+        return _error_response(404, "not_found")
 
     if not _verify_unsubscribe_token(contact.id, contact.tenant_id, token):
         logger.warning("Unsubscribe POST: invalid token for contact_id=%s", contact.id)
-        if _wants_json():
-            return jsonify({"error": "invalid_token"}), 403
-        return render_template_string(_ERROR_PAGE_TMPL), 403
+        return _error_response(403, "invalid_token")
 
-    tenant = db.session.get(Tenant, contact.tenant_id)
+    try:
+        tenant = db.session.get(Tenant, contact.tenant_id)
+    except SQLAlchemyError:
+        logger.exception("Unsubscribe POST: tenant lookup failed")
+        db.session.rollback()
+        tenant = None
     tenant_name = (tenant.name if tenant else "our team") or "our team"
 
     first_time = not contact.is_suppressed
@@ -269,7 +331,14 @@ def unsubscribe_submit():
                 occurred_at=now,
             )
         )
-        db.session.commit()
+        try:
+            db.session.commit()
+        except SQLAlchemyError:
+            logger.exception(
+                "Unsubscribe POST: commit failed for contact_id=%s", contact.id
+            )
+            db.session.rollback()
+            return _error_response(500, "internal_error")
 
         # Send the one-shot confirmation email AFTER commit so failure
         # there can't roll back the suppression itself.
