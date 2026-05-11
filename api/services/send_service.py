@@ -469,11 +469,29 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
 
         # Build the email body as HTML
         body_html = _render_body_html(message.body)
+        subject = message.subject or "(no subject)"
 
         # Template variable replacement (EventFest and future template campaigns)
         tpl_vars = _build_template_variables(contact, cc, campaign)
         if tpl_vars:
-            body_html = _replace_template_variables(body_html, tpl_vars)
+            # BL-1110: language-aware rendering. When the campaign uses a
+            # known template_type, the registry produces the right-language
+            # body+subject from scratch; this replaces the stored-body
+            # placeholder substitution for those campaigns.
+            templated = _resolve_templated_body(
+                campaign=campaign,
+                contact=contact,
+                template_variables=tpl_vars,
+            )
+            if templated is not None:
+                body_html = templated["html"]
+                subject = templated["subject"]
+                log.template_language = templated["language_used"]
+                log.template_language_fallback = templated["fallback_used"]
+            else:
+                # Legacy / non-registry templated campaigns: substitute
+                # placeholders into the stored Message.body as before.
+                body_html = _replace_template_variables(body_html, tpl_vars)
 
         sender = f"{from_name} <{from_email}>" if from_name else from_email
 
@@ -482,7 +500,7 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
                 to_email=to_email,
                 sender=sender,
                 reply_to=reply_to,
-                subject=message.subject or "(no subject)",
+                subject=subject,
                 body_html=body_html,
                 sender_domain=sender_domain,
             )
@@ -614,6 +632,75 @@ def _replace_template_variables(html: str, variables: dict) -> str:
     return html
 
 
+def _template_type_for(campaign: "Campaign") -> str | None:
+    """Extract the ``template_type`` from a campaign's generation_config."""
+    cfg = campaign.generation_config or {}
+    if isinstance(cfg, str):
+        import json
+
+        try:
+            cfg = json.loads(cfg)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(cfg, dict):
+        return None
+    value = cfg.get("template_type")
+    return value if isinstance(value, str) and value else None
+
+
+# Map from campaign template_type to template_registry key. Keeps the
+# DB-stored ``template_type`` decoupled from internal registry naming so
+# either side can evolve independently.
+_TEMPLATE_TYPE_TO_REGISTRY_KEY: dict[str, str] = {
+    "eventfest": "eventfest_invitation",
+}
+
+
+def _registry_key_for(template_type: str | None) -> str | None:
+    """Map a campaign ``template_type`` to a template_registry key."""
+    if not template_type:
+        return None
+    return _TEMPLATE_TYPE_TO_REGISTRY_KEY.get(template_type)
+
+
+def _resolve_templated_body(
+    *,
+    campaign: "Campaign",
+    contact: "Contact",
+    template_variables: dict[str, str],
+) -> dict | None:
+    """Render the language-appropriate body for a templated campaign.
+
+    Returns ``None`` when the campaign is not a templated campaign or no
+    registry key is registered for its ``template_type``. In that case
+    the caller should fall back to the legacy stored-body code path.
+
+    Returns a dict with ``subject``, ``html``, ``text``, ``language_used``
+    and ``fallback_used`` otherwise.
+    """
+    from . import template_registry as _tr
+
+    template_type = _template_type_for(campaign)
+    registry_key = _registry_key_for(template_type)
+    if registry_key is None:
+        return None
+
+    # Pull the contact's language; ``None`` / empty / unsupported codes
+    # let the registry fall back to its DEFAULT_LANGUAGE.
+    language = (contact.language or "").strip() or None
+
+    try:
+        return _tr.render(registry_key, language, **template_variables)
+    except KeyError:
+        logger.exception(
+            "template_registry: no renderer for campaign template_type=%s "
+            "(registry_key=%s)",
+            template_type,
+            registry_key,
+        )
+        return None
+
+
 def _build_template_variables(
     contact: "Contact",
     campaign_contact: "CampaignContact",
@@ -628,7 +715,7 @@ def _build_template_variables(
     from .czech_vocative import to_vocative
     from .microsite_invites import get_or_create_invite
 
-    template_type = (campaign.generation_config or {}).get("template_type")
+    template_type = _template_type_for(campaign)
     if not template_type:
         return {}
 
@@ -912,17 +999,30 @@ def send_campaign_emails_gmail(campaign_id: str, tenant_id: str) -> dict:
         db.session.flush()
 
         body_html = _render_body_html(message.body)
+        subject = message.subject or "(no subject)"
 
         # Template variable replacement (EventFest and future template campaigns)
         tpl_vars = _build_template_variables(contact, cc, campaign)
         if tpl_vars:
-            body_html = _replace_template_variables(body_html, tpl_vars)
+            # BL-1110: language-aware rendering via template registry.
+            templated = _resolve_templated_body(
+                campaign=campaign,
+                contact=contact,
+                template_variables=tpl_vars,
+            )
+            if templated is not None:
+                body_html = templated["html"]
+                subject = templated["subject"]
+                log.template_language = templated["language_used"]
+                log.template_language_fallback = templated["fallback_used"]
+            else:
+                body_html = _replace_template_variables(body_html, tpl_vars)
 
         try:
             gmail_message_id = send_via_gmail(
                 oauth_connection=oauth_conn,
                 to_email=to_email,
-                subject=message.subject or "(no subject)",
+                subject=subject,
                 body_html=body_html,
                 reply_to=reply_to,
             )

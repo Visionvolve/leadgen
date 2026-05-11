@@ -5,6 +5,7 @@ All notable changes to the Leadgen Pipeline project.
 ## [Unreleased]
 
 ### Added
+- **Multilingual mailing foundation** (BL-1110, v25 phase 9): new `api/services/template_registry.py` maps `(template_key, language)` → renderer; the EventFest template now ships both Czech (`render_eventfest_cs`) and English (`render_eventfest_en`) variants registered as `eventfest_invitation`. The Resend + Gmail send paths look up the right variant from `contact.language` at send time and gracefully fall back to Czech (the default) when the requested language is unsupported. Migration `069_email_send_log_template_language.sql` adds `template_language` + `template_language_fallback` columns on `email_send_log` so operators can audit which contacts received the fallback.
 - **Campaign Analytics v1** (Sprint 24): funnel + time-series + microsite engagement in a single view with live SSE updates. New endpoints under `/api/campaigns/:id/analytics/`:
   - `GET /timeseries` — per-day email-lifecycle counts from `email_send_log` (BL-1037, PR #158)
   - `GET /microsite` — visits, CTA clicks, conversion rate from PostHog HogQL Query API (BL-1038, PR #157)
