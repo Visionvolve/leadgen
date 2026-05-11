@@ -36,7 +36,9 @@ def _verify_api_key() -> bool:
     return request.headers.get("X-API-Key", "") == expected
 
 
-def _resolve_contact(token: str, data: dict | None) -> Contact | None:
+def _resolve_contact(
+    token: str, data: dict | None
+) -> tuple[Contact | None, str | None]:
     """Resolve a contact from the event payload.
 
     Strategy (Phase 2 adds the partner-token branch as strategy 1):
@@ -49,9 +51,12 @@ def _resolve_contact(token: str, data: dict | None) -> Contact | None:
     3. As a fallback, try to find a contact whose email matches the token
        (some microsites use email-as-token).
 
-    Returns the first matching :class:`Contact` or ``None``.
+    Returns a ``(contact, campaign_contact_id)`` tuple. The second element
+    is populated only when strategy 1 matched; otherwise ``None``. This is
+    the Phase 4 proper-FK path that sets ``activities.campaign_contact_id``
+    at ingest time, removing the need for JSONB-extract joins at query time.
     """
-    # Strategy 1 — partner token match (Phase 2)
+    # Strategy 1 — partner token match (Phase 2 + Phase 4 FK wiring)
     tok = (token or "").strip()
     if tok:
         cc = CampaignContact.query.filter(
@@ -60,7 +65,7 @@ def _resolve_contact(token: str, data: dict | None) -> Contact | None:
         if cc and cc.contact_id:
             contact = db.session.get(Contact, cc.contact_id)
             if contact:
-                return contact
+                return contact, cc.id
 
     email = (data or {}).get("email", "").strip().lower() if data else ""
 
@@ -70,7 +75,7 @@ def _resolve_contact(token: str, data: dict | None) -> Contact | None:
             db.func.lower(Contact.email_address) == email,
         ).first()
         if contact:
-            return contact
+            return contact, None
 
     # Strategy 3 — fallback: treat token itself as email
     if tok and "@" in tok:
@@ -78,9 +83,9 @@ def _resolve_contact(token: str, data: dict | None) -> Contact | None:
             db.func.lower(Contact.email_address) == tok.lower(),
         ).first()
         if contact:
-            return contact
+            return contact, None
 
-    return None
+    return None, None
 
 
 @tracking_bp.route("/api/tracking/microsite-event", methods=["POST"])
@@ -125,7 +130,13 @@ def ingest_microsite_event():
         if occurred_at is None:
             occurred_at = datetime.now(timezone.utc)
 
-        contact = _resolve_contact(token, data)
+        contact, campaign_contact_id = _resolve_contact(token, data)
+
+        # Phase 4 Fix C: preserve the top-level token inside payload so
+        # analytics queries that pre-date migration 061 can still JOIN via
+        # payload->>'token'. After migration 061 deploys + backfill lands,
+        # the preferred join is activities.campaign_contact_id (proper FK).
+        enriched_payload = {**(data or {}), "token": token}
 
         activity = Activity(
             tenant_id=contact.tenant_id if contact else None,
@@ -137,7 +148,10 @@ def ingest_microsite_event():
             event_type=event_name,
             occurred_at=occurred_at,
             timestamp=occurred_at,
-            payload=data,
+            payload=enriched_payload,
+            # Phase 4 Fix D: proper FK for campaign attribution. Set only
+            # when the partner token matched a CampaignContact; None otherwise.
+            campaign_contact_id=campaign_contact_id,
         )
 
         # tenant_id is NOT NULL — if we couldn't resolve a contact, we still

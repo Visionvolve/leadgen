@@ -609,6 +609,40 @@ class TestUnsubscribeHeader:
                 == "List-Unsubscribe=One-Click"
             )
 
+    def test_send_single_email_uses_from_key_not_from_underscore(self, app):
+        """Regression: Resend SDK v2.22 expects 'from' key, not 'from_'.
+
+        Wave C's test send to 2 recipients failed ALL sends until monkey-
+        patched in-process because params used 'from_' as the dict key.
+        This test locks in the correct key so tomorrow's 357-recipient
+        EventFest send will not regress.
+        """
+        import unittest.mock as mock
+
+        with mock.patch("resend.Emails.send") as mock_send:
+            mock_send.return_value = type("R", (), {"id": "re_789"})()
+
+            from api.services.send_service import _send_single_email
+
+            _send_single_email(
+                to_email="recipient@example.com",
+                sender="Test <test@acme.com>",
+                reply_to=None,
+                subject="Test",
+                body_html="<p>Hello</p>",
+                sender_domain="acme.com",
+            )
+
+            call_args = mock_send.call_args[0][0]
+            assert "from" in call_args, (
+                "Resend SDK expects 'from' key in params dict"
+            )
+            assert "from_" not in call_args, (
+                "'from_' key must not be present — SDK rejects it with "
+                "ValueError('Missing from field')"
+            )
+            assert call_args["from"] == "Test <test@acme.com>"
+
 
 class TestPreSendValidation:
     """Tests for pre-send email validation."""
@@ -1224,3 +1258,123 @@ class TestSupersededRows:
         assert logs[0].status == "sent"
         assert logs[0].superseded_at is None
         assert logs[0].superseded_by is None
+
+
+class TestBuildTemplateVariablesPartnerTokenPersistence:
+    """Phase 4 Fix B: _build_template_variables must persist the partner
+    token on the campaign_contact row whenever it successfully obtains an
+    invite URL from the UA microsite and the row does not already have a
+    token. Without this, the tracking-ingest JOIN cannot attribute events
+    back to the campaign (Agent Z3 audit finding)."""
+
+    def test_persists_token_when_missing_and_invite_ok(
+        self, db, seed_tenant, monkeypatch
+    ):
+        from api.models import Campaign, CampaignContact, Contact
+        from api.services import send_service
+
+        contact = Contact(
+            tenant_id=seed_tenant.id,
+            first_name="Jana",
+            last_name="Novakova",
+            email_address="jana@example.com",
+        )
+        db.session.add(contact)
+        db.session.flush()
+
+        campaign = Campaign(
+            tenant_id=seed_tenant.id,
+            name="EventFest",
+            status="draft",
+            language="cs",
+            generation_config=json.dumps({"template_type": "eventfest"}),
+        )
+        db.session.add(campaign)
+        db.session.flush()
+
+        cc = CampaignContact(
+            campaign_id=campaign.id,
+            contact_id=contact.id,
+            tenant_id=seed_tenant.id,
+            status="pending",
+        )
+        db.session.add(cc)
+        db.session.commit()
+        assert cc.microsite_partner_token is None
+
+        monkeypatch.setenv("UA_MICROSITE_URL", "https://booking.example.com")
+        monkeypatch.setenv("UA_INVITE_API_KEY", "test-key")
+        from api.services import microsite_invites
+
+        monkeypatch.setattr(
+            microsite_invites,
+            "get_or_create_invite",
+            lambda **kw: "https://booking.example.com/invite/tok_fix_b_xyz",
+        )
+
+        variables = send_service._build_template_variables(contact, cc, campaign)
+
+        # The microsite link will be wrapped by add_campaign_attribution
+        # (BL-1036a) so we assert on the invite-URL prefix rather than
+        # equality — attribution appends ?campaign=...&recipient=... params.
+        assert variables["microsite_link"].startswith(
+            "https://booking.example.com/invite/tok_fix_b_xyz"
+        )
+        assert variables["recipient_token"] == "tok_fix_b_xyz"
+
+        db.session.commit()
+        db.session.refresh(cc)
+        assert cc.microsite_partner_token == "tok_fix_b_xyz"
+
+    def test_preserves_existing_token(self, db, seed_tenant, monkeypatch):
+        """When a token is already set, do not overwrite — the provisioning
+        flow owns the initial value."""
+        from api.models import Campaign, CampaignContact, Contact
+        from api.services import send_service
+
+        contact = Contact(
+            tenant_id=seed_tenant.id,
+            first_name="Petr",
+            last_name="Cerny",
+            email_address="petr@example.com",
+        )
+        db.session.add(contact)
+        db.session.flush()
+
+        campaign = Campaign(
+            tenant_id=seed_tenant.id,
+            name="EventFest",
+            status="draft",
+            language="cs",
+            generation_config=json.dumps({"template_type": "eventfest"}),
+        )
+        db.session.add(campaign)
+        db.session.flush()
+
+        cc = CampaignContact(
+            campaign_id=campaign.id,
+            contact_id=contact.id,
+            tenant_id=seed_tenant.id,
+            status="pending",
+            microsite_partner_token="pre_existing_token",
+        )
+        db.session.add(cc)
+        db.session.commit()
+
+        monkeypatch.setenv("UA_MICROSITE_URL", "https://booking.example.com")
+        monkeypatch.setenv("UA_INVITE_API_KEY", "test-key")
+        from api.services import microsite_invites
+
+        monkeypatch.setattr(
+            microsite_invites,
+            "get_or_create_invite",
+            lambda **kw: "https://booking.example.com/invite/new_token_should_not_win",
+        )
+
+        variables = send_service._build_template_variables(contact, cc, campaign)
+
+        db.session.commit()
+        db.session.refresh(cc)
+        assert cc.microsite_partner_token == "pre_existing_token"
+        # Existing recipient_token reads DB-side value.
+        assert variables["recipient_token"] == "pre_existing_token"

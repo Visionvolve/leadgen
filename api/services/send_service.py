@@ -608,7 +608,7 @@ def _send_single_email(
     import resend
 
     params = {
-        "from_": sender,
+        "from": sender,
         "to": [to_email],
         "subject": subject,
         "html": body_html,
@@ -739,11 +739,22 @@ def _build_template_variables(
         return {}
 
     first_name = contact.first_name or ""
-    vocative = to_vocative(first_name)
+    # to_vocative returns (vocative_form, source_tag) — unpack the form only.
+    # Without this, str.replace() crashes with TypeError because the tuple
+    # flows into _replace_template_variables. See Phase 4 TestSend validation.
+    vocative_form, _source = to_vocative(first_name)
+
+    # Per-recipient token feeds the ?t={{recipient_token}} placeholder that
+    # the EventFest thumbnail grid bakes into each featured-act href.
+    # Empty string when the campaign_contact has no token yet (e.g. UA
+    # microsite was unreachable during provisioning); template degrades
+    # to broken links but the send still goes out.
+    recipient_token = getattr(campaign_contact, "microsite_partner_token", "") or ""
 
     variables: dict[str, str] = {
-        "vocative_name": vocative,
+        "vocative_name": vocative_form,
         "first_name": first_name,
+        "recipient_token": recipient_token,
     }
 
     # BL-1103: every template campaign gets the per-contact unsubscribe
@@ -757,10 +768,22 @@ def _build_template_variables(
         unsub_url = None
     variables["unsubscribe_url"] = unsub_url or fallback
 
+    # Per-contact tone (Vy/Ty) switching — EventFest list contains ~6/357
+    # tykat contacts; the rest are vykat (DB default on contacts.address_style).
+    # Pull the tone map from the template module so both are authored in
+    # one place; unknown/None values fall back to vykat inside tone_variables.
+    if template_type == "eventfest":
+        from .eventfest_template import tone_variables
+
+        tone = getattr(contact, "address_style", None) or "vykat"
+        variables.update(tone_variables(tone))
+
     # Microsite invite link — cached in campaign_contact metadata-like field
     # We store it on the Message or regenerate (idempotent by email)
     if template_type == "eventfest":
         import os
+
+        from .eventfest_campaign import _extract_token
 
         microsite_url = os.environ.get("UA_MICROSITE_URL", "")
         api_key = os.environ.get("UA_INVITE_API_KEY", "")
@@ -776,6 +799,23 @@ def _build_template_variables(
                     api_key=api_key,
                 )
                 raw_link = invite_url or microsite_url
+
+                # Phase 4 Fix B: persist the partner token on the
+                # campaign_contact row if missing, so the tracking ingest
+                # path can resolve events back to this (campaign, contact)
+                # pair. The send loop calls db.session.commit() after each
+                # send, so just staging the change here is sufficient.
+                if invite_url and not getattr(
+                    campaign_contact, "microsite_partner_token", None
+                ):
+                    token = _extract_token(invite_url)
+                    if token:
+                        campaign_contact.microsite_partner_token = token
+                        # Also surface it through the per-recipient variable
+                        # now that we have it, rather than waiting for the
+                        # NEXT send to pick it up from the DB.
+                        variables["recipient_token"] = token
+                        db.session.add(campaign_contact)
             except Exception:
                 logger.warning(
                     "Failed to get invite for %s, using fallback",
