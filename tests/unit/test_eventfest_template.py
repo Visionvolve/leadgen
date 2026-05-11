@@ -81,11 +81,13 @@ class TestRenderEventfestEmail:
 
         Without an explicit ``unsubscribe_url`` argument the renderer
         substitutes a mailto fallback so the footer is always actionable.
-        The footer label "Odhlasit se" (Czech for "unsubscribe") must
-        remain in either case.
+        The footer label "odhlašte se" (Czech for "unsubscribe") must
+        remain in either case (case-insensitive match — the v4 template
+        renders it mid-sentence with a lower-case lead, the earlier copy
+        used a sentence-initial capital).
         """
         _, html, _ = render_eventfest_email("Evo", "https://example.com/invite/123")
-        assert "Odhl" in html  # "Odhlasit se" footer label still present
+        assert "odhl" in html.lower()  # "odhlašte se" footer label still present
         assert "unsubscribe" in html.lower()  # mailto fallback
 
     def test_html_uses_provided_unsubscribe_url(self):
@@ -472,6 +474,8 @@ class TestSendServiceToneFromContact:
         from types import SimpleNamespace
 
         return SimpleNamespace(
+            id=None,
+            tenant_id=None,
             first_name=first_name,
             last_name="",
             email_address="x@example.com",
@@ -481,12 +485,14 @@ class TestSendServiceToneFromContact:
     def _fake_cc(self, token: str = "tok-1"):
         from types import SimpleNamespace
 
-        return SimpleNamespace(microsite_partner_token=token)
+        return SimpleNamespace(id=None, microsite_partner_token=token)
 
     def _fake_campaign(self):
         from types import SimpleNamespace
 
-        return SimpleNamespace(generation_config={"template_type": "eventfest"})
+        return SimpleNamespace(
+            id=None, generation_config={"template_type": "eventfest"}
+        )
 
     def test_send_service_picks_tone_from_contact_address_style(self):
         """address_style='tykat' → variables carry tykání pronouns."""

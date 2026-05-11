@@ -429,14 +429,23 @@ def test_render_eventfest_email_with_placeholder_args_returns_storable_body():
 
     Passing the literal ``{{vocative_name}}`` / ``{{microsite_link}}`` as
     values must round-trip them in the output so per-recipient
-    substitution can happen later at send time.
+    substitution can happen later at send time. The same holds for the
+    tone placeholders (``TONE_PASSTHROUGH``) and the unsubscribe URL —
+    the storable body is fully placeholder-bearing, the send step does
+    the per-recipient substitution.
     """
     from api.services.eventfest_template import (
         EVENTFEST_HTML_TEMPLATE,
+        TONE_PASSTHROUGH,
         render_eventfest_email,
     )
 
-    _, html, _ = render_eventfest_email("{{vocative_name}}", "{{microsite_link}}")
+    _, html, _ = render_eventfest_email(
+        "{{vocative_name}}",
+        "{{microsite_link}}",
+        tone=TONE_PASSTHROUGH,
+        unsubscribe_url="{{unsubscribe_url}}",
+    )
     assert html == EVENTFEST_HTML_TEMPLATE
 
 

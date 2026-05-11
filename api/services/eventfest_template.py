@@ -498,9 +498,7 @@ def _escape_html_attr(value: str) -> str:
 
 def _escape_html_text(value: str) -> str:
     """Minimal HTML text-node escaping. See ``_escape_html_attr`` note."""
-    return (
-        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _build_featured_acts_html(
@@ -614,17 +612,17 @@ def _build_featured_acts_plain(
 _TONE_VARIANTS: dict[str, dict[str, str]] = {
     # Formal "Vy" register — default for 351/357 EventFest contacts.
     "vykat": {
-        "you_acc": "Vás",          # accusative: "pro Vás" / "na Vás"
+        "you_acc": "Vás",  # accusative: "pro Vás" / "na Vás"
         "you_look_verb": "hledáte",  # 2pl: are you looking for
         "you_can_verb": "můžete",  # 2pl: you can
         "stop_by_imper": "Zastavte se",  # 2pl imperative: stop by
     },
     # Informal "Ty" register — 6/357 EventFest contacts flagged in DB.
     "tykat": {
-        "you_acc": "Tebe",               # accusative: "pro Tebe" / "na Tebe"
+        "you_acc": "Tebe",  # accusative: "pro Tebe" / "na Tebe"
         "you_look_verb": "hledáš",  # 2sg: are you looking for
         "you_can_verb": "můžeš",  # 2sg: you can
-        "stop_by_imper": "Zastav se",    # 2sg imperative: stop by
+        "stop_by_imper": "Zastav se",  # 2sg imperative: stop by
     },
 }
 
