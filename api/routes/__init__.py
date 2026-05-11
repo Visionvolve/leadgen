@@ -20,6 +20,7 @@ from .message_routes import messages_bp
 from .oauth_routes import oauth_bp
 from .pipeline_routes import pipeline_bp
 from .playbook_routes import playbook_bp
+from .ref_token_routes import ref_token_bp
 from .strategy_template_routes import strategy_templates_bp
 from .tenant_routes import tenants_bp
 from .token_routes import token_bp
@@ -63,3 +64,4 @@ def register_blueprints(app):
     app.register_blueprint(tracking_bp)
     app.register_blueprint(unsubscribe_bp)
     app.register_blueprint(webhooks_bp)
+    app.register_blueprint(ref_token_bp)

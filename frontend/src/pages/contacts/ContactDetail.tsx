@@ -13,6 +13,7 @@ import { Tabs, type TabDef } from '../../components/ui/Tabs'
 import { EnrichmentTimeline } from '../../components/ui/EnrichmentTimeline'
 import type { EmailActivity } from '../../api/queries/useContacts'
 import { RawResearchSection } from '../../components/ui/RawResearchSection'
+import { CatalogTrackingLinks } from './CatalogTrackingLinks'
 import {
   SENIORITY_DISPLAY, SENIORITY_REVERSE,
   DEPARTMENT_DISPLAY, DEPARTMENT_REVERSE,
@@ -329,6 +330,9 @@ export function ContactDetail({ contact, onNavigate }: Props) {
           value={getEditableValue('notes', contact.notes)}
           onChange={handleFieldChange}
         />
+
+        {/* Catalog tracking links — BL-1104 */}
+        <CatalogTrackingLinks contactId={contact.id} />
 
         {/* Custom Fields */}
         {contact.custom_fields && Object.keys(contact.custom_fields).length > 0 && (
