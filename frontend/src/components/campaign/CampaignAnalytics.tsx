@@ -1,4 +1,7 @@
-import { useCampaignAnalytics, type CampaignAnalyticsData } from '../../api/queries/useCampaigns'
+import { useState } from 'react'
+import { useCampaignAnalytics, useCampaignBounces, type CampaignAnalyticsData } from '../../api/queries/useCampaigns'
+import { apiDownload } from '../../api/client'
+import { useToast } from '../ui/Toast'
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -472,6 +475,96 @@ function AnalyticsView({ data }: { data: CampaignAnalyticsData }) {
   )
 }
 
+// ── Bounces (BL-1102) ─────────────────────────────────────
+
+function BouncesSection({ campaignId }: { campaignId: string }) {
+  const { data, isLoading } = useCampaignBounces(campaignId)
+  const { toast } = useToast()
+  const [isDownloading, setIsDownloading] = useState(false)
+
+  const total = data?.total ?? 0
+  const previewRows = data?.bounces.slice(0, 20) ?? []
+  const hasBounces = total > 0
+
+  const handleDownload = async () => {
+    if (!hasBounces || isDownloading) return
+    setIsDownloading(true)
+    try {
+      await apiDownload(`/campaigns/${campaignId}/bounces.csv`)
+      toast('Bounces CSV downloaded', 'success')
+    } catch {
+      toast('Download failed', 'error')
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+          Undeliverable Recipients
+        </h3>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={!hasBounces || isDownloading}
+          className="px-3 py-1.5 text-xs bg-surface border border-border text-text rounded-md hover:bg-surface-alt transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          aria-label="Download bounces CSV"
+        >
+          {isDownloading ? 'Downloading…' : 'Download CSV'}
+        </button>
+      </div>
+
+      <div className="bg-surface-alt rounded-lg border border-border px-4 py-3 mb-3">
+        <p className="text-2xl font-semibold text-text tabular-nums">{total}</p>
+        <p className="text-xs text-text-muted mt-0.5">
+          {isLoading ? 'Loading…' : total === 1 ? 'undeliverable email' : 'undeliverable emails'}
+        </p>
+        {!isLoading && total === 0 && (
+          <p className="text-[11px] text-text-dim mt-1">
+            No bounces recorded for this campaign yet.
+          </p>
+        )}
+      </div>
+
+      {previewRows.length > 0 && (
+        <div className="bg-surface-alt rounded-lg border border-border overflow-hidden">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Email</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Name</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Company</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Type</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Bounced At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.map((b, idx) => (
+                <tr key={`${b.contact_id ?? 'no-contact'}-${idx}`} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2 text-text">{b.email || '-'}</td>
+                  <td className="px-3 py-2 text-text">
+                    {[b.first_name, b.last_name].filter(Boolean).join(' ') || '-'}
+                  </td>
+                  <td className="px-3 py-2 text-text-muted">{b.company || '-'}</td>
+                  <td className="px-3 py-2 text-text-muted">{b.bounce_type || b.status || '-'}</td>
+                  <td className="px-3 py-2 text-text-muted">{formatDate(b.bounced_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {total > previewRows.length && (
+            <p className="text-[11px] text-text-dim px-3 py-2 border-t border-border">
+              Showing {previewRows.length} of {total}. Download the CSV for the full list.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main exported component ──────────────────────────────
 
 interface Props {
@@ -493,5 +586,10 @@ export function CampaignAnalytics({ campaignId }: Props) {
     return <AnalyticsEmpty />
   }
 
-  return <AnalyticsView data={data} />
+  return (
+    <div className="space-y-6">
+      <AnalyticsView data={data} />
+      <BouncesSection campaignId={campaignId} />
+    </div>
+  )
 }

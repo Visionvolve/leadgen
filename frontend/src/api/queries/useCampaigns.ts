@@ -358,6 +358,42 @@ export function useCampaignAnalytics(
   })
 }
 
+// ── Campaign Bounces (BL-1102) ─────────────────────────
+
+export interface CampaignBounceRow {
+  contact_id: string | null
+  email: string
+  first_name: string
+  last_name: string
+  company: string
+  bounce_type: string
+  bounced_at: string | null
+  status: string
+  error_message: string
+}
+
+export interface CampaignBouncesData {
+  campaign_id: string
+  campaign_name: string
+  total: number
+  bounces: CampaignBounceRow[]
+}
+
+/** List of undeliverable recipients for a campaign — used by the
+ *  CampaignAnalytics surface for preview + count, and as a JSON peer
+ *  to the CSV export endpoint. */
+export function useCampaignBounces(
+  campaignId: string | null,
+  enabled: boolean = true,
+) {
+  return useQuery({
+    queryKey: ['campaign-bounces', campaignId],
+    queryFn: () => apiFetch<CampaignBouncesData>(`/campaigns/${campaignId}/bounces`),
+    enabled: enabled && !!campaignId,
+    staleTime: 30_000,
+  })
+}
+
 // ── Campaign Analytics: Time-Series (BL-1037) ──────────
 
 export type TimeSeriesRange = '24h' | '7d' | '30d' | 'all'

@@ -3034,6 +3034,180 @@ def campaign_recipients(campaign_id):
     return jsonify({"recipients": recipients})
 
 
+# ── Bounces export (BL-1102) ───────────────────────────────────────────
+# Returns the list of undeliverable recipients for a campaign, so an
+# operator (or LCC client) can scrub them from future sends.
+#
+# CSV columns (locked — documented here so downstream consumers stay
+# stable):
+#   contact_id, email, first_name, last_name, company,
+#   bounce_type, bounced_at, status, error_message
+#
+# Status filter: any send-log row where `bounced_at IS NOT NULL` OR
+# `status IN ('bounced', 'failed')`, scoped to:
+#   - the campaign (campaign_contacts.campaign_id)
+#   - the tenant (email_send_log.tenant_id)
+#   - non-superseded rows (BL-1029 — earlier failed attempts that later
+#     succeeded are filtered out)
+#   - non-preview rows (BL-1026 — stakeholder previews never appear)
+#
+# Tenant-scoped via the standard JWT auth path; viewer role is enough.
+
+
+def _fetch_campaign_bounces(campaign_id, tenant_id):
+    """Return (campaign_name, bounce_rows) or (None, None) if campaign missing.
+
+    Shared by the JSON and CSV endpoints so both stay on the same SQL
+    contract. Each row is a dict ready for JSON serialisation; the CSV
+    formatter pulls the same fields in column order.
+    """
+    campaign_row = db.session.execute(
+        db.text("SELECT name FROM campaigns WHERE id = :id AND tenant_id = :t"),
+        {"id": campaign_id, "t": tenant_id},
+    ).fetchone()
+    if not campaign_row:
+        return None, None
+
+    rows = db.session.execute(
+        db.text(
+            """
+            SELECT
+                ct.id AS contact_id,
+                COALESCE(NULLIF(esl.to_email, ''), ct.email_address) AS email,
+                ct.first_name,
+                ct.last_name,
+                co.name AS company_name,
+                esl.bounce_type,
+                esl.bounced_at,
+                esl.status,
+                esl.error AS error_message,
+                esl.id AS send_log_id
+            FROM email_send_log esl
+            JOIN messages m ON m.id = esl.message_id
+            JOIN campaign_contacts cc ON cc.id = m.campaign_contact_id
+            JOIN contacts ct ON ct.id = cc.contact_id
+            LEFT JOIN companies co ON co.id = ct.company_id
+            WHERE cc.campaign_id = :cid
+              AND esl.tenant_id = :t
+              AND esl.superseded_at IS NULL
+              AND esl.kind != 'preview'
+              AND (
+                  esl.bounced_at IS NOT NULL
+                  OR esl.status IN ('bounced', 'failed')
+              )
+            ORDER BY COALESCE(esl.bounced_at, esl.created_at) DESC NULLS LAST,
+                     esl.id
+            """
+        ),
+        {"cid": campaign_id, "t": tenant_id},
+    ).fetchall()
+
+    bounce_rows = []
+    for r in rows:
+        bounce_rows.append(
+            {
+                "contact_id": str(r[0]) if r[0] else None,
+                "email": r[1] or "",
+                "first_name": r[2] or "",
+                "last_name": r[3] or "",
+                "company": r[4] or "",
+                "bounce_type": r[5] or "",
+                "bounced_at": _format_ts(r[6]),
+                "status": r[7] or "",
+                "error_message": r[8] or "",
+            }
+        )
+
+    return (campaign_row[0] or "campaign"), bounce_rows
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/bounces", methods=["GET"])
+@require_role("viewer")
+def list_campaign_bounces(campaign_id):
+    """JSON list of undeliverable recipients for the campaign.
+
+    Used by the CampaignAnalytics surface so the UI can show a preview
+    table + total count before the operator triggers the CSV download.
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    campaign_name, bounce_rows = _fetch_campaign_bounces(campaign_id, tenant_id)
+    if campaign_name is None:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    return jsonify(
+        {
+            "campaign_id": str(campaign_id),
+            "campaign_name": campaign_name,
+            "total": len(bounce_rows),
+            "bounces": bounce_rows,
+        }
+    )
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/bounces.csv", methods=["GET"])
+@require_role("viewer")
+def export_campaign_bounces_csv(campaign_id):
+    """Download the campaign's undeliverable recipients as a CSV file.
+
+    Sanitises every cell against spreadsheet formula injection. The
+    filename is `bounces-{campaign-slug}-{YYYYMMDD}.csv`.
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    campaign_name, bounce_rows = _fetch_campaign_bounces(campaign_id, tenant_id)
+    if campaign_name is None:
+        return jsonify({"error": "Campaign not found"}), 404
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "Contact ID",
+            "Email",
+            "First Name",
+            "Last Name",
+            "Company",
+            "Bounce Type",
+            "Bounced At",
+            "Status",
+            "Error Message",
+        ]
+    )
+    for row in bounce_rows:
+        writer.writerow(
+            [
+                _sanitize_csv_cell(row["contact_id"]),
+                _sanitize_csv_cell(row["email"]),
+                _sanitize_csv_cell(row["first_name"]),
+                _sanitize_csv_cell(row["last_name"]),
+                _sanitize_csv_cell(row["company"]),
+                _sanitize_csv_cell(row["bounce_type"]),
+                _sanitize_csv_cell(row["bounced_at"]),
+                _sanitize_csv_cell(row["status"]),
+                _sanitize_csv_cell(row["error_message"]),
+            ]
+        )
+
+    csv_content = output.getvalue()
+    output.close()
+
+    safe_name = "".join(c for c in campaign_name if c.isalnum() or c in " -_").strip()
+    slug = (safe_name or "campaign").lower().replace(" ", "-")
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    filename = f"bounces-{slug}-{date_str}.csv"
+
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _sanitize_csv_cell(value):
     """Sanitize a cell value to prevent CSV formula injection.
 
