@@ -275,8 +275,15 @@ export function useCompany(id: string | null) {
 export function useUpdateCompany() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
-      apiFetch(`/companies/${id}`, { method: 'PATCH', body: data }),
+    mutationFn: ({
+      id,
+      data,
+      params,
+    }: {
+      id: string
+      data: Record<string, unknown>
+      params?: Record<string, string>
+    }) => apiFetch(`/companies/${id}`, { method: 'PATCH', body: data, params }),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['company', id] })
       qc.invalidateQueries({ queryKey: ['companies'] })

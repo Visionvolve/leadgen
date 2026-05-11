@@ -47,6 +47,17 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     },
   },
   {
+    key: 'name_edit',
+    label: 'Name (editable)',
+    sortKey: 'name',
+    minWidth: '140px',
+    defaultVisible: false,
+    editable: true,
+    editType: 'text',
+    editField: 'name',
+    render: (c) => c.name || '-',
+  },
+  {
     key: 'domain',
     label: 'Domain',
     sortKey: 'domain',

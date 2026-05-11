@@ -712,8 +712,38 @@ class Contact(db.Model):
     last_collaboration_at = db.Column(db.DateTime(timezone=True))
     # Address style: tykat (informal) or vykat (formal) — migration 057
     address_style = db.Column(db.Text, default="vykat")
+    # Editable salutation with Czech vocative auto-derive — migration 067 (BL-1106)
+    salutation = db.Column(db.Text)
+    salutation_overridden = db.Column(
+        db.Boolean, nullable=False, server_default=db.text("false"), default=False
+    )
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+
+
+class ContactFieldChange(db.Model):
+    """Audit log row for an inline-edit change to a contact or company field.
+
+    Written by the PATCH /api/contacts/<id> and PATCH /api/companies/<id>
+    endpoints — one row per diffed field. See migration 066 (BL-1107).
+    """
+
+    __tablename__ = "contact_field_changes"
+
+    id = db.Column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=db.text("gen_random_uuid()"),
+    )
+    tenant_id = db.Column(UUID(as_uuid=False), nullable=False)
+    entity_type = db.Column(db.Text, nullable=False)  # 'contact' | 'company'
+    entity_id = db.Column(UUID(as_uuid=False), nullable=False)
+    field_name = db.Column(db.Text, nullable=False)
+    old_value = db.Column(db.Text)
+    new_value = db.Column(db.Text)
+    changed_by = db.Column(UUID(as_uuid=False))  # users.id; nullable for system writes
+    changed_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
+    source = db.Column(db.Text, nullable=False, default="user_patch")
 
 
 class ImportJob(db.Model):

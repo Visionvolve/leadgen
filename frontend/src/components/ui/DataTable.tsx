@@ -330,7 +330,14 @@ export function DataTable<T extends { id?: string }>({
                   const isEditable = colDef.editable && onCellEdit
                   const cellKey = item.id ? `${item.id}:${editField}` : undefined
                   const cellStatus = cellKey && cellStates ? cellStates.get(cellKey) as 'saving' | 'saved' | 'error' | undefined : undefined
-                  const rawValue = (item as Record<string, unknown>)[col.key]
+                  // Prefer editField for raw-value lookup so a column with a
+                  // synthetic key (e.g. 'name_edit') can still read the
+                  // underlying field ('name') for both display and edit.
+                  const rawValue =
+                    (item as Record<string, unknown>)[col.key] ??
+                    (colDef.editField
+                      ? (item as Record<string, unknown>)[colDef.editField]
+                      : undefined)
 
                   if (isEditable && colDef.editType && item.id) {
                     return (

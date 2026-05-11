@@ -168,6 +168,50 @@ export function EditableSelect({ label, name, value, options, onChange }: Editab
   )
 }
 
+/* ---- EditableText (single-line text input, blur to commit) ---- */
+
+interface EditableTextProps {
+  label: string
+  name: string
+  value: string | null | undefined
+  onChange: (name: string, value: string) => void
+  placeholder?: string
+  helpText?: string
+}
+
+export function EditableText({ label, name, value, onChange, placeholder, helpText }: EditableTextProps) {
+  const [localValue, setLocalValue] = useState(value || '')
+  const isDirty = localValue !== (value || '')
+
+  // Sync from parent when value changes externally (e.g. auto-derived salutation
+  // after a first_name edit lands).
+  const [prevValue, setPrevValue] = useState(value)
+  if (value !== prevValue) {
+    setPrevValue(value)
+    setLocalValue(value || '')
+  }
+
+  const handleBlur = () => {
+    if (!isDirty) return
+    onChange(name, localValue)
+  }
+
+  return (
+    <div>
+      <label className="text-xs text-text-muted mb-0.5 block">{label}</label>
+      <input
+        type="text"
+        value={localValue}
+        onChange={(e) => setLocalValue(e.target.value)}
+        onBlur={handleBlur}
+        placeholder={placeholder}
+        className="w-full bg-surface-alt border border-border-solid rounded-md px-2 py-1.5 text-sm text-text focus:outline-none focus:border-accent"
+      />
+      {helpText && <p className="text-[11px] text-text-dim mt-0.5">{helpText}</p>}
+    </div>
+  )
+}
+
 /* ---- EditableTextarea ---- */
 
 interface EditableTextareaProps {
