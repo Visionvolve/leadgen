@@ -23,6 +23,7 @@ import { PlaybookDemo } from './pages/playbook/PlaybookDemo'
 import { LlmCostsPage } from './pages/llm-costs/LlmCostsPage'
 import { TokensPage } from './pages/tokens/TokensPage'
 import { TriageReviewPage } from './pages/companies/TriageReviewPage'
+import { SmartListsPage } from './pages/smart-lists/SmartListsPage'
 import { AuthCallbackPage } from './pages/auth/AuthCallbackPage'
 import { EchoPage } from './pages/EchoPage'
 
@@ -63,6 +64,7 @@ export default function App() {
               <Route path="campaigns" element={<CampaignsPage />} />
               <Route path="campaigns/:campaignId" element={<CampaignDetailPage />} />
               <Route path="campaigns/:campaignId/review" element={<MessageReviewPage />} />
+              <Route path="smart-lists" element={<SmartListsPage />} />
               <Route path="playbook" element={<PlaybookPage />} />
               <Route path="playbook/:phase" element={<PlaybookPage />} />
               <Route path="playbook-demo" element={<PlaybookDemo />} />
