@@ -425,7 +425,10 @@ def list_companies():
             ELSE 3 END"""
     else:
         sort_col = f"c.{sort}"
-    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST"
+    # Append `c.id ASC` as a unique tiebreaker so pagination stays stable when
+    # the primary sort column has tied/NULL values (otherwise duplicate rows can
+    # appear across page boundaries). See BL-1116.
+    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST, c.id ASC"
 
     rows = db.session.execute(
         db.text(f"""
@@ -1179,9 +1182,7 @@ def delete_company(company_id):
 
     # Verify company belongs to tenant
     row = db.session.execute(
-        db.text(
-            "SELECT id FROM companies WHERE id = :id AND tenant_id = :tid"
-        ),
+        db.text("SELECT id FROM companies WHERE id = :id AND tenant_id = :tid"),
         {"id": company_id, "tid": str(tenant_id)},
     ).fetchone()
     if not row:
@@ -1199,9 +1200,7 @@ def delete_company(company_id):
 
     # Delete the company
     db.session.execute(
-        db.text(
-            "DELETE FROM companies WHERE id = :id AND tenant_id = :tid"
-        ),
+        db.text("DELETE FROM companies WHERE id = :id AND tenant_id = :tid"),
         params,
     )
     db.session.commit()
@@ -1473,7 +1472,7 @@ def triage_queue():
             LEFT JOIN owners o ON c.owner_id = o.id
             LEFT JOIN company_enrichment_l1 l1 ON l1.company_id = c.id
             WHERE {where_clause}
-            ORDER BY c.triage_score DESC NULLS LAST, c.name ASC
+            ORDER BY c.triage_score DESC NULLS LAST, c.name ASC, c.id ASC
             LIMIT :limit OFFSET :offset
         """),
         {**params, "limit": page_size, "offset": offset},

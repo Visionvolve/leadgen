@@ -424,7 +424,10 @@ def list_contacts():
     offset = (page - 1) * page_size
 
     sort_col = _SORT_COL_MAP.get(sort, f"ct.{sort}")
-    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST"
+    # Append `ct.id ASC` as a unique tiebreaker so pagination stays stable when
+    # the primary sort column has tied/NULL values (otherwise duplicate rows can
+    # appear across page boundaries). See BL-1116.
+    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST, ct.id ASC"
 
     rows = db.session.execute(
         db.text(f"""
@@ -1389,7 +1392,7 @@ def search_contacts():
                 co.industry, co.tier, co.company_size, co.geo_region
             FROM contacts ct {joins}
             WHERE {main_where}
-            ORDER BY {order_col} {sort_dir} NULLS LAST
+            ORDER BY {order_col} {sort_dir} NULLS LAST, ct.id ASC
             LIMIT :limit OFFSET :offset
         """
         ),
