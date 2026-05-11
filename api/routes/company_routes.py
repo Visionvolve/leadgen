@@ -2,7 +2,7 @@ import json
 import math
 import re
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import (
@@ -25,6 +25,7 @@ from ..display import (
     display_tier,
 )
 from ..models import db
+from ..services.contact_helpers import write_field_change
 
 companies_bp = Blueprint("companies", __name__)
 
@@ -1322,15 +1323,48 @@ def update_company(company_id):
                 }
             ), 400
 
-    # Verify company belongs to tenant
-    row = db.session.execute(
+    # Verify company belongs to tenant and pull current values for the audit diff.
+    existing = db.session.execute(
         db.text(
-            "SELECT id, custom_fields FROM companies WHERE id = :id AND tenant_id = :t"
+            """
+            SELECT
+                id,
+                custom_fields,
+                name,
+                domain,
+                website_url,
+                linkedin_url,
+                notes,
+                triage_notes,
+                status,
+                tier,
+                buying_stage,
+                engagement_status,
+                crm_status,
+                cohort
+            FROM companies
+            WHERE id = :id AND tenant_id = :t
+            """
         ),
         {"id": company_id, "t": tenant_id},
     ).fetchone()
-    if not row:
+    if not existing:
         return jsonify({"error": "Company not found"}), 404
+
+    existing_map = {
+        "name": existing[2],
+        "domain": existing[3],
+        "website_url": existing[4],
+        "linkedin_url": existing[5],
+        "notes": existing[6],
+        "triage_notes": existing[7],
+        "status": existing[8],
+        "tier": existing[9],
+        "buying_stage": existing[10],
+        "engagement_status": existing[11],
+        "crm_status": existing[12],
+        "cohort": existing[13],
+    }
 
     set_parts = []
     params = {"id": company_id}
@@ -1339,7 +1373,7 @@ def update_company(company_id):
         params[k] = v
 
     if custom_fields_update and isinstance(custom_fields_update, dict):
-        existing_cf = _parse_jsonb(row[1])
+        existing_cf = _parse_jsonb(existing[1])
         existing_cf.update(custom_fields_update)
         set_parts.append("custom_fields = :custom_fields")
         params["custom_fields"] = json.dumps(existing_cf)
@@ -1348,6 +1382,23 @@ def update_company(company_id):
         db.text(f"UPDATE companies SET {', '.join(set_parts)} WHERE id = :id"),
         params,
     )
+
+    # Audit log: one row per actually-changed field.
+    changed_by = getattr(getattr(g, "current_user", None), "id", None)
+    for field_name, new_value in fields.items():
+        old_value = existing_map.get(field_name)
+        if old_value == new_value:
+            continue
+        write_field_change(
+            tenant_id=tenant_id,
+            entity_type="company",
+            entity_id=company_id,
+            field_name=field_name,
+            old_value=old_value,
+            new_value=new_value,
+            changed_by=changed_by,
+        )
+
     db.session.commit()
 
     return jsonify({"ok": True})

@@ -6,7 +6,7 @@ import { useToast } from '../../components/ui/Toast'
 import { Badge } from '../../components/ui/Badge'
 import {
   FieldGrid, Field, FieldLink,
-  EditableSelect, EditableTextarea,
+  EditableSelect, EditableText, EditableTextarea,
   SectionDivider, CollapsibleSection, MiniTable,
 } from '../../components/ui/DetailField'
 import { Tabs, type TabDef } from '../../components/ui/Tabs'
@@ -156,12 +156,38 @@ export function ContactDetail({ contact, onNavigate }: Props) {
       payload.custom_fields = cfEdits
     }
 
+    const submit = async (params?: Record<string, string>) => {
+      await mutation.mutateAsync({ id: contact.id, data: payload, params })
+    }
+
     try {
-      await mutation.mutateAsync({ id: contact.id, data: payload })
+      await submit()
       toast('Contact updated', 'success')
       setEdits({})
       setCfEdits({})
-    } catch {
+    } catch (err) {
+      // Detect duplicate-email warning (HTTP 409) and offer confirm override.
+      const apiErr = err as { status?: number; code?: string; details?: { existing_name?: string } }
+      if (apiErr?.status === 409 && apiErr.code === 'duplicate_email') {
+        const existing = apiErr.details?.existing_name ?? 'another contact'
+        const ok = window.confirm(
+          `Email already used by ${existing}. Save anyway?`
+        )
+        if (!ok) {
+          toast('Save cancelled', 'info')
+          return
+        }
+        try {
+          await submit({ confirm_duplicate: 'true' })
+          toast('Contact updated', 'success')
+          setEdits({})
+          setCfEdits({})
+          return
+        } catch {
+          toast('Failed to save changes', 'error')
+          return
+        }
+      }
       toast('Failed to save changes', 'error')
     }
   }
@@ -207,6 +233,52 @@ export function ContactDetail({ contact, onNavigate }: Props) {
           {contact.employment_verified_at && (
             <Field label="Employment Verified" value={new Date(contact.employment_verified_at).toLocaleDateString()} />
           )}
+        </FieldGrid>
+
+        {/* Identity (editable) — name + salutation. BL-1106/1107 */}
+        <SectionDivider title="Identity" />
+        <FieldGrid cols={3}>
+          <EditableText
+            label="First name"
+            name="first_name"
+            value={getEditableValue('first_name', contact.first_name)}
+            onChange={handleFieldChange}
+          />
+          <EditableText
+            label="Last name"
+            name="last_name"
+            value={getEditableValue('last_name', contact.last_name)}
+            onChange={handleFieldChange}
+          />
+          <EditableText
+            label="Salutation (5. pád)"
+            name="salutation"
+            value={getEditableValue('salutation', contact.salutation)}
+            onChange={handleFieldChange}
+            helpText={
+              contact.salutation_overridden
+                ? 'Manually overridden. Clear the field to re-enable auto-derive.'
+                : 'Auto-generated from first name. Edit to override.'
+            }
+          />
+          <EditableText
+            label="Email"
+            name="email_address"
+            value={getEditableValue('email_address', contact.email_address)}
+            onChange={handleFieldChange}
+          />
+          <EditableText
+            label="Phone"
+            name="phone_number"
+            value={getEditableValue('phone_number', contact.phone_number)}
+            onChange={handleFieldChange}
+          />
+          <EditableText
+            label="Job title"
+            name="job_title"
+            value={getEditableValue('job_title', contact.job_title)}
+            onChange={handleFieldChange}
+          />
         </FieldGrid>
 
         {/* Classification (editable) */}
