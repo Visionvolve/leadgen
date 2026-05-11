@@ -1824,6 +1824,15 @@ class EmailSendLog(db.Model):
         default="production",
         server_default=db.text("'production'"),
     )
+    # BL-1110 (migration 069): multilingual mailing foundation.
+    # ``template_language`` records which language variant of a templated
+    # campaign was rendered for this send (``cs`` for the production
+    # Czech body, ``en`` for English, etc.). ``template_language_fallback``
+    # is TRUE iff the contact's requested language variant was not
+    # registered and the template registry fell back to the default
+    # language (``cs``). Both are NULL for non-templated sends.
+    template_language = db.Column(db.String(8))
+    template_language_fallback = db.Column(db.Boolean)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
     def to_dict(self):
@@ -1858,6 +1867,8 @@ class EmailSendLog(db.Model):
             if self.superseded_at
             else None,
             "superseded_by": str(self.superseded_by) if self.superseded_by else None,
+            "template_language": self.template_language,
+            "template_language_fallback": self.template_language_fallback,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
