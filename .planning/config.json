@@ -1,0 +1,109 @@
+{
+  "model_profile": "balanced",
+  "commit_docs": true,
+  "parallelization": true,
+  "search_gitignored": false,
+  "brave_search": false,
+  "firecrawl": false,
+  "exa_search": false,
+  "git": {
+    "branching_strategy": "feature_branch",
+    "phase_branch_template": "feature/v25-phase-{phase}-{slug}",
+    "milestone_branch_template": "feature/v25-{slug}",
+    "quick_branch_template": null,
+    "base_branch": "staging"
+  },
+  "workflow": {
+    "research": false,
+    "plan_check": true,
+    "verifier": true,
+    "nyquist_validation": false,
+    "auto_advance": false,
+    "node_repair": true,
+    "node_repair_budget": 2,
+    "ui_phase": false,
+    "ui_safety_gate": true,
+    "ai_integration_phase": false,
+    "tdd_mode": false,
+    "text_mode": false,
+    "research_before_questions": false,
+    "discuss_mode": "discuss",
+    "skip_discuss": false,
+    "code_review": true,
+    "code_review_depth": "deep",
+    "code_review_command": null,
+    "pattern_mapper": true,
+    "plan_bounce": false,
+    "plan_bounce_script": null,
+    "plan_bounce_passes": 2,
+    "auto_prune_state": false,
+    "security_enforcement": true,
+    "security_asvs_level": 1,
+    "security_block_on": "high"
+  },
+  "parallelization_config": {
+    "enabled": true,
+    "plan_level": true,
+    "task_level": false,
+    "skip_checkpoints": true,
+    "max_concurrent_agents": 3,
+    "min_plans_for_parallel": 2
+  },
+  "gates": {
+    "confirm_project": false,
+    "confirm_phases": false,
+    "confirm_roadmap": false,
+    "confirm_breakdown": false,
+    "confirm_plan": false,
+    "execute_next_plan": false,
+    "issues_review": false,
+    "confirm_transition": false
+  },
+  "safety": {
+    "always_confirm_destructive": true,
+    "always_confirm_external_services": true
+  },
+  "hooks": {
+    "context_warnings": true
+  },
+  "project_code": "leadgen-pipeline",
+  "phase_naming": "sequential",
+  "agent_skills": {
+    "gsd-executor": "deploy",
+    "gsd-verifier": "vps-infrastructure:vps-health-check"
+  },
+  "claude_md_path": "./CLAUDE.md",
+  "context_window": 1000000,
+  "model_overrides": {
+    "gsd-planner": "opus",
+    "gsd-plan-checker": "opus",
+    "gsd-executor": "opus"
+  },
+  "mode": "yolo",
+  "granularity": "standard",
+  "planning": {
+    "commit_docs": true,
+    "search_gitignored": false,
+    "sub_repos": [
+      {
+        "name": "ua-microsite",
+        "path": "/Users/michal/git/ua-microsite",
+        "base_branch": "staging",
+        "used_in_phases": [1, 7, 8],
+        "notes": "Partner-facing microsite at booking.losers.cz. Cross-repo phases PR against this repo's staging."
+      }
+    ]
+  },
+  "backlog_integration": {
+    "service_url": "https://backlog.visionvolve.com",
+    "project_slug": "leadgen-pipeline",
+    "active_milestone": "v25-lcc-client-requests",
+    "active_sprint": "Sprint 25 — LCC client requests",
+    "phase_mapping_directive": "gsd-phase-mapping",
+    "status_transitions": {
+      "phase_building": "Building",
+      "phase_pr_open": "PR Open",
+      "phase_done": "Done"
+    }
+  }
+}
