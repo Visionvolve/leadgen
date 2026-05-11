@@ -23,6 +23,7 @@ from .strategy_template_routes import strategy_templates_bp
 from .tenant_routes import tenants_bp
 from .token_routes import token_bp
 from .tracking_routes import tracking_bp
+from .unsubscribe_routes import unsubscribe_bp
 from .user_routes import users_bp
 from .quality_routes import quality_bp
 from .version_routes import version_bp
@@ -58,4 +59,5 @@ def register_blueprints(app):
     app.register_blueprint(assets_bp)
     app.register_blueprint(quality_bp)
     app.register_blueprint(tracking_bp)
+    app.register_blueprint(unsubscribe_bp)
     app.register_blueprint(webhooks_bp)

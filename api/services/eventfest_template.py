@@ -109,7 +109,7 @@ EVENTFEST_HTML_TEMPLATE = """\
                        font-size:11px;color:#999999;text-align:center;
                        border-top:1px solid #eeeeee;">
               United Arts s.r.o. | Praha, Česká republika<br>
-              <a href="mailto:hana@unitedarts.cz?subject=unsubscribe"
+              <a href="{{unsubscribe_url}}"
                  style="color:#999999;text-decoration:underline;">Odhlásit se</a>
             </td>
           </tr>
@@ -205,7 +205,7 @@ EVENTFEST_HTML_TEMPLATE_EN = """\
                        font-size:11px;color:#999999;text-align:center;
                        border-top:1px solid #eeeeee;">
               United Arts s.r.o. | Prague, Czech Republic<br>
-              <a href="mailto:hana@unitedarts.cz?subject=unsubscribe"
+              <a href="{{unsubscribe_url}}"
                  style="color:#999999;text-decoration:underline;">Unsubscribe</a>
             </td>
           </tr>
@@ -248,9 +248,13 @@ def _replace_template_variables(template: str, variables: dict[str, str]) -> str
 # ---------------------------------------------------------------------------
 
 
+_UNSUBSCRIBE_FALLBACK = "mailto:unsubscribe@example.com?subject=unsubscribe"
+
+
 def render_eventfest_cs(
     vocative_name: str | None = None,
     microsite_link: str = "",
+    unsubscribe_url: str | None = None,
     **_: object,
 ) -> dict:
     """Render the Czech EventFest invitation.
@@ -258,10 +262,15 @@ def render_eventfest_cs(
     Returns a dict with ``subject``, ``html`` and ``text`` keys. Extra
     kwargs are accepted (and ignored) so the registry can pass arbitrary
     template context without each renderer caring.
+
+    ``unsubscribe_url`` (BL-1103) is injected into the ``{{unsubscribe_url}}``
+    placeholder. When omitted, a mailto fallback keeps the footer link
+    intact for callers that don't yet wire the send-side suppression flow.
     """
     variables = {
         "vocative_name": vocative_name or "",
         "microsite_link": microsite_link or "",
+        "unsubscribe_url": unsubscribe_url or _UNSUBSCRIBE_FALLBACK,
     }
     return {
         "subject": EVENTFEST_SUBJECT,
@@ -273,12 +282,19 @@ def render_eventfest_cs(
 def render_eventfest_en(
     vocative_name: str | None = None,
     microsite_link: str = "",
+    unsubscribe_url: str | None = None,
     **_: object,
 ) -> dict:
-    """Render the English EventFest invitation."""
+    """Render the English EventFest invitation.
+
+    ``unsubscribe_url`` (BL-1103) is injected into the ``{{unsubscribe_url}}``
+    placeholder. When omitted, a mailto fallback keeps the footer link
+    intact for callers that don't yet wire the send-side suppression flow.
+    """
     variables = {
         "vocative_name": vocative_name or "",
         "microsite_link": microsite_link or "",
+        "unsubscribe_url": unsubscribe_url or _UNSUBSCRIBE_FALLBACK,
     }
     return {
         "subject": EVENTFEST_SUBJECT_EN,
@@ -295,6 +311,7 @@ def render_eventfest_en(
 def render_eventfest_email(
     vocative_name: str | None,
     microsite_link: str,
+    unsubscribe_url: str | None = None,
 ) -> tuple[str, str, str]:
     """Render the Czech EventFest invitation (legacy 3-tuple API).
 
@@ -303,10 +320,21 @@ def render_eventfest_email(
     existing callers (the campaign provisioning service and pre-existing
     tests). New code should call :func:`render_eventfest_cs`/`_en` or go
     through :mod:`api.services.template_registry`.
+
+    Args:
+        vocative_name: Contact's name already in vocative form (or ``None``).
+        microsite_link: Full URL to the contact's personalised microsite invite.
+        unsubscribe_url: Per-contact one-click unsubscribe URL (BL-1103).
+            When omitted, a mailto fallback is rendered so the footer link
+            is never broken even outside the send-service code path.
+
+    Returns:
+        Tuple of ``(subject, html_body, plain_text_body)``.
     """
     payload = render_eventfest_cs(
         vocative_name=vocative_name,
         microsite_link=microsite_link,
+        unsubscribe_url=unsubscribe_url,
     )
     return (payload["subject"], payload["html"], payload["text"])
 

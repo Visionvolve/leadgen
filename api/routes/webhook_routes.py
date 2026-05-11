@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
-from ..models import EmailSendLog, db
+from ..models import Activity, Contact, EmailSendLog, db
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,77 @@ def _verify_svix_signature(payload_bytes: bytes, headers) -> bool:
 
     logger.error("Resend webhook: svix signature verification failed — rejecting")
     return False
+
+
+def _suppress_contact_for_email(
+    tenant_id: str,
+    to_email: str | None,
+    reason: str,
+    event_time: datetime,
+    *,
+    campaign_id: str | None = None,
+) -> None:
+    """Flip ``contacts.is_suppressed`` for the recipient of a webhook event.
+
+    BL-1105 (Unsubscribe Loop) — webhook-driven suppression for the three
+    irreversible signals:
+
+    * ``email.unsubscribed``  -> reason="resend_webhook"
+    * ``email.bounced`` (hard) -> reason="hard_bounce"
+    * ``email.complained``    -> reason="spam_complaint"
+
+    Idempotent: if the contact is already suppressed we do NOT overwrite
+    ``suppressed_at`` or ``suppression_reason`` and we do NOT write a
+    duplicate Activity row — earliest-observed semantics, matching the
+    EmailSendLog timestamp rules.
+
+    Looks up the contact by ``(tenant_id, lower(email_address))``. If no
+    such contact exists (e.g. extension-only contact later deleted) this
+    is a no-op — the EmailSendLog audit row still gets the suppression
+    timestamp, so we don't lose the signal.
+    """
+    if not to_email:
+        return
+
+    contact = (
+        db.session.query(Contact)
+        .filter(
+            Contact.tenant_id == tenant_id,
+            db.func.lower(Contact.email_address) == to_email.lower(),
+        )
+        .first()
+    )
+    if contact is None:
+        logger.info(
+            "Resend webhook: no contact for to_email=%s tenant=%s (skipping suppression)",
+            to_email,
+            tenant_id,
+        )
+        return
+
+    if contact.is_suppressed:
+        return  # idempotent — earliest-observed wins
+
+    contact.is_suppressed = True
+    contact.suppressed_at = event_time
+    contact.suppression_reason = reason
+
+    db.session.add(
+        Activity(
+            tenant_id=tenant_id,
+            contact_id=contact.id,
+            activity_name="Contact unsubscribed",
+            activity_type="event",
+            event_type="contact.unsubscribed",
+            payload={
+                "source": "resend_webhook",
+                "reason": reason,
+                "to_email": to_email,
+                "campaign_id": str(campaign_id) if campaign_id else None,
+            },
+            occurred_at=event_time,
+        )
+    )
 
 
 def _parse_event_timestamp(body: dict) -> datetime:
@@ -236,15 +307,43 @@ def resend_webhook():
                 log.bounce_type = bounce_data.get("type", "unknown")
             log.status = "bounced"
 
+            # BL-1105: hard bounces are permanent — suppress so we never
+            # retry. Soft bounces are recoverable (e.g. inbox full) so we
+            # leave the contact mailable.
+            if (log.bounce_type or "").lower() == "hard":
+                _suppress_contact_for_email(
+                    log.tenant_id,
+                    log.to_email,
+                    reason="hard_bounce",
+                    event_time=event_time,
+                )
+
         elif event_type == "email.complained":
             if not log.complained_at:
                 log.complained_at = event_time
             log.status = "complained"
 
+            # BL-1105: spam complaint -> immediate suppression.
+            _suppress_contact_for_email(
+                log.tenant_id,
+                log.to_email,
+                reason="spam_complaint",
+                event_time=event_time,
+            )
+
         elif event_type == "email.unsubscribed":
             if not log.unsubscribed_at:
                 log.unsubscribed_at = event_time
             log.status = "unsubscribed"
+
+            # BL-1103 / BL-1105: flip the contact's suppression flag so
+            # no future campaign sends them another email. Idempotent.
+            _suppress_contact_for_email(
+                log.tenant_id,
+                log.to_email,
+                reason="resend_webhook",
+                event_time=event_time,
+            )
 
         db.session.commit()
         logger.info(

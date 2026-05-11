@@ -702,6 +702,19 @@ class Contact(db.Model):
     error = db.Column(db.Text)
     custom_fields = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
     last_enriched_at = db.Column(db.DateTime(timezone=True))
+    # Mailing suppression (migration 065 — BL-1103/BL-1105 Unsubscribe Loop).
+    # Flipped to TRUE when the contact unsubscribes, hard-bounces, or files a
+    # spam complaint. The send-side query in api/services/send_service.py
+    # filters Contact.is_suppressed.is_(False) so suppressed contacts never
+    # receive another campaign email.
+    is_suppressed = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+        server_default=db.text("FALSE"),
+    )
+    suppressed_at = db.Column(db.DateTime(timezone=True))
+    suppression_reason = db.Column(db.Text)
     employment_verified_at = db.Column(db.DateTime(timezone=True))
     employment_status = db.Column(db.Text)
     linkedin_activity_level = db.Column(db.Text, default="unknown")

@@ -80,9 +80,24 @@ class TestRenderEventfestEmail:
         assert "max-width:600px" in html
 
     def test_html_has_unsubscribe_link(self):
+        """BL-1103: footer link is now the per-contact one-click unsubscribe URL.
+
+        Without an explicit ``unsubscribe_url`` argument the renderer
+        substitutes a mailto fallback so the footer is always actionable.
+        The footer label "Odhlasit se" (Czech for "unsubscribe") must
+        remain in either case.
+        """
         _, html, _ = render_eventfest_email("Evo", "https://example.com/invite/123")
-        assert "unsubscribe" in html.lower()
-        assert "hana@unitedarts.cz" in html
+        assert "Odhl" in html  # "Odhlasit se" footer label still present
+        assert "unsubscribe" in html.lower()  # mailto fallback
+
+    def test_html_uses_provided_unsubscribe_url(self):
+        """An explicit unsubscribe_url is injected verbatim (BL-1103)."""
+        per_contact = "https://example.com/api/unsubscribe?contact_id=X&token=Y"
+        _, html, _ = render_eventfest_email(
+            "Evo", "https://example.com/invite/123", unsubscribe_url=per_contact
+        )
+        assert per_contact in html
 
     def test_plain_text_has_link(self):
         _, _, plain = render_eventfest_email(

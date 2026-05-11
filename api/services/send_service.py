@@ -376,7 +376,9 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
             "validation_warnings": [],
         }
 
-    # 5. Load approved email messages not yet sent (idempotent check)
+    # 5. Load approved email messages not yet sent (idempotent check).
+    # BL-1105: hard-filter Contact.is_suppressed so unsubscribed /
+    # hard-bounced / complained contacts never re-enter the send queue.
     messages_data = (
         db.session.query(Message, Contact, CampaignContact)
         .join(CampaignContact, Message.campaign_contact_id == CampaignContact.id)
@@ -386,6 +388,7 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
             CampaignContact.tenant_id == tenant_id,
             Message.status == "approved",
             Message.channel == "email",
+            Contact.is_suppressed.is_(False),
         )
         .all()
     )
@@ -495,6 +498,11 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
 
         sender = f"{from_name} <{from_email}>" if from_name else from_email
 
+        # BL-1103: include the per-contact HTTPS unsubscribe URL alongside
+        # the mailto fallback so List-Unsubscribe is RFC 8058-compliant
+        # in modern Gmail/Outlook clients (one-click without a mail draft).
+        unsubscribe_url = _build_unsubscribe_url(contact)
+
         try:
             result = _send_single_email(
                 to_email=to_email,
@@ -503,6 +511,7 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
                 subject=subject,
                 body_html=body_html,
                 sender_domain=sender_domain,
+                unsubscribe_url=unsubscribe_url,
             )
 
             # Update log with success
@@ -572,6 +581,7 @@ def _send_single_email(
     subject: str,
     body_html: str,
     sender_domain: str = "",
+    unsubscribe_url: str | None = None,
 ) -> dict:
     """Send a single email via the Resend API.
 
@@ -583,7 +593,11 @@ def _send_single_email(
         reply_to: optional reply-to address
         subject: email subject line
         body_html: HTML body content
-        sender_domain: domain for List-Unsubscribe header
+        sender_domain: domain for List-Unsubscribe header (mailto fallback)
+        unsubscribe_url: optional HTTPS URL for RFC 8058 one-click
+            unsubscribe (BL-1103). When provided, included alongside the
+            mailto fallback so modern Gmail/Outlook clients can present
+            the native "Unsubscribe" button.
 
     Returns:
         dict with Resend response (includes 'id')
@@ -603,11 +617,16 @@ def _send_single_email(
         params["reply_to"] = [reply_to]
 
     # CAN-SPAM: List-Unsubscribe header
-    if sender_domain:
+    # BL-1103: prefer the HTTPS URL variant (RFC 8058) when available,
+    # but keep the mailto fallback for legacy clients.
+    if sender_domain or unsubscribe_url:
+        variants = []
+        if unsubscribe_url:
+            variants.append(f"<{unsubscribe_url}>")
+        if sender_domain:
+            variants.append(f"<mailto:unsubscribe@{sender_domain}?subject=unsubscribe>")
         params["headers"] = {
-            "List-Unsubscribe": (
-                f"<mailto:unsubscribe@{sender_domain}?subject=unsubscribe>"
-            ),
+            "List-Unsubscribe": ", ".join(variants),
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         }
 
@@ -727,6 +746,17 @@ def _build_template_variables(
         "first_name": first_name,
     }
 
+    # BL-1103: every template campaign gets the per-contact unsubscribe
+    # URL injected as ``{{unsubscribe_url}}`` so the footer "Odhlasit se"
+    # link points at the one-click flow with a valid HMAC token. Falls
+    # back to a mailto so the footer is never broken.
+    fallback = "mailto:unsubscribe@example.com?subject=unsubscribe"
+    try:
+        unsub_url = _build_unsubscribe_url(contact)
+    except Exception:
+        unsub_url = None
+    variables["unsubscribe_url"] = unsub_url or fallback
+
     # Microsite invite link — cached in campaign_contact metadata-like field
     # We store it on the Message or regenerate (idempotent by email)
     if template_type == "eventfest":
@@ -770,6 +800,153 @@ def _build_template_variables(
         )
 
     return variables
+
+
+def _build_unsubscribe_url(contact: "Contact") -> str | None:
+    """Build the per-contact RFC 8058 HTTPS unsubscribe URL (BL-1103).
+
+    Returns ``None`` when the request context or contact metadata makes
+    URL construction impossible — callers treat that as "fall back to
+    the mailto-only List-Unsubscribe header".
+
+    The base URL is taken from (in order):
+    1. ``FRONTEND_BASE_URL`` config — the customer-facing dashboard host.
+    2. ``UNSUBSCRIBE_BASE_URL`` env override — escape hatch for staging.
+    Falls back to ``https://leadgen.visionvolve.com`` to keep the URL
+    actionable even in misconfigured dev runs.
+    """
+    if not contact or not contact.id or not contact.tenant_id:
+        return None
+
+    try:
+        from ..routes.unsubscribe_routes import generate_unsubscribe_token
+
+        token = generate_unsubscribe_token(contact)
+    except Exception:
+        logger.warning(
+            "Unable to mint unsubscribe token for contact %s",
+            getattr(contact, "id", None),
+        )
+        return None
+
+    import os
+
+    from flask import current_app
+
+    base = (
+        os.environ.get("UNSUBSCRIBE_BASE_URL")
+        or current_app.config.get("FRONTEND_BASE_URL")
+        or "https://leadgen.visionvolve.com"
+    )
+    base = base.rstrip("/")
+    return f"{base}/api/unsubscribe?contact_id={contact.id}&token={token}"
+
+
+def send_unsubscribe_confirmation(contact: "Contact", tenant: "Tenant | None") -> bool:
+    """Send the one-shot "you've been unsubscribed" email (BL-1103).
+
+    Called from the public POST /api/unsubscribe handler AFTER the
+    contact has been flagged ``is_suppressed=True``. This must bypass
+    the suppression gate (we just flipped it) — so we go straight to
+    Resend rather than the campaign-send path.
+
+    Returns ``True`` on success, ``False`` on any failure (logged). The
+    caller never relies on this for correctness — the suppression is
+    already persisted by the time we get here. A missed confirmation is
+    a UX paper cut, not a compliance failure.
+    """
+    if not contact or not contact.email_address:
+        return False
+
+    if not tenant:
+        tenant = db.session.get(Tenant, contact.tenant_id)
+    tenant_settings = (tenant.settings if tenant else {}) or {}
+    if isinstance(tenant_settings, str):
+        import json
+
+        try:
+            tenant_settings = json.loads(tenant_settings)
+        except Exception:
+            tenant_settings = {}
+
+    api_key = tenant_settings.get("resend_api_key")
+    if not api_key:
+        logger.warning(
+            "send_unsubscribe_confirmation: tenant %s has no resend_api_key; skipping",
+            contact.tenant_id,
+        )
+        return False
+
+    sender_config = tenant_settings.get("sender_config") or {}
+    from_email = sender_config.get("from_email") or sender_config.get("from") or ""
+    from_name = sender_config.get("from_name") or (tenant.name if tenant else "")
+    if not from_email:
+        # No configured sender — fall back to a noreply alias on the
+        # tenant's send domain if we can guess it from a previous send.
+        from ..models import EmailSendLog
+
+        last_send = (
+            db.session.query(EmailSendLog)
+            .filter(
+                EmailSendLog.tenant_id == contact.tenant_id,
+                EmailSendLog.from_email.isnot(None),
+                EmailSendLog.status == "sent",
+            )
+            .order_by(EmailSendLog.sent_at.desc().nullslast())
+            .first()
+        )
+        if last_send and last_send.from_email:
+            from_email = last_send.from_email
+            from_name = from_name or ""
+    if not from_email:
+        logger.warning(
+            "send_unsubscribe_confirmation: no sender for tenant %s; skipping",
+            contact.tenant_id,
+        )
+        return False
+
+    tenant_name = (tenant.name if tenant else "") or "the team"
+    first_name = (contact.first_name or "there").strip() or "there"
+    subject = f"Unsubscribed from {tenant_name}"
+    body_html = (
+        "<!doctype html><html><body style='font-family:sans-serif;"
+        "max-width:520px;margin:24px auto;color:#222;line-height:1.55;'>"
+        f"<p>Hi {first_name},</p>"
+        f"<p>You've been unsubscribed from emails sent by {tenant_name}. "
+        "You won't receive further messages from us.</p>"
+        "<p>If this was a mistake, just reply to this email and we'll "
+        "restore your subscription.</p>"
+        "</body></html>"
+    )
+
+    try:
+        import resend
+
+        resend.api_key = api_key
+        sender = f"{from_name} <{from_email}>" if from_name else from_email
+        result = _send_single_email(
+            to_email=contact.email_address,
+            sender=sender,
+            reply_to=None,
+            subject=subject,
+            body_html=body_html,
+            sender_domain="",  # no further unsubscribe header on a confirmation
+            unsubscribe_url=None,
+        )
+        logger.info(
+            "Sent unsubscribe confirmation to %s (tenant=%s, resend_id=%s)",
+            contact.email_address,
+            contact.tenant_id,
+            (result or {}).get("id"),
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to send unsubscribe confirmation to %s (tenant=%s)",
+            contact.email_address,
+            contact.tenant_id,
+        )
+        return False
 
 
 def _render_body_html(body: str) -> str:
@@ -919,7 +1096,9 @@ def send_campaign_emails_gmail(campaign_id: str, tenant_id: str) -> dict:
             "validation_warnings": [],
         }
 
-    # 4. Load approved email messages not yet sent
+    # 4. Load approved email messages not yet sent.
+    # BL-1105: hard-filter Contact.is_suppressed so unsubscribed /
+    # hard-bounced / complained contacts never receive a Gmail send.
     messages_data = (
         db.session.query(Message, Contact, CampaignContact)
         .join(CampaignContact, Message.campaign_contact_id == CampaignContact.id)
@@ -929,6 +1108,7 @@ def send_campaign_emails_gmail(campaign_id: str, tenant_id: str) -> dict:
             CampaignContact.tenant_id == tenant_id,
             Message.status == "approved",
             Message.channel == "email",
+            Contact.is_suppressed.is_(False),
         )
         .all()
     )
