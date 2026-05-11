@@ -29,6 +29,7 @@ import {
   COMPANY_SIZE_DISPLAY,
   GEO_REGION_DISPLAY,
   REVENUE_RANGE_DISPLAY,
+  ORGANIZATION_TYPE_DISPLAY,
 } from '../../lib/display'
 
 /** Build MultiSelectFilter options from a display map + optional facet counts */
@@ -319,6 +320,17 @@ export function CompaniesPage() {
       exclude: getMulti('revenue_range').exclude,
       onSelectionChange: (v: string[]) => { setMultiFilter('revenue_range', v); handleDeselectAll() },
       onExcludeToggle: () => { toggleExclude('revenue_range'); handleDeselectAll() },
+    },
+    {
+      // BL-1108: filter by market-facing organization type (migration 068).
+      // No facet counts yet — facet endpoint backfill is out of scope for this phase.
+      key: 'organization_type',
+      label: 'Org Type',
+      options: buildMultiOptions(ORGANIZATION_TYPE_DISPLAY),
+      selected: getMulti('organization_type').values,
+      exclude: getMulti('organization_type').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('organization_type', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('organization_type'); handleDeselectAll() },
     },
   ], [facets, getMulti, setMultiFilter, toggleExclude, handleDeselectAll])
 

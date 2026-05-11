@@ -273,6 +273,10 @@ def list_companies():
     _add_multi_filter(where, params, "company_size", "c.company_size", request)
     _add_multi_filter(where, params, "geo_region", "c.geo_region", request)
     _add_multi_filter(where, params, "revenue_range", "c.revenue_range", request)
+    # BL-1108: market-facing categorization filter (migration 068).
+    _add_multi_filter(
+        where, params, "organization_type", "c.organization_type", request
+    )
 
     # --- enrichment_stage filter (computed from status + enrichment tables) ---
     # Must match _compute_enrichment_stage() logic exactly.
@@ -450,7 +454,8 @@ def list_companies():
                     SELECT 1 FROM contacts ct2
                     JOIN contact_enrichment ce ON ce.contact_id = ct2.id
                     WHERE ct2.company_id = c.id
-                ) THEN 1 ELSE 0 END AS has_person_enrichment
+                ) THEN 1 ELSE 0 END AS has_person_enrichment,
+                c.organization_type
             FROM companies c
             LEFT JOIN owners o ON c.owner_id = o.id
             LEFT JOIN company_enrichment_l1 l1 ON l1.company_id = c.id
@@ -508,6 +513,7 @@ def list_companies():
         has_l1 = bool(r[25])
         has_l2 = bool(r[26])
         has_person = bool(r[27])
+        organization_type = r[28]
         stage = _compute_enrichment_stage(raw_status, has_l1, has_l2, has_person)
         triage_score = float(r[8]) if r[8] is not None else None
         companies.append(
@@ -541,6 +547,7 @@ def list_companies():
                 "website_url": r[22],
                 "data_quality_score": int(r[23]) if r[23] is not None else None,
                 "last_enriched_at": r[24].isoformat() if r[24] else None,
+                "organization_type": organization_type,
             }
         )
 
@@ -721,7 +728,8 @@ def get_company(company_id):
                 c.created_at, c.updated_at,
                 o.name AS owner_name, b.name AS tag_name,
                 c.website_url, c.linkedin_url, c.logo_url,
-                c.last_enriched_at, c.data_quality_score
+                c.last_enriched_at, c.data_quality_score,
+                c.organization_type
             FROM companies c
             LEFT JOIN owners o ON c.owner_id = o.id
             LEFT JOIN tags b ON c.tag_id = b.id
@@ -771,6 +779,7 @@ def get_company(company_id):
         "logo_url": row[34],
         "last_enriched_at": _iso(row[35]),
         "data_quality_score": float(row[36]) if row[36] is not None else None,
+        "organization_type": row[37],
     }
 
     # L1 enrichment
@@ -1229,6 +1238,7 @@ def update_company(company_id):
         "domain",
         "website_url",
         "linkedin_url",
+        "organization_type",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     custom_fields_update = body.get("custom_fields")
@@ -1285,8 +1295,21 @@ def update_company(company_id):
             "churn",
         },
         "cohort": {"a", "b"},
+        # BL-1108: market-facing categorization (migration 068).
+        "organization_type": {
+            "b2b_agency",
+            "b2c_business",
+            "b2g_municipal",
+            "b2g_cultural",
+            "event_organizer",
+            "non_profit",
+            "other",
+        },
     }
     for field, value in fields.items():
+        # Allow explicit NULL to clear the field.
+        if value is None:
+            continue
         if (
             field in company_enum_validators
             and value not in company_enum_validators[field]

@@ -205,6 +205,11 @@ class Company(db.Model):
     segment = db.Column(
         db.String(50)
     )  # obec, spolek, agentura, skola, korporace, dach_agentura
+    # Market-facing categorization for outreach segmentation (migration 068, BL-1108).
+    # Orthogonal to business_model + segment. Allowed values validated in API layer:
+    # b2b_agency, b2c_business, b2g_municipal, b2g_cultural, event_organizer,
+    # non_profit, other.
+    organization_type = db.Column(db.String(40))
     last_enriched_at = db.Column(db.DateTime(timezone=True))
     data_quality_score = db.Column(db.SmallInteger)
     import_job_id = db.Column(UUID(as_uuid=False), db.ForeignKey("import_jobs.id"))
