@@ -2163,3 +2163,77 @@ class OAuthStateNonce(db.Model):
     )
 
     __table_args__ = (db.Index("idx_oauth_state_nonces_expires", "expires_at"),)
+
+
+class RefToken(db.Model):
+    """Per-contact ref token for unique catalog tracking links (BL-1104).
+
+    Issued from the leadgen dashboard's Contact-detail "Generate catalog
+    link" buttons. Each token is bound to a single (contact, variant) pair
+    and powers two flows on the UA microsite:
+
+    * preferences lookup -- the microsite asks leadgen "what is this token
+      for?" and gets back (variant, contact_first_name, ...). The variant
+      decides whether prices are rendered.
+    * visit recording -- every page load records the visit (visit_count
+      bump + first/last_visited_at + an Activity row).
+
+    See migration 070_ref_tokens.sql for the schema.
+    """
+
+    __tablename__ = "ref_tokens"
+
+    token = db.Column(db.String(32), primary_key=True)
+    tenant_id = db.Column(UUID(as_uuid=False), nullable=False)
+    contact_id = db.Column(UUID(as_uuid=False), nullable=False)
+    variant = db.Column(
+        db.Text,
+        nullable=False,
+        server_default=db.text("'with_prices'"),
+        default="with_prices",
+    )
+    created_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.text("now()")
+    )
+    created_by = db.Column(UUID(as_uuid=False))
+    expires_at = db.Column(db.DateTime(timezone=True))
+    notes = db.Column(db.Text)
+    visit_count = db.Column(
+        db.Integer, nullable=False, server_default=db.text("0"), default=0
+    )
+    first_visited_at = db.Column(db.DateTime(timezone=True))
+    last_visited_at = db.Column(db.DateTime(timezone=True))
+
+    __table_args__ = (db.Index("idx_ref_tokens_contact", "tenant_id", "contact_id"),)
+
+    def is_expired(self, now=None):
+        from datetime import datetime, timezone
+
+        if self.expires_at is None:
+            return False
+        if now is None:
+            now = datetime.now(timezone.utc)
+        # SQLite returns naive datetimes; normalise.
+        exp = self.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        return exp < now
+
+    def to_dict(self):
+        return {
+            "token": self.token,
+            "tenant_id": self.tenant_id,
+            "contact_id": self.contact_id,
+            "variant": self.variant,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_by": self.created_by,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "notes": self.notes,
+            "visit_count": self.visit_count,
+            "first_visited_at": (
+                self.first_visited_at.isoformat() if self.first_visited_at else None
+            ),
+            "last_visited_at": (
+                self.last_visited_at.isoformat() if self.last_visited_at else None
+            ),
+        }
