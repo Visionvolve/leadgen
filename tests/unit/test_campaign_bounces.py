@@ -266,18 +266,12 @@ class TestCampaignBouncesTenantIsolation:
 class TestCampaignBouncesBadInputHardening:
     """Hotfix v25 — bounces endpoints must NOT 500 on malformed campaign_id."""
 
-    def test_bounces_bad_campaign_id_returns_400(
-        self, client, seed_user_with_role
-    ):
-        resp = client.get(
-            "/api/campaigns/not-a-uuid/bounces", headers=_auth(client)
-        )
+    def test_bounces_bad_campaign_id_returns_400(self, client, seed_user_with_role):
+        resp = client.get("/api/campaigns/not-a-uuid/bounces", headers=_auth(client))
         assert resp.status_code == 400
         assert resp.get_json() == {"error": "invalid_campaign_id"}
 
-    def test_bounces_csv_bad_campaign_id_returns_400(
-        self, client, seed_user_with_role
-    ):
+    def test_bounces_csv_bad_campaign_id_returns_400(self, client, seed_user_with_role):
         resp = client.get(
             "/api/campaigns/not-a-uuid/bounces.csv", headers=_auth(client)
         )
@@ -287,7 +281,5 @@ class TestCampaignBouncesBadInputHardening:
         self, client, seed_user_with_role
     ):
         unknown = "00000000-0000-0000-0000-000000000000"
-        resp = client.get(
-            f"/api/campaigns/{unknown}/bounces", headers=_auth(client)
-        )
+        resp = client.get(f"/api/campaigns/{unknown}/bounces", headers=_auth(client))
         assert resp.status_code == 404

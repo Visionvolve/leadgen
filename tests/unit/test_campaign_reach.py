@@ -453,9 +453,7 @@ class TestCampaignReachBadInputHardening:
     """Hotfix v25 — endpoints must NOT 500 on malformed campaign_id."""
 
     def test_reach_bad_campaign_id_returns_400(self, client, reach_campaign):
-        resp = client.get(
-            "/api/campaigns/not-a-uuid/reach", headers=_auth(client)
-        )
+        resp = client.get("/api/campaigns/not-a-uuid/reach", headers=_auth(client))
         assert resp.status_code == 400
         assert resp.get_json() == {"error": "invalid_campaign_id"}
 

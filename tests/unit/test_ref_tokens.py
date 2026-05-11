@@ -355,9 +355,7 @@ class TestRefTokenBadInputHardening:
         assert resp.get_json() == {"error": "invalid_token"}
 
     def test_visit_wellformed_unknown_token_returns_404(self, client):
-        resp = client.post(
-            "/api/ref-tokens/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/visit"
-        )
+        resp = client.post("/api/ref-tokens/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/visit")
         assert resp.status_code == 404
 
     def test_create_ref_token_bad_contact_id_returns_400(
