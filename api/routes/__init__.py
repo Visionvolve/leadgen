@@ -2,6 +2,7 @@ from .asset_routes import assets_bp
 from .auth_routes import auth_bp
 from .bulk_routes import bulk_bp
 from .tag_routes import tag_bp
+from .campaign_reach_routes import reach_bp
 from .campaign_routes import campaigns_bp
 from .campaign_step_routes import campaign_steps_bp
 from .company_routes import companies_bp
@@ -40,6 +41,7 @@ def register_blueprints(app):
     app.register_blueprint(messages_bp)
     app.register_blueprint(campaigns_bp)
     app.register_blueprint(campaign_steps_bp)
+    app.register_blueprint(reach_bp)
     app.register_blueprint(pipeline_bp)
     app.register_blueprint(enrich_bp)
     app.register_blueprint(enrichment_config_bp)
