@@ -289,8 +289,18 @@ def record_token_visit(token):
         tok.first_visited_at = now
     tok.last_visited_at = now
 
-    # Best-effort Activity row. Don't block the visit recording on any
-    # downstream insert failure.
+    # Commit the visit counter update FIRST so it lands even if the
+    # downstream Activity insert fails. The visit_count + timestamps on the
+    # RefToken row are the source of truth for visit tracking; the Activity
+    # row is a denormalized event-stream mirror for analytics.
+    db.session.commit()
+
+    # Best-effort Activity row in a separate transaction. Visits are
+    # append-only — they MUST NOT carry external_id because the
+    # idx_activities_tenant_external_id partial unique index (used to
+    # dedupe inbound webhook events like Resend/Gmail) would collide on
+    # the second visit with the same token and 500 the public endpoint.
+    # The token reference is preserved in the payload JSON for analytics.
     try:
         activity = Activity(
             tenant_id=tok.tenant_id,
@@ -300,7 +310,8 @@ def record_token_visit(token):
             activity_name="Catalog tracking link visited",
             activity_detail=f"variant={tok.variant}, visit_count={tok.visit_count}",
             source="ua_microsite_ref",
-            external_id=tok.token,
+            # external_id intentionally NOT set — visits are append-only
+            # and the unique index would collide on repeat visits.
             timestamp=now,
             occurred_at=now,
             payload={
@@ -310,8 +321,9 @@ def record_token_visit(token):
             },
         )
         db.session.add(activity)
+        db.session.commit()
     except Exception:  # pragma: no cover
         logger.exception("Failed to write Activity for ref-token visit")
+        db.session.rollback()
 
-    db.session.commit()
     return ("", 204)
