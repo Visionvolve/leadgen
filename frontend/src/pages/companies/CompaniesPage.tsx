@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
@@ -28,6 +29,7 @@ import {
   COMPANY_SIZE_DISPLAY,
   GEO_REGION_DISPLAY,
   REVENUE_RANGE_DISPLAY,
+  ORGANIZATION_TYPE_DISPLAY,
 } from '../../lib/display'
 
 /** Build MultiSelectFilter options from a display map + optional facet counts */
@@ -50,6 +52,7 @@ export function CompaniesPage() {
   const { namespace } = useParams<{ namespace: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
+  const qc = useQueryClient()
 
   // Advanced filters (persisted to localStorage)
   const {
@@ -147,10 +150,22 @@ export function CompaniesPage() {
     isLoading,
   } = useCompanies(filters)
 
-  const allCompanies = useMemo(
-    () => data?.pages.flatMap((p) => p.companies) ?? [],
-    [data],
-  )
+  // Dedup memo safety net: even with the backend `id ASC` tiebreaker in place,
+  // a brief overlap can still leak through if pages overlap during refetch.
+  // Drop any company whose id was already emitted by an earlier page. (BL-1116)
+  const allCompanies = useMemo(() => {
+    if (!data?.pages) return []
+    const seen = new Set<string>()
+    const result: CompanyListItem[] = []
+    for (const p of data.pages) {
+      for (const c of p.companies) {
+        if (!c.id || seen.has(c.id)) continue
+        seen.add(c.id)
+        result.push(c)
+      }
+    }
+    return result
+  }, [data])
   const total = data?.pages[0]?.total ?? 0
 
   const handleFilterChange = useCallback((key: string, value: string) => {
@@ -158,7 +173,10 @@ export function CompaniesPage() {
     // Clear selection when filters change
     setSelectedIds(new Set())
     setSelectionMode('explicit')
-  }, [setSimpleFilter])
+    // Invalidate the cached pages so the table refetches from page 1 instead of
+    // rendering stale data accumulated under the old filter set. (BL-1116)
+    qc.invalidateQueries({ queryKey: ['companies'] })
+  }, [setSimpleFilter, qc])
 
   const handleSort = useCallback((field: string, dir: 'asc' | 'desc') => {
     setSortField(field)
@@ -302,6 +320,17 @@ export function CompaniesPage() {
       exclude: getMulti('revenue_range').exclude,
       onSelectionChange: (v: string[]) => { setMultiFilter('revenue_range', v); handleDeselectAll() },
       onExcludeToggle: () => { toggleExclude('revenue_range'); handleDeselectAll() },
+    },
+    {
+      // BL-1108: filter by market-facing organization type (migration 068).
+      // No facet counts yet — facet endpoint backfill is out of scope for this phase.
+      key: 'organization_type',
+      label: 'Org Type',
+      options: buildMultiOptions(ORGANIZATION_TYPE_DISPLAY),
+      selected: getMulti('organization_type').values,
+      exclude: getMulti('organization_type').exclude,
+      onSelectionChange: (v: string[]) => { setMultiFilter('organization_type', v); handleDeselectAll() },
+      onExcludeToggle: () => { toggleExclude('organization_type'); handleDeselectAll() },
     },
   ], [facets, getMulti, setMultiFilter, toggleExclude, handleDeselectAll])
 

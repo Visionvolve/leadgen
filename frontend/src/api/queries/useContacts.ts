@@ -124,6 +124,8 @@ export interface ContactDetail {
   contact_source: string | null
   language: string | null
   address_style: string | null
+  salutation: string | null
+  salutation_overridden: boolean
   message_status: string | null
   ai_champion: string | null
   ai_champion_score: number | null
@@ -222,8 +224,15 @@ export function useContact(id: string | null) {
 export function useUpdateContact() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
-      apiFetch(`/contacts/${id}`, { method: 'PATCH', body: data }),
+    mutationFn: ({
+      id,
+      data,
+      params,
+    }: {
+      id: string
+      data: Record<string, unknown>
+      params?: Record<string, string>
+    }) => apiFetch(`/contacts/${id}`, { method: 'PATCH', body: data, params }),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['contact', id] })
       qc.invalidateQueries({ queryKey: ['contacts'] })

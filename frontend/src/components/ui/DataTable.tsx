@@ -1,8 +1,11 @@
-import { useRef, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, type ReactNode } from 'react'
 import { InlineEditCell } from './InlineEditCell'
 import type { ColumnDef } from '../../config/columns'
 
-const ROW_HEIGHT = 41
+// Fallback row height in pixels — used until the first row mounts and ResizeObserver
+// reports the real height. Keep this close to the actual rendered height to minimize
+// visual shift on first paint.
+const ROW_HEIGHT_FALLBACK = 41
 const BUFFER = 20
 
 export interface Column<T> {
@@ -56,8 +59,12 @@ export function DataTable<T extends { id?: string }>({
 }: DataTableProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
+  const measureRowRef = useRef<HTMLTableRowElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [containerHeight, setContainerHeight] = useState(0)
+  // Measured row height — falls back to ROW_HEIGHT_FALLBACK until the first row
+  // mounts and ResizeObserver reports a real measurement. See BL-1116.
+  const [rowHeight, setRowHeight] = useState(ROW_HEIGHT_FALLBACK)
   const lastClickedIndex = useRef<number | null>(null)
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('explicit')
 
@@ -74,6 +81,28 @@ export function DataTable<T extends { id?: string }>({
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // Measure the actual rendered row height. ResizeObserver tracks font/zoom changes.
+  // useLayoutEffect ensures we measure synchronously before paint to minimize jitter.
+  useLayoutEffect(() => {
+    const row = measureRowRef.current
+    if (!row) return
+    const rect = row.getBoundingClientRect()
+    if (rect.height > 0 && Math.abs(rect.height - rowHeight) > 0.5) {
+      setRowHeight(rect.height)
+    }
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = entry.contentRect.height
+        if (h > 0) {
+          setRowHeight((prev) => (Math.abs(prev - h) > 0.5 ? h : prev))
+        }
+      }
+    })
+    ro.observe(row)
+    return () => ro.disconnect()
+  }, [rowHeight, data.length])
 
   const handleScroll = useCallback(() => {
     if (containerRef.current) {
@@ -108,10 +137,10 @@ export function DataTable<T extends { id?: string }>({
     return () => io.disconnect()
   }, [onLoadMore, hasMore, isLoading])
 
-  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER)
-  const endIndex = Math.min(data.length, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + BUFFER)
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - BUFFER)
+  const endIndex = Math.min(data.length, Math.ceil((scrollTop + containerHeight) / rowHeight) + BUFFER)
   const visibleData = data.slice(startIndex, endIndex)
-  const offsetY = startIndex * ROW_HEIGHT
+  const offsetY = startIndex * rowHeight
 
   const handleSortClick = (col: Column<T>) => {
     if (!col.sortKey || !onSort) return
@@ -269,11 +298,16 @@ export function DataTable<T extends { id?: string }>({
           {visibleData.map((item, i) => {
             const globalIndex = startIndex + i
             const isSelected = selectable && item.id ? selected.has(item.id) : false
+            // Wire the measurement ref to the first visible row so we can probe its
+            // real rendered height (BL-1116 fix).
+            const isMeasureRow = i === 0
             return (
               <tr
                 key={item.id ?? `vrow-${globalIndex}`}
+                ref={isMeasureRow ? measureRowRef : undefined}
+                data-row-id={item.id}
                 className={`border-b border-border/30 ${isSelected ? 'bg-accent/5' : ''} ${!onCellEdit && onRowClick ? 'cursor-pointer hover:bg-surface-alt/50' : selectable ? 'hover:bg-surface-alt/30' : ''}`}
-                style={{ height: ROW_HEIGHT }}
+                style={{ height: rowHeight }}
               >
                 {selectable && (
                   <td className="w-10 px-2 py-0 text-center">
@@ -296,7 +330,14 @@ export function DataTable<T extends { id?: string }>({
                   const isEditable = colDef.editable && onCellEdit
                   const cellKey = item.id ? `${item.id}:${editField}` : undefined
                   const cellStatus = cellKey && cellStates ? cellStates.get(cellKey) as 'saving' | 'saved' | 'error' | undefined : undefined
-                  const rawValue = (item as Record<string, unknown>)[col.key]
+                  // Prefer editField for raw-value lookup so a column with a
+                  // synthetic key (e.g. 'name_edit') can still read the
+                  // underlying field ('name') for both display and edit.
+                  const rawValue =
+                    (item as Record<string, unknown>)[col.key] ??
+                    (colDef.editField
+                      ? (item as Record<string, unknown>)[colDef.editField]
+                      : undefined)
 
                   if (isEditable && colDef.editType && item.id) {
                     return (
@@ -348,7 +389,7 @@ export function DataTable<T extends { id?: string }>({
             )
           })}
           {endIndex < data.length && (
-            <tr><td colSpan={columns.length + (selectable ? 1 : 0)} style={{ height: (data.length - endIndex) * ROW_HEIGHT, padding: 0, border: 0 }} /></tr>
+            <tr><td colSpan={columns.length + (selectable ? 1 : 0)} style={{ height: (data.length - endIndex) * rowHeight, padding: 0, border: 0 }} /></tr>
           )}
         </tbody>
       </table>

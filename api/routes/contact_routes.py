@@ -2,7 +2,7 @@ import json
 import math
 import re
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import (
@@ -17,7 +17,13 @@ from ..display import (
     display_tier,
 )
 from ..models import db
+from ..services.contact_helpers import (
+    derive_salutation,
+    is_valid_email,
+    write_field_change,
+)
 from ..services.phone_normalize import normalize_phone
+from ..utils.safe_lookup import is_valid_uuid
 
 contacts_bp = Blueprint("contacts", __name__)
 
@@ -179,7 +185,9 @@ def create_contact():
 
     # Normalize phone number before saving
     if "phone_number" in params:
-        params["phone_number"] = normalize_phone(params["phone_number"]) or params["phone_number"]
+        params["phone_number"] = (
+            normalize_phone(params["phone_number"]) or params["phone_number"]
+        )
 
     # Validate company_id belongs to tenant
     if "company_id" in params:
@@ -422,7 +430,10 @@ def list_contacts():
     offset = (page - 1) * page_size
 
     sort_col = _SORT_COL_MAP.get(sort, f"ct.{sort}")
-    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST"
+    # Append `ct.id ASC` as a unique tiebreaker so pagination stays stable when
+    # the primary sort column has tied/NULL values (otherwise duplicate rows can
+    # appear across page boundaries). See BL-1116.
+    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST, ct.id ASC"
 
     rows = db.session.execute(
         db.text(f"""
@@ -575,6 +586,9 @@ def get_contact(contact_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
+
     row = db.session.execute(
         db.text("""
             SELECT
@@ -600,7 +614,8 @@ def get_contact(contact_id):
                 co.id AS company_id, co.name AS company_name,
                 co.domain AS company_domain, co.status AS company_status,
                 co.tier AS company_tier,
-                o.name AS owner_name, b.name AS tag_name
+                o.name AS owner_name, b.name AS tag_name,
+                ct.address_style, ct.salutation, ct.salutation_overridden
             FROM contacts ct
             LEFT JOIN companies co ON ct.company_id = co.id
             LEFT JOIN owners o ON ct.owner_id = o.id
@@ -670,6 +685,9 @@ def get_contact(contact_id):
         else None,
         "owner_name": row[40],
         "tag_name": row[41],
+        "address_style": row[42],
+        "salutation": row[43],
+        "salutation_overridden": bool(row[44]) if row[44] is not None else False,
     }
 
     # Stage completions (DAG tracking)
@@ -771,7 +789,10 @@ def get_contact(contact_id):
         for r in msg_rows
     ]
 
-    # Email activity (send logs joined through messages → campaigns)
+    # Email activity (send logs joined through messages → campaigns).
+    # BL-1029: contact history is the "all attempts" audit view — it keeps
+    # superseded rows so users can see the full retry trail. The
+    # `superseded_at` column lets the UI grey-out / flag retried attempts.
     email_rows = db.session.execute(
         db.text("""
             SELECT c.name AS campaign_name,
@@ -783,7 +804,8 @@ def get_contact(contact_id):
                    esl.open_count,
                    esl.clicked_at,
                    esl.click_count,
-                   esl.bounced_at
+                   esl.bounced_at,
+                   esl.superseded_at
             FROM email_send_log esl
             JOIN messages m ON m.id = esl.message_id
             LEFT JOIN campaign_contacts cc ON cc.id = m.campaign_contact_id
@@ -805,6 +827,7 @@ def get_contact(contact_id):
             "clicked_at": _iso(r[7]),
             "click_count": r[8] or 0,
             "bounced_at": _iso(r[9]),
+            "superseded_at": _iso(r[10]),
         }
         for r in email_rows
     ]
@@ -819,11 +842,12 @@ def delete_contact(contact_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
+
     # Verify contact belongs to tenant
     row = db.session.execute(
-        db.text(
-            "SELECT id FROM contacts WHERE id = :id AND tenant_id = :tid"
-        ),
+        db.text("SELECT id FROM contacts WHERE id = :id AND tenant_id = :tid"),
         {"id": contact_id, "tid": str(tenant_id)},
     ).fetchone()
     if not row:
@@ -847,9 +871,7 @@ def delete_contact(contact_id):
 
     # Delete the contact
     db.session.execute(
-        db.text(
-            "DELETE FROM contacts WHERE id = :id AND tenant_id = :tid"
-        ),
+        db.text("DELETE FROM contacts WHERE id = :id AND tenant_id = :tid"),
         params,
     )
     db.session.commit()
@@ -863,6 +885,9 @@ def update_contact(contact_id):
     tenant_id = resolve_tenant()
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
+
+    if not is_valid_uuid(contact_id):
+        return jsonify({"error": "invalid_contact_id"}), 400
 
     body = request.get_json(silent=True) or {}
     allowed = {
@@ -880,12 +905,24 @@ def update_contact(contact_id):
         "job_title",
         "phone_number",
         "address_style",
+        "salutation",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
 
     # Normalize phone number before saving
     if "phone_number" in fields and fields["phone_number"] is not None:
         fields["phone_number"] = normalize_phone(fields["phone_number"])
+
+    # Validate email format (cheap regex; reject obvious garbage before commit)
+    if "email_address" in fields:
+        if not is_valid_email(fields["email_address"]):
+            return jsonify(
+                {
+                    "error": "Invalid email format",
+                    "field": "email_address",
+                }
+            ), 400
+
     custom_fields_update = body.get("custom_fields")
 
     if not fields and not custom_fields_update:
@@ -971,14 +1008,115 @@ def update_contact(contact_id):
                 }
             ), 400
 
-    row = db.session.execute(
+    # Pull current row including the salutation_overridden flag so we can
+    # decide whether to re-derive on a first_name edit, and so we can diff
+    # every editable field for the audit log.
+    existing = db.session.execute(
         db.text(
-            "SELECT id, custom_fields FROM contacts WHERE id = :id AND tenant_id = :t"
+            """
+            SELECT
+                id,
+                custom_fields,
+                first_name,
+                last_name,
+                email_address,
+                job_title,
+                phone_number,
+                notes,
+                icp_fit,
+                message_status,
+                relationship_status,
+                seniority_level,
+                department,
+                contact_source,
+                language,
+                address_style,
+                salutation,
+                salutation_overridden
+            FROM contacts
+            WHERE id = :id AND tenant_id = :t
+            """
         ),
         {"id": contact_id, "t": tenant_id},
     ).fetchone()
-    if not row:
+    if not existing:
         return jsonify({"error": "Contact not found"}), 404
+
+    existing_map = {
+        "first_name": existing[2],
+        "last_name": existing[3],
+        "email_address": existing[4],
+        "job_title": existing[5],
+        "phone_number": existing[6],
+        "notes": existing[7],
+        "icp_fit": existing[8],
+        "message_status": existing[9],
+        "relationship_status": existing[10],
+        "seniority_level": existing[11],
+        "department": existing[12],
+        "contact_source": existing[13],
+        "language": existing[14],
+        "address_style": existing[15],
+        "salutation": existing[16],
+    }
+    salutation_overridden = bool(existing[17])
+
+    # Duplicate-email guard: if email is changing to one already used by a
+    # different contact in the same tenant, return 409 with a warning the UI
+    # can confirm-override via ?confirm_duplicate=true.
+    if "email_address" in fields and fields["email_address"]:
+        new_email = (fields["email_address"] or "").strip()
+        if new_email and new_email != (existing_map.get("email_address") or ""):
+            confirm = request.args.get("confirm_duplicate", "").strip().lower() in {
+                "true",
+                "1",
+                "yes",
+            }
+            dupe = db.session.execute(
+                db.text(
+                    """
+                    SELECT id, first_name, last_name
+                    FROM contacts
+                    WHERE tenant_id = :t
+                      AND id != :id
+                      AND LOWER(email_address) = LOWER(:email)
+                    LIMIT 1
+                    """
+                ),
+                {"t": tenant_id, "id": contact_id, "email": new_email},
+            ).fetchone()
+            if dupe and not confirm:
+                full_name = f"{dupe[1] or ''} {dupe[2] or ''}".strip() or "(no name)"
+                return jsonify(
+                    {
+                        "warning": "duplicate",
+                        "code": "duplicate_email",
+                        "error": (
+                            f"Email already in use by {full_name}. "
+                            "Confirm to save anyway."
+                        ),
+                        "details": {
+                            "existing_id": dupe[0],
+                            "existing_name": full_name,
+                        },
+                    }
+                ), 409
+
+    # Salutation auto-derive rules:
+    #   * If client explicitly sets `salutation`, mark as overridden.
+    #   * If client edits `first_name` AND salutation has NOT been overridden,
+    #     recompute the auto-vocative form so the cached field stays fresh.
+    if "salutation" in fields:
+        # Treat empty string as "clear and let auto-derive run again": reset flag.
+        if fields["salutation"] in (None, ""):
+            salutation_overridden = False
+        else:
+            salutation_overridden = True
+        fields["salutation_overridden"] = salutation_overridden
+    elif "first_name" in fields and not salutation_overridden:
+        derived = derive_salutation(fields["first_name"])
+        if derived is not None:
+            fields["salutation"] = derived
 
     set_parts = []
     params = {"id": contact_id}
@@ -987,7 +1125,7 @@ def update_contact(contact_id):
         params[k] = v
 
     if custom_fields_update and isinstance(custom_fields_update, dict):
-        existing_cf = _parse_jsonb(row[1])
+        existing_cf = _parse_jsonb(existing[1])
         existing_cf.update(custom_fields_update)
         set_parts.append("custom_fields = :custom_fields")
         params["custom_fields"] = json.dumps(existing_cf)
@@ -996,6 +1134,27 @@ def update_contact(contact_id):
         db.text(f"UPDATE contacts SET {', '.join(set_parts)} WHERE id = :id"),
         params,
     )
+
+    # Write audit rows for every changed editable field. `salutation_overridden`
+    # is meta -- we don't audit it; the salutation change itself carries
+    # the provenance.
+    changed_by = getattr(getattr(g, "current_user", None), "id", None)
+    for field_name, new_value in fields.items():
+        if field_name == "salutation_overridden":
+            continue
+        old_value = existing_map.get(field_name)
+        if old_value == new_value:
+            continue
+        write_field_change(
+            tenant_id=tenant_id,
+            entity_type="contact",
+            entity_id=contact_id,
+            field_name=field_name,
+            old_value=old_value,
+            new_value=new_value,
+            changed_by=changed_by,
+        )
+
     db.session.commit()
 
     return jsonify({"ok": True})
@@ -1386,7 +1545,7 @@ def search_contacts():
                 co.industry, co.tier, co.company_size, co.geo_region
             FROM contacts ct {joins}
             WHERE {main_where}
-            ORDER BY {order_col} {sort_dir} NULLS LAST
+            ORDER BY {order_col} {sort_dir} NULLS LAST, ct.id ASC
             LIMIT :limit OFFSET :offset
         """
         ),

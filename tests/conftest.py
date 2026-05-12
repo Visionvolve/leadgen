@@ -1,4 +1,5 @@
 """Shared test fixtures for the leadgen pipeline test suite."""
+
 import json
 import os
 import time
@@ -6,7 +7,7 @@ import uuid
 
 import jwt as pyjwt
 import pytest
-from sqlalchemy import String, Text, event
+from sqlalchemy import String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.schema import ColumnDefault
 
@@ -30,12 +31,16 @@ def _uuid_default():
 def _patch_pg_types_for_sqlite(app):
     """Replace PostgreSQL-specific column types with SQLite-compatible ones."""
     from sqlalchemy import text as sa_text
+
     with app.app_context():
         for table in _db.metadata.tables.values():
             for column in table.columns:
                 if isinstance(column.type, UUID):
                     column.type = String(36)
-                    if column.server_default is not None and "uuid_generate" in str(column.server_default.arg):
+                    if column.server_default is not None and (
+                        "uuid_generate" in str(column.server_default.arg)
+                        or "gen_random_uuid" in str(column.server_default.arg)
+                    ):
                         column.server_default = None
                         column.default = ColumnDefault(_uuid_default)
                 elif isinstance(column.type, ARRAY):
@@ -50,12 +55,15 @@ def _patch_pg_types_for_sqlite(app):
                 if column.server_default is not None:
                     default_text = str(column.server_default.arg)
                     if "now()" in default_text:
-                        column.server_default = _db.DefaultClause(sa_text("CURRENT_TIMESTAMP"))
+                        column.server_default = _db.DefaultClause(
+                            sa_text("CURRENT_TIMESTAMP")
+                        )
 
     # Register SQLite adapter for dicts (JSONB → TEXT)
     import sqlite3
+
     sqlite3.register_adapter(dict, lambda d: json.dumps(d))
-    sqlite3.register_adapter(list, lambda l: json.dumps(l))
+    sqlite3.register_adapter(list, lambda value: json.dumps(value))
 
 
 @pytest.fixture(scope="session")
@@ -98,6 +106,7 @@ def clean_tool_registry():
 @pytest.fixture(autouse=True)
 def _patch_decode_token_for_tests(app, monkeypatch):
     """Patch decode_token to accept HS256 test tokens (no JWKS needed)."""
+
     def _test_decode_token(token):
         return pyjwt.decode(
             token,
@@ -105,6 +114,7 @@ def _patch_decode_token_for_tests(app, monkeypatch):
             algorithms=["HS256"],
             audience=app.config.get("IAM_AUDIENCE", "leadgen"),
         )
+
     monkeypatch.setattr("api.auth.decode_token", _test_decode_token)
 
 
@@ -112,6 +122,7 @@ def _patch_decode_token_for_tests(app, monkeypatch):
 def seed_tenant(db):
     """Create a test tenant."""
     from api.models import Tenant
+
     tenant = Tenant(name="Test Corp", slug="test-corp", is_active=True)
     db.session.add(tenant)
     db.session.commit()
@@ -122,6 +133,7 @@ def seed_tenant(db):
 def seed_super_admin(db):
     """Create a super admin user (IAM-only, no password)."""
     from api.models import User
+
     iam_id = str(uuid.uuid4())
     user = User(
         email="admin@test.com",
@@ -140,6 +152,7 @@ def seed_super_admin(db):
 def seed_user_with_role(db, seed_tenant, seed_super_admin):
     """Create a regular user with a tenant role (IAM-only, no password)."""
     from api.models import User, UserTenantRole
+
     iam_id = str(uuid.uuid4())
     user = User(
         email="user@test.com",
@@ -186,6 +199,7 @@ def auth_header(client, email="admin@test.com", password=None):
     compatibility with existing test call sites).
     """
     from api.models import User
+
     user = User.query.filter_by(email=email).first()
     if not user:
         raise ValueError(f"No user with email {email} found — seed a user first")
@@ -197,8 +211,16 @@ def auth_header(client, email="admin@test.com", password=None):
 def seed_companies_contacts(db, seed_tenant, seed_super_admin):
     """Seed owners, tags, companies (mixed statuses/tiers), and contacts for testing."""
     from api.models import (
-        Tag, Company, CompanyEnrichmentL2, CompanyTag, CompanyTagAssignment,
-        Contact, ContactEnrichment, ContactTagAssignment, Message, Owner, UserTenantRole,
+        Tag,
+        Company,
+        CompanyTag,
+        CompanyTagAssignment,
+        Contact,
+        ContactEnrichment,
+        ContactTagAssignment,
+        Message,
+        Owner,
+        UserTenantRole,
     )
 
     # Give super_admin editor role on tenant
@@ -225,18 +247,76 @@ def seed_companies_contacts(db, seed_tenant, seed_super_admin):
     # Companies
     companies = []
     company_data = [
-        ("Acme Corp", "acme.com", "new", None, owner1.id, tag1.id, "software_saas", "Germany", 8.5),
-        ("Beta Inc", "beta.io", "triage_passed", "tier_1_platinum", owner1.id, tag1.id, "it", "UK", 9.0),
-        ("Gamma LLC", "gamma.co", "triage_passed", "tier_2_gold", owner2.id, tag1.id, "healthcare", "US", 7.5),
-        ("Delta GmbH", "delta.de", "enriched_l2", "tier_1_platinum", owner1.id, tag2.id, "manufacturing", "Austria", 9.5),
-        ("Epsilon SA", "epsilon.fr", "triage_disqualified", "tier_5_copper", owner2.id, tag2.id, "retail", "France", 3.0),
+        (
+            "Acme Corp",
+            "acme.com",
+            "new",
+            None,
+            owner1.id,
+            tag1.id,
+            "software_saas",
+            "Germany",
+            8.5,
+        ),
+        (
+            "Beta Inc",
+            "beta.io",
+            "triage_passed",
+            "tier_1_platinum",
+            owner1.id,
+            tag1.id,
+            "it",
+            "UK",
+            9.0,
+        ),
+        (
+            "Gamma LLC",
+            "gamma.co",
+            "triage_passed",
+            "tier_2_gold",
+            owner2.id,
+            tag1.id,
+            "healthcare",
+            "US",
+            7.5,
+        ),
+        (
+            "Delta GmbH",
+            "delta.de",
+            "enriched_l2",
+            "tier_1_platinum",
+            owner1.id,
+            tag2.id,
+            "manufacturing",
+            "Austria",
+            9.5,
+        ),
+        (
+            "Epsilon SA",
+            "epsilon.fr",
+            "triage_disqualified",
+            "tier_5_copper",
+            owner2.id,
+            tag2.id,
+            "retail",
+            "France",
+            3.0,
+        ),
     ]
     for name, domain, status, tier, oid, bid, industry, country, score in company_data:
         c = Company(
-            tenant_id=seed_tenant.id, name=name, domain=domain,
-            status=status, tier=tier, owner_id=oid, tag_id=bid,
-            industry=industry, hq_country=country, triage_score=score,
-            summary=f"Summary for {name}", notes=f"Notes for {name}",
+            tenant_id=seed_tenant.id,
+            name=name,
+            domain=domain,
+            status=status,
+            tier=tier,
+            owner_id=oid,
+            tag_id=bid,
+            industry=industry,
+            hq_country=country,
+            triage_score=score,
+            summary=f"Summary for {name}",
+            notes=f"Notes for {name}",
         )
         db.session.add(c)
         companies.append(c)
@@ -245,13 +325,22 @@ def seed_companies_contacts(db, seed_tenant, seed_super_admin):
     # Populate company_tag_assignments junction table (mirrors tag_id FK)
     for c in companies:
         if c.tag_id:
-            db.session.add(CompanyTagAssignment(
-                tenant_id=seed_tenant.id, company_id=c.id, tag_id=c.tag_id,
-            ))
+            db.session.add(
+                CompanyTagAssignment(
+                    tenant_id=seed_tenant.id,
+                    company_id=c.id,
+                    tag_id=c.tag_id,
+                )
+            )
     db.session.flush()
 
     # L2 enrichment for Delta GmbH (module tables)
-    from api.models import CompanyEnrichmentProfile, CompanyEnrichmentMarket, CompanyEnrichmentOpportunity
+    from api.models import (
+        CompanyEnrichmentProfile,
+        CompanyEnrichmentMarket,
+        CompanyEnrichmentOpportunity,
+    )
+
     l2_profile = CompanyEnrichmentProfile(
         company_id=companies[3].id,
         company_intel="Leading manufacturer in DACH region",
@@ -269,30 +358,172 @@ def seed_companies_contacts(db, seed_tenant, seed_super_admin):
     # Tags for Beta Inc
     tags = [
         CompanyTag(company_id=companies[1].id, category="ai_use_case", value="chatbot"),
-        CompanyTag(company_id=companies[1].id, category="trigger_event", value="new_cto"),
+        CompanyTag(
+            company_id=companies[1].id, category="trigger_event", value="new_cto"
+        ),
     ]
     db.session.add_all(tags)
 
     # Contacts
     contacts = []
     contact_data = [
-        ("John", "Doe", "CEO", companies[0].id, owner1.id, tag1.id, 85, "strong_fit", "not_started", "john@acme.com", "https://www.linkedin.com/in/johndoe"),
-        ("Jane", "Smith", "CTO", companies[0].id, owner1.id, tag1.id, 90, "strong_fit", "approved", "jane@acme.com", "https://www.linkedin.com/in/janesmith"),
-        ("Bob", "Wilson", "VP Engineering", companies[1].id, owner1.id, tag1.id, 75, "moderate_fit", "not_started", "bob@beta.io", "https://www.linkedin.com/in/bobwilson"),
-        ("Carol", "Lee", "Director of AI", companies[1].id, owner1.id, tag1.id, 80, "strong_fit", "pending_review", "carol@beta.io", "https://www.linkedin.com/in/carollee"),
-        ("Dave", "Brown", "Manager", companies[2].id, owner2.id, tag1.id, 60, "weak_fit", "not_started", None, "https://www.linkedin.com/in/davebrown"),
-        ("Eve", "Green", "CFO", companies[3].id, owner1.id, tag2.id, 70, "moderate_fit", "approved", "eve@delta.de", "https://www.linkedin.com/in/evegreen"),
-        ("Frank", "Black", "CIO", companies[3].id, owner1.id, tag2.id, 88, "strong_fit", "sent", "frank@delta.de", None),
-        ("Grace", "White", "Sales Director", companies[4].id, owner2.id, tag2.id, 45, "weak_fit", "not_started", None, None),
-        ("Hank", "Grey", "Intern", companies[4].id, owner2.id, tag2.id, 20, "unknown", "not_started", None, None),
-        ("Ivy", "Blue", "Product Manager", companies[2].id, owner2.id, tag1.id, 65, "moderate_fit", "generating", "ivy@gamma.co", "https://www.linkedin.com/in/ivyblue"),
+        (
+            "John",
+            "Doe",
+            "CEO",
+            companies[0].id,
+            owner1.id,
+            tag1.id,
+            85,
+            "strong_fit",
+            "not_started",
+            "john@acme.com",
+            "https://www.linkedin.com/in/johndoe",
+        ),
+        (
+            "Jane",
+            "Smith",
+            "CTO",
+            companies[0].id,
+            owner1.id,
+            tag1.id,
+            90,
+            "strong_fit",
+            "approved",
+            "jane@acme.com",
+            "https://www.linkedin.com/in/janesmith",
+        ),
+        (
+            "Bob",
+            "Wilson",
+            "VP Engineering",
+            companies[1].id,
+            owner1.id,
+            tag1.id,
+            75,
+            "moderate_fit",
+            "not_started",
+            "bob@beta.io",
+            "https://www.linkedin.com/in/bobwilson",
+        ),
+        (
+            "Carol",
+            "Lee",
+            "Director of AI",
+            companies[1].id,
+            owner1.id,
+            tag1.id,
+            80,
+            "strong_fit",
+            "pending_review",
+            "carol@beta.io",
+            "https://www.linkedin.com/in/carollee",
+        ),
+        (
+            "Dave",
+            "Brown",
+            "Manager",
+            companies[2].id,
+            owner2.id,
+            tag1.id,
+            60,
+            "weak_fit",
+            "not_started",
+            None,
+            "https://www.linkedin.com/in/davebrown",
+        ),
+        (
+            "Eve",
+            "Green",
+            "CFO",
+            companies[3].id,
+            owner1.id,
+            tag2.id,
+            70,
+            "moderate_fit",
+            "approved",
+            "eve@delta.de",
+            "https://www.linkedin.com/in/evegreen",
+        ),
+        (
+            "Frank",
+            "Black",
+            "CIO",
+            companies[3].id,
+            owner1.id,
+            tag2.id,
+            88,
+            "strong_fit",
+            "sent",
+            "frank@delta.de",
+            None,
+        ),
+        (
+            "Grace",
+            "White",
+            "Sales Director",
+            companies[4].id,
+            owner2.id,
+            tag2.id,
+            45,
+            "weak_fit",
+            "not_started",
+            None,
+            None,
+        ),
+        (
+            "Hank",
+            "Grey",
+            "Intern",
+            companies[4].id,
+            owner2.id,
+            tag2.id,
+            20,
+            "unknown",
+            "not_started",
+            None,
+            None,
+        ),
+        (
+            "Ivy",
+            "Blue",
+            "Product Manager",
+            companies[2].id,
+            owner2.id,
+            tag1.id,
+            65,
+            "moderate_fit",
+            "generating",
+            "ivy@gamma.co",
+            "https://www.linkedin.com/in/ivyblue",
+        ),
     ]
-    for first, last, title, coid, oid, bid, score, icp, mstatus, email, linkedin in contact_data:
+    for (
+        first,
+        last,
+        title,
+        coid,
+        oid,
+        bid,
+        score,
+        icp,
+        mstatus,
+        email,
+        linkedin,
+    ) in contact_data:
         ct = Contact(
-            tenant_id=seed_tenant.id, first_name=first, last_name=last, job_title=title,
-            company_id=coid, owner_id=oid, tag_id=bid,
-            contact_score=score, icp_fit=icp, message_status=mstatus,
-            email_address=email, linkedin_url=linkedin,
+            tenant_id=seed_tenant.id,
+            first_name=first,
+            last_name=last,
+            job_title=title,
+            company_id=coid,
+            owner_id=oid,
+            tag_id=bid,
+            contact_score=score,
+            icp_fit=icp,
+            message_status=mstatus,
+            email_address=email,
+            linkedin_url=linkedin,
             seniority_level="c_level" if "C" in title else "director",
             department="executive" if "C" in title else "engineering",
         )
@@ -303,9 +534,13 @@ def seed_companies_contacts(db, seed_tenant, seed_super_admin):
     # Populate contact_tag_assignments junction table (mirrors tag_id FK)
     for ct in contacts:
         if ct.tag_id:
-            db.session.add(ContactTagAssignment(
-                tenant_id=seed_tenant.id, contact_id=ct.id, tag_id=ct.tag_id,
-            ))
+            db.session.add(
+                ContactTagAssignment(
+                    tenant_id=seed_tenant.id,
+                    contact_id=ct.id,
+                    tag_id=ct.tag_id,
+                )
+            )
     db.session.flush()
 
     # Contact enrichment for John Doe
@@ -319,10 +554,15 @@ def seed_companies_contacts(db, seed_tenant, seed_super_admin):
 
     # Messages for Jane Smith
     m = Message(
-        tenant_id=seed_tenant.id, contact_id=contacts[1].id,
-        owner_id=owner1.id, channel="linkedin_connect",
-        sequence_step=1, variant="a", subject="Connect",
-        body="Hi Jane, let's connect!", status="draft",
+        tenant_id=seed_tenant.id,
+        contact_id=contacts[1].id,
+        owner_id=owner1.id,
+        channel="linkedin_connect",
+        sequence_step=1,
+        variant="a",
+        subject="Connect",
+        body="Hi Jane, let's connect!",
+        status="draft",
         tag_id=tag1.id,
     )
     db.session.add(m)
