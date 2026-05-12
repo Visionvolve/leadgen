@@ -704,8 +704,8 @@ function ReachSection({ campaignId }: { campaignId: string }) {
         </span>
       </div>
 
-      {/* Big-number cards (6) — funnel-ordered left to right. */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+      {/* Big-number cards (7) — funnel-ordered left to right. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
         <ReachStatCard
           label="Targeted"
           value={t.targeted}
@@ -731,9 +731,14 @@ function ReachSection({ campaignId }: { campaignId: string }) {
           rate={formatRate(r.click_rate)}
         />
         <ReachStatCard
-          label="Bounced / Unsub"
-          value={t.bounced + t.unsubscribed}
-          rate={`${formatRate(r.bounce_rate)} / ${formatRate(r.unsubscribe_rate)}`}
+          label="Bounced"
+          value={t.bounced}
+          rate={formatRate(r.bounce_rate)}
+        />
+        <ReachStatCard
+          label="Unsubscribed"
+          value={t.unsubscribed}
+          rate={formatRate(r.unsubscribe_rate)}
         />
       </div>
 
