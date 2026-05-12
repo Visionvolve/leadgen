@@ -224,13 +224,144 @@ class TestPublicVisit:
         match = next(t for t in tokens if t["token"] == token)
         assert match["visit_count"] == 3
 
-        # An Activity row was written.
-        activities = Activity.query.filter_by(external_id=token).all()
+        # An Activity row was written per visit. external_id is intentionally
+        # NOT set on visit activities (the partial unique index on
+        # tenant_id+external_id would collide on repeat visits and 500 the
+        # public endpoint — see hotfix v25-visit-count). The token is
+        # preserved in the payload JSON instead.
+        activities = Activity.query.filter_by(
+            contact_id=contact_id, event_type="catalog_ref_visited"
+        ).all()
         assert len(activities) == 3
         for a in activities:
             assert a.event_type == "catalog_ref_visited"
             assert a.source == "ua_microsite_ref"
             assert a.contact_id == contact_id
+            assert a.external_id is None
+            # SQLite stores JSONB as a JSON string via the conftest adapter;
+            # PG returns dict. Handle both.
+            payload = a.payload
+            if isinstance(payload, str):
+                import json as _json
+
+                payload = _json.loads(payload)
+            assert payload["token"] == token
+
+    def test_visit_endpoint_handles_duplicate_external_id(
+        self, client, seed_companies_contacts
+    ):
+        """Regression for v25 prod incident: second visit to same token 500'd.
+
+        Root cause: the visit handler inserted an Activity row with
+        external_id=<token>, but activities has a partial unique index on
+        (tenant_id, external_id) used to dedupe inbound webhook events
+        (Resend opens, Gmail replies). The second visit with the same
+        token collided on that index and crashed the public endpoint.
+
+        Fix: visits no longer set external_id (it's optional and not used
+        for visit-tracking semantics). visit_count + timestamps on the
+        RefToken row remain the source of truth.
+
+        This test simulates the failure mode by directly inserting a
+        prior Activity with external_id=<token>, then making a fresh visit
+        and asserting it succeeds.
+        """
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        contact_id = seed_companies_contacts["contacts"][0].id
+        tenant_id = seed_companies_contacts["tenant"].id
+
+        create = client.post(
+            f"/api/contacts/{contact_id}/ref-token",
+            json={"variant": "with_prices"},
+            headers=headers,
+        )
+        token = create.get_json()["token"]
+
+        # Pre-seed an Activity row with this token as external_id, mimicking
+        # what the old buggy code would have written on the first visit.
+        # (We cannot rely on SQLite to enforce the partial unique index that
+        # PostgreSQL does, so we test the *contract*: visit activities must
+        # NOT use the token as external_id, regardless of what already exists.)
+        existing = Activity(
+            tenant_id=tenant_id,
+            contact_id=contact_id,
+            event_type="catalog_ref_visited",
+            activity_type="event",
+            activity_name="Catalog tracking link visited",
+            source="ua_microsite_ref",
+            external_id=token,  # this is what the OLD code did
+            timestamp=datetime.now(timezone.utc),
+            occurred_at=datetime.now(timezone.utc),
+            payload={"token": token, "variant": "with_prices", "visit_count": 0},
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        # Now hit the visit endpoint twice — both must return 204 (NOT 500).
+        r1 = client.post(f"/api/ref-tokens/{token}/visit")
+        assert r1.status_code == 204, (
+            f"first visit should succeed, got {r1.status_code}: {r1.data!r}"
+        )
+        r2 = client.post(f"/api/ref-tokens/{token}/visit")
+        assert r2.status_code == 204, (
+            f"second visit should succeed, got {r2.status_code}: {r2.data!r}"
+        )
+
+        # visit_count incremented twice (independent of Activity insert).
+        tok = db.session.get(RefToken, token)
+        assert tok.visit_count == 2, (
+            f"visit_count should be 2 after two POSTs, got {tok.visit_count}"
+        )
+
+        # Both new visit activities have external_id=None (fix contract).
+        new_activities = Activity.query.filter_by(
+            contact_id=contact_id,
+            event_type="catalog_ref_visited",
+            external_id=None,
+        ).all()
+        assert len(new_activities) == 2, (
+            f"expected 2 new visit activities with external_id=None, "
+            f"got {len(new_activities)}"
+        )
+
+    def test_visit_count_persists_even_if_activity_insert_fails(
+        self, client, seed_companies_contacts, monkeypatch
+    ):
+        """visit_count must update even when the Activity insert fails.
+
+        The RefToken row is the source of truth for visit tracking. The
+        Activity row is a denormalized event-stream mirror. The fix
+        commits the counter update FIRST in its own transaction so a
+        downstream Activity failure cannot lose the count.
+        """
+        headers = auth_header(client)
+        headers["X-Namespace"] = "test-corp"
+        contact_id = seed_companies_contacts["contacts"][0].id
+
+        create = client.post(
+            f"/api/contacts/{contact_id}/ref-token",
+            json={"variant": "with_prices"},
+            headers=headers,
+        )
+        token = create.get_json()["token"]
+
+        # Make Activity instantiation raise. The endpoint must still return
+        # 204 and persist visit_count.
+        import api.routes.ref_token_routes as ref_routes
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated activity insert failure")
+
+        monkeypatch.setattr(ref_routes, "Activity", boom)
+
+        r = client.post(f"/api/ref-tokens/{token}/visit")
+        assert r.status_code == 204
+
+        tok = db.session.get(RefToken, token)
+        assert tok.visit_count == 1
+        assert tok.first_visited_at is not None
+        assert tok.last_visited_at is not None
 
     def test_visit_on_expired_token_404(self, client, seed_companies_contacts):
         contact = seed_companies_contacts["contacts"][0]
