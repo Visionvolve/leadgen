@@ -72,6 +72,7 @@ const PILLARS: PillarDef[] = [
     ),
     pages: [
       { id: 'campaigns', label: 'Campaigns', path: 'campaigns', minRole: 'viewer' },
+      { id: 'smart-lists', label: 'Smart Lists', path: 'smart-lists', minRole: 'viewer' },
     ],
   },
   {
@@ -216,6 +217,13 @@ export function AppNav() {
                     onClick={() => setUserMenuOpen(false)}
                   >
                     Preferences
+                  </Link>
+                  <Link
+                    to={makePath('settings/gmail')}
+                    className="block px-4 py-2 text-[0.82rem] text-text-muted no-underline hover:bg-surface-alt hover:text-text transition-colors"
+                    onClick={() => setUserMenuOpen(false)}
+                  >
+                    Gmail Integration
                   </Link>
                   <button
                     onClick={logout}

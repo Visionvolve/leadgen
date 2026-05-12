@@ -8,6 +8,7 @@ import {
   STATUS_DISPLAY, STATUS_REVERSE,
   BUYING_STAGE_DISPLAY, BUYING_STAGE_REVERSE,
   ENGAGEMENT_STATUS_DISPLAY, ENGAGEMENT_STATUS_REVERSE,
+  ORGANIZATION_TYPE_DISPLAY, ORGANIZATION_TYPE_REVERSE,
 } from '../lib/display'
 
 /** Enrichment stage dot/icon colors */
@@ -45,6 +46,17 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
         </a>
       )
     },
+  },
+  {
+    key: 'name_edit',
+    label: 'Name (editable)',
+    sortKey: 'name',
+    minWidth: '140px',
+    defaultVisible: false,
+    editable: true,
+    editType: 'text',
+    editField: 'name',
+    render: (c) => c.name || '-',
   },
   {
     key: 'domain',
@@ -204,6 +216,21 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     label: 'Business Model',
     minWidth: '100px',
     defaultVisible: false,
+  },
+  {
+    // BL-1108: market-facing categorization, operator-edited.
+    key: 'organization_type',
+    label: 'Org Type',
+    minWidth: '140px',
+    defaultVisible: false,
+    editable: true,
+    editType: 'select',
+    editOptions: ORGANIZATION_TYPE_DISPLAY,
+    editReverse: ORGANIZATION_TYPE_REVERSE,
+    render: (c) => {
+      const v = (c as unknown as { organization_type?: string | null }).organization_type
+      return v ? (ORGANIZATION_TYPE_DISPLAY[v] ?? v) : '-'
+    },
   },
   {
     key: 'ownership_type',

@@ -1,4 +1,13 @@
-import { useCampaignAnalytics, type CampaignAnalyticsData } from '../../api/queries/useCampaigns'
+import { useState } from 'react'
+import {
+  useCampaignAnalytics,
+  useCampaignBounces,
+  useCampaignReach,
+  type CampaignAnalyticsData,
+  type CampaignReachData,
+} from '../../api/queries/useCampaigns'
+import { apiDownload } from '../../api/client'
+import { useToast } from '../ui/Toast'
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -472,6 +481,402 @@ function AnalyticsView({ data }: { data: CampaignAnalyticsData }) {
   )
 }
 
+// ── Bounces (BL-1102) ─────────────────────────────────────
+
+// ── Reach Section (BL-1114) ──────────────────────────────
+//
+// Above the existing Analytics view we surface a dedicated "Reach"
+// block that answers the LCC client's reporting question: for this
+// campaign, how many contacts did we reach, and at what rates? The
+// data comes from /api/campaigns/<id>/reach (server-side aggregation
+// over EmailSendLog) so the section reflects ground truth even if a
+// reconciler has just landed retroactive engagement timestamps.
+
+function formatRate(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`
+}
+
+function ReachStatCard({
+  label,
+  value,
+  rate,
+}: {
+  label: string
+  value: number
+  rate?: string
+}) {
+  return (
+    <div className="bg-surface-alt rounded-lg px-4 py-3 border border-border">
+      <p className="text-2xl font-semibold text-text tabular-nums">{value}</p>
+      <p className="text-xs text-text-muted mt-0.5">{label}</p>
+      {rate !== undefined && (
+        <p className="text-[11px] text-text-dim mt-0.5 tabular-nums">{rate}</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Mini SVG line chart for the 30-day timeline. Pure CSS/SVG so we don't
+ * pull Recharts into this file — keeps the analytics tab bundle small.
+ * The OutreachTab already loads Recharts via TimeSeriesBlock; the reach
+ * timeline is a different aggregation (per-send-day grouping) and the
+ * chart only needs three series so an inline implementation is fine.
+ */
+function ReachTimelineChart({ rows }: { rows: CampaignReachData['timeline'] }) {
+  if (rows.length === 0) {
+    return (
+      <p className="text-[11px] text-text-dim italic">
+        No sends recorded yet — the timeline will populate once the
+        first send leaves the queue.
+      </p>
+    )
+  }
+
+  // Pad to the last 30 days so a sparse series still renders a clean
+  // chart. We only render days that have at least one event.
+  const max = Math.max(
+    1,
+    ...rows.map((r) => Math.max(r.sent, r.opened, r.clicked)),
+  )
+
+  const W = 360
+  const H = 80
+  const PAD = 4
+  const usableW = W - PAD * 2
+  const usableH = H - PAD * 2
+
+  const xFor = (idx: number) =>
+    rows.length <= 1 ? W / 2 : PAD + (idx / (rows.length - 1)) * usableW
+  const yFor = (v: number) => PAD + (1 - v / max) * usableH
+
+  const buildPath = (key: 'sent' | 'opened' | 'clicked') =>
+    rows
+      .map(
+        (r, idx) => `${idx === 0 ? 'M' : 'L'}${xFor(idx)},${yFor(r[key])}`,
+      )
+      .join(' ')
+
+  return (
+    <div className="bg-surface-alt rounded-lg border border-border p-3">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-20"
+        role="img"
+        aria-label="Reach timeline (last 30 days): sent, opened, and clicked counts per UTC day"
+      >
+        <path
+          d={buildPath('sent')}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          className="text-accent-cyan"
+        />
+        <path
+          d={buildPath('opened')}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeDasharray="3 2"
+          className="text-success"
+        />
+        <path
+          d={buildPath('clicked')}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeDasharray="1 2"
+          className="text-warning"
+        />
+      </svg>
+      <div className="flex gap-4 text-[10px] text-text-dim mt-2">
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-0.5 bg-accent-cyan" /> Sent
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-0.5 bg-success" /> Opened
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-0.5 bg-warning" /> Clicked
+        </span>
+        <span className="ml-auto tabular-nums">
+          {rows[0].date} → {rows[rows.length - 1].date}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function ReachLanguageTable({ rows }: { rows: CampaignReachData['by_language'] }) {
+  if (rows.length === 0) return null
+  const hasFallback = rows.some((r) => r.fallback)
+  return (
+    <div>
+      <h4 className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-2">
+        Per-language breakdown
+      </h4>
+      <div className="bg-surface-alt rounded-lg border border-border overflow-hidden">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">
+                Language
+              </th>
+              <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider tabular-nums">
+                Sent
+              </th>
+              <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider tabular-nums">
+                Delivered
+              </th>
+              <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider tabular-nums">
+                Opened
+              </th>
+              <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider tabular-nums">
+                Clicked
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={`${r.language}-${r.fallback}`}
+                className="border-b border-border last:border-0"
+              >
+                <td className="px-3 py-2 text-text">
+                  <span className="font-medium uppercase">{r.language}</span>
+                  {r.fallback && (
+                    <span
+                      className="ml-2 inline-flex items-center px-1.5 py-0.5 text-[10px] rounded bg-warning/15 text-warning border border-warning/30"
+                      title="Recipient's requested language was not registered — template registry rendered the default (cs) instead."
+                    >
+                      fallback
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-text tabular-nums">{r.sent}</td>
+                <td className="px-3 py-2 text-text tabular-nums">{r.delivered}</td>
+                <td className="px-3 py-2 text-text tabular-nums">{r.opened}</td>
+                <td className="px-3 py-2 text-text tabular-nums">{r.clicked}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {hasFallback && (
+          <p className="text-[11px] text-text-dim px-3 py-2 border-t border-border">
+            Rows tagged <span className="font-medium">fallback</span> were
+            sent in the default language because the recipient's requested
+            variant wasn't registered (BL-1110).
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ReachSection({ campaignId }: { campaignId: string }) {
+  const { data, isLoading, error } = useCampaignReach(campaignId)
+
+  if (isLoading) {
+    return (
+      <div className="text-xs text-text-dim">Loading reach numbers…</div>
+    )
+  }
+  if (error) {
+    return (
+      <div className="text-xs text-error">Failed to load reach data.</div>
+    )
+  }
+  if (!data) {
+    return null
+  }
+
+  const t = data.totals
+  const r = data.rates
+
+  return (
+    <div data-testid="campaign-reach-section">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+          Reach
+        </h3>
+        <span className="text-[10px] text-text-dim">
+          Live aggregation from email send log
+        </span>
+      </div>
+
+      {/* Big-number cards (6) — funnel-ordered left to right. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+        <ReachStatCard
+          label="Targeted"
+          value={t.targeted}
+        />
+        <ReachStatCard
+          label="Sent"
+          value={t.sent}
+          rate={formatRate(r.send_rate)}
+        />
+        <ReachStatCard
+          label="Delivered"
+          value={t.delivered}
+          rate={formatRate(r.delivery_rate)}
+        />
+        <ReachStatCard
+          label="Opened"
+          value={t.opened}
+          rate={formatRate(r.open_rate)}
+        />
+        <ReachStatCard
+          label="Clicked"
+          value={t.clicked}
+          rate={formatRate(r.click_rate)}
+        />
+        <ReachStatCard
+          label="Bounced / Unsub"
+          value={t.bounced + t.unsubscribed}
+          rate={`${formatRate(r.bounce_rate)} / ${formatRate(r.unsubscribe_rate)}`}
+        />
+      </div>
+
+      {/* Funnel visualization: each stage as a percentage of the previous. */}
+      <div className="mb-4 space-y-1.5">
+        <ReachFunnelRow label="Sent" value={t.sent} base={t.targeted} />
+        <ReachFunnelRow label="Delivered" value={t.delivered} base={t.sent} />
+        <ReachFunnelRow label="Opened" value={t.opened} base={t.delivered} />
+        <ReachFunnelRow label="Clicked" value={t.clicked} base={t.delivered} />
+      </div>
+
+      {/* Timeline + per-language */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <div>
+          <h4 className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-2">
+            Sends / Opens / Clicks by day
+          </h4>
+          <ReachTimelineChart rows={data.timeline} />
+        </div>
+        <ReachLanguageTable rows={data.by_language} />
+      </div>
+    </div>
+  )
+}
+
+function ReachFunnelRow({
+  label,
+  value,
+  base,
+}: {
+  label: string
+  value: number
+  base: number
+}) {
+  const ratio = base > 0 ? value / base : 0
+  const width = Math.max(2, Math.round(ratio * 100))
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] text-text-muted w-20 shrink-0">{label}</span>
+      <div className="flex-1 h-5 bg-surface-alt rounded-md overflow-hidden border border-border">
+        <div
+          className="h-full bg-accent-cyan transition-all duration-500"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      <span className="text-[11px] text-text tabular-nums w-12 text-right">
+        {value}
+      </span>
+      <span className="text-[10px] text-text-dim tabular-nums w-14 text-right">
+        {(ratio * 100).toFixed(1)}%
+      </span>
+    </div>
+  )
+}
+
+function BouncesSection({ campaignId }: { campaignId: string }) {
+  const { data, isLoading } = useCampaignBounces(campaignId)
+  const { toast } = useToast()
+  const [isDownloading, setIsDownloading] = useState(false)
+
+  const total = data?.total ?? 0
+  const previewRows = data?.bounces.slice(0, 20) ?? []
+  const hasBounces = total > 0
+
+  const handleDownload = async () => {
+    if (!hasBounces || isDownloading) return
+    setIsDownloading(true)
+    try {
+      await apiDownload(`/campaigns/${campaignId}/bounces.csv`)
+      toast('Bounces CSV downloaded', 'success')
+    } catch {
+      toast('Download failed', 'error')
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+          Undeliverable Recipients
+        </h3>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={!hasBounces || isDownloading}
+          className="px-3 py-1.5 text-xs bg-surface border border-border text-text rounded-md hover:bg-surface-alt transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          aria-label="Download bounces CSV"
+        >
+          {isDownloading ? 'Downloading…' : 'Download CSV'}
+        </button>
+      </div>
+
+      <div className="bg-surface-alt rounded-lg border border-border px-4 py-3 mb-3">
+        <p className="text-2xl font-semibold text-text tabular-nums">{total}</p>
+        <p className="text-xs text-text-muted mt-0.5">
+          {isLoading ? 'Loading…' : total === 1 ? 'undeliverable email' : 'undeliverable emails'}
+        </p>
+        {!isLoading && total === 0 && (
+          <p className="text-[11px] text-text-dim mt-1">
+            No bounces recorded for this campaign yet.
+          </p>
+        )}
+      </div>
+
+      {previewRows.length > 0 && (
+        <div className="bg-surface-alt rounded-lg border border-border overflow-hidden">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Email</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Name</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Company</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Type</th>
+                <th className="px-3 py-2 font-semibold text-text-dim uppercase tracking-wider">Bounced At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.map((b, idx) => (
+                <tr key={`${b.contact_id ?? 'no-contact'}-${idx}`} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2 text-text">{b.email || '-'}</td>
+                  <td className="px-3 py-2 text-text">
+                    {[b.first_name, b.last_name].filter(Boolean).join(' ') || '-'}
+                  </td>
+                  <td className="px-3 py-2 text-text-muted">{b.company || '-'}</td>
+                  <td className="px-3 py-2 text-text-muted">{b.bounce_type || b.status || '-'}</td>
+                  <td className="px-3 py-2 text-text-muted">{formatDate(b.bounced_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {total > previewRows.length && (
+            <p className="text-[11px] text-text-dim px-3 py-2 border-t border-border">
+              Showing {previewRows.length} of {total}. Download the CSV for the full list.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main exported component ──────────────────────────────
 
 interface Props {
@@ -493,5 +898,11 @@ export function CampaignAnalytics({ campaignId }: Props) {
     return <AnalyticsEmpty />
   }
 
-  return <AnalyticsView data={data} />
+  return (
+    <div className="space-y-6">
+      <ReachSection campaignId={campaignId} />
+      <AnalyticsView data={data} />
+      <BouncesSection campaignId={campaignId} />
+    </div>
+  )
 }

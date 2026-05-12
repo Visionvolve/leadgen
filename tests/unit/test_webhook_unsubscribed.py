@@ -4,14 +4,20 @@ Covers:
 1. POST /api/webhooks/resend with type=email.unsubscribed sets
    EmailSendLog.unsubscribed_at and status='unsubscribed'.
 2. Unknown email_id returns 200 (no 500, no Resend retry storm).
-3. Invalid svix signature returns 400 when RESEND_WEBHOOK_SECRET is set.
+3. Invalid svix signature returns 401 when RESEND_WEBHOOK_SECRET is set
+   (fail-closed — BL-1034).
+
+Event-handling tests mock ``_verify_svix_signature`` at the import site
+so they do not need to compute valid svix signatures. There is no
+dev-bypass path in production code (BL-1034 review gate). Signature
+behaviour is covered separately in
+``test_webhook_routes.py::TestResendWebhookSignature``.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 
@@ -96,7 +102,21 @@ def _payload(event_type, email_id="resend-unsub-id-001"):
 
 
 class TestUnsubscribedWebhook:
-    """POST /api/webhooks/resend with type=email.unsubscribed."""
+    """POST /api/webhooks/resend with type=email.unsubscribed.
+
+    Event-handling tests mock ``_verify_svix_signature`` at the import
+    site so they can focus on handler behaviour rather than HMAC math.
+    There is no dev-bypass in production code.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _mock_signature_ok(self, monkeypatch):
+        """Stub out signature verification for event-handling tests."""
+        monkeypatch.setattr(
+            "api.routes.webhook_routes._verify_svix_signature",
+            lambda payload_bytes, headers: True,
+        )
+        yield
 
     def test_unsubscribed_sets_timestamp_and_status(self, client, seed_send_log):
         """Test 1: matching log → unsubscribed_at populated, status='unsubscribed'."""
@@ -127,9 +147,20 @@ class TestUnsubscribedWebhook:
         assert body["status"] == "ignored"
         assert body["reason"] == "unknown email_id"
 
-    @patch.dict("os.environ", {"RESEND_WEBHOOK_SECRET": "whsec_dGVzdHNlY3JldA=="})
-    def test_unsubscribed_invalid_signature_returns_400(self, client, seed_send_log):
-        """Test 3: invalid svix signature → 400 (parity with existing 5 events)."""
+
+class TestUnsubscribedWebhookSignature:
+    """BL-1034: signature verification is exercised against unsubscribe events.
+
+    This class does NOT mock the verification function — it runs the
+    real ``_verify_svix_signature`` against a configured secret.
+    """
+
+    def test_unsubscribed_invalid_signature_returns_401(
+        self, client, seed_send_log, monkeypatch
+    ):
+        """Invalid svix signature → 401 (fail-closed)."""
+        monkeypatch.setenv("RESEND_WEBHOOK_SECRET", "whsec_dGVzdHNlY3JldA==")
+
         resp = client.post(
             "/api/webhooks/resend",
             data=json.dumps(_payload("email.unsubscribed")),
@@ -140,4 +171,4 @@ class TestUnsubscribedWebhook:
                 "svix-signature": "v1,invalidsignature",
             },
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 401

@@ -5,7 +5,6 @@ import { ToastProvider } from './components/ui/Toast'
 import { ChatProvider } from './providers/ChatProvider'
 import { AppShell } from './components/layout/AppShell'
 import { LoginPage } from './components/layout/LoginPage'
-import { PlaceholderPage } from './pages/PlaceholderPage'
 import { CompaniesPage } from './pages/companies/CompaniesPage'
 import { CompanyDetailPage } from './pages/companies/CompanyDetailPage'
 import { ContactsPage } from './pages/contacts/ContactsPage'
@@ -18,12 +17,15 @@ import { EnrichPage } from './pages/enrich/EnrichPage'
 import { ImportPage } from './pages/import/ImportPage'
 import { AdminPage } from './pages/admin/AdminPage'
 import { PreferencesPage } from './pages/preferences/PreferencesPage'
+import { GmailIntegrationPage } from './pages/settings/GmailIntegrationPage'
 import { PlaybookPage } from './pages/playbook/PlaybookPage'
 import { PlaybookDemo } from './pages/playbook/PlaybookDemo'
 import { LlmCostsPage } from './pages/llm-costs/LlmCostsPage'
 import { TokensPage } from './pages/tokens/TokensPage'
 import { TriageReviewPage } from './pages/companies/TriageReviewPage'
+import { SmartListsPage } from './pages/smart-lists/SmartListsPage'
 import { AuthCallbackPage } from './pages/auth/AuthCallbackPage'
+import { EchoPage } from './pages/EchoPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -62,13 +64,15 @@ export default function App() {
               <Route path="campaigns" element={<CampaignsPage />} />
               <Route path="campaigns/:campaignId" element={<CampaignDetailPage />} />
               <Route path="campaigns/:campaignId/review" element={<MessageReviewPage />} />
+              <Route path="smart-lists" element={<SmartListsPage />} />
               <Route path="playbook" element={<PlaybookPage />} />
               <Route path="playbook/:phase" element={<PlaybookPage />} />
               <Route path="playbook-demo" element={<PlaybookDemo />} />
-              <Route path="echo" element={<PlaceholderPage title="Echo Analytics" description="Outreach performance dashboard — conversion funnels, response rates by channel, pipeline velocity." />} />
+              <Route path="echo" element={<EchoPage />} />
               <Route path="admin" element={<AdminPage />} />
               <Route path="admin/tokens" element={<TokensPage />} />
               <Route path="preferences" element={<PreferencesPage />} />
+              <Route path="settings/gmail" element={<GmailIntegrationPage />} />
               <Route path="llm-costs" element={<LlmCostsPage />} />
             </Route>
           </Routes>
