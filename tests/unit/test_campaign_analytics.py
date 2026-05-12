@@ -1,5 +1,4 @@
 """Unit tests for GET /api/campaigns/<id>/analytics endpoint."""
-
 import json
 
 from api.models import (
@@ -9,6 +8,7 @@ from api.models import (
     EmailSendLog,
     LinkedInSendQueue,
     Message,
+    Owner,
 )
 from tests.conftest import auth_header
 
@@ -54,14 +54,8 @@ def _make_campaign_contact(db, campaign_id, contact_id, tenant_id):
 
 
 def _make_message(
-    db,
-    tenant_id,
-    contact_id,
-    campaign_contact_id,
-    channel="email",
-    status="draft",
-    step=1,
-    cost=0.01,
+    db, tenant_id, contact_id, campaign_contact_id,
+    channel="email", status="draft", step=1, cost=0.01,
 ):
     """Helper: create a message."""
     m = Message(
@@ -123,40 +117,16 @@ class TestCampaignAnalyticsMessages:
 
         campaign = _make_campaign(db, tenant.id)
         ct1 = _make_contact(db, tenant.id, "Alice", email="alice@test.com")
-        ct2 = _make_contact(
-            db, tenant.id, "Bob", linkedin_url="https://linkedin.com/in/bob"
-        )
+        ct2 = _make_contact(db, tenant.id, "Bob", linkedin_url="https://linkedin.com/in/bob")
         cc1 = _make_campaign_contact(db, campaign.id, ct1.id, tenant.id)
         cc2 = _make_campaign_contact(db, campaign.id, ct2.id, tenant.id)
 
         # Messages with various statuses, channels, steps
-        _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="draft", step=1
-        )
-        _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=2
-        )
-        _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=1
-        )
-        _make_message(
-            db,
-            tenant.id,
-            ct2.id,
-            cc2.id,
-            channel="linkedin_connect",
-            status="draft",
-            step=1,
-        )
-        _make_message(
-            db,
-            tenant.id,
-            ct2.id,
-            cc2.id,
-            channel="linkedin_message",
-            status="rejected",
-            step=2,
-        )
+        _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="draft", step=1)
+        _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=2)
+        _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=1)
+        _make_message(db, tenant.id, ct2.id, cc2.id, channel="linkedin_connect", status="draft", step=1)
+        _make_message(db, tenant.id, ct2.id, cc2.id, channel="linkedin_message", status="rejected", step=2)
         db.session.commit()
 
         resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
@@ -193,15 +163,9 @@ class TestCampaignAnalyticsEmailSending:
         ct1 = _make_contact(db, tenant.id, "Alice", email="alice@test.com")
         cc1 = _make_campaign_contact(db, campaign.id, ct1.id, tenant.id)
 
-        m1 = _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="sent"
-        )
-        m2 = _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="sent", step=2
-        )
-        m3 = _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="sent", step=3
-        )
+        m1 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="sent")
+        m2 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="sent", step=2)
+        m3 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="sent", step=3)
 
         # Create email send log entries
         for msg, status in [(m1, "delivered"), (m2, "sent"), (m3, "bounced")]:
@@ -215,31 +179,17 @@ class TestCampaignAnalyticsEmailSending:
             db.session.add(log)
 
         # Add a queued and a failed entry
-        m4 = _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=1
-        )
-        m5 = _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=2
-        )
-        db.session.add(
-            EmailSendLog(
-                tenant_id=tenant.id,
-                message_id=m4.id,
-                status="queued",
-                from_email="sender@test.com",
-                to_email="alice@test.com",
-            )
-        )
-        db.session.add(
-            EmailSendLog(
-                tenant_id=tenant.id,
-                message_id=m5.id,
-                status="failed",
-                from_email="sender@test.com",
-                to_email="alice@test.com",
-                error="Connection timeout",
-            )
-        )
+        m4 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=1)
+        m5 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="email", status="approved", step=2)
+        db.session.add(EmailSendLog(
+            tenant_id=tenant.id, message_id=m4.id,
+            status="queued", from_email="sender@test.com", to_email="alice@test.com",
+        ))
+        db.session.add(EmailSendLog(
+            tenant_id=tenant.id, message_id=m5.id,
+            status="failed", from_email="sender@test.com", to_email="alice@test.com",
+            error="Connection timeout",
+        ))
         db.session.commit()
 
         resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
@@ -258,61 +208,6 @@ class TestCampaignAnalyticsEmailSending:
         assert data["cost"]["email_sends"] == 5
 
 
-class TestCampaignAnalyticsSupersededRows:
-    """BL-1029: analytics must exclude superseded send-log rows so audit
-    counts don't double-count abort-then-retry attempts."""
-
-    def test_analytics_excludes_superseded_rows(
-        self, client, seed_companies_contacts, db
-    ):
-        from datetime import datetime, timezone
-
-        headers = auth_header(client)
-        headers["X-Namespace"] = "test-corp"
-        tenant = seed_companies_contacts["tenant"]
-
-        campaign = _make_campaign(db, tenant.id)
-        ct1 = _make_contact(db, tenant.id, "Alice", email="alice@test.com")
-        cc1 = _make_campaign_contact(db, campaign.id, ct1.id, tenant.id)
-        msg = _make_message(db, tenant.id, ct1.id, cc1.id, channel="email")
-
-        # A superseded failed attempt: should NOT appear in analytics.
-        sent_log = EmailSendLog(
-            tenant_id=tenant.id,
-            message_id=msg.id,
-            status="sent",
-            from_email="sender@test.com",
-            to_email="alice@test.com",
-            sent_at=datetime.now(timezone.utc),
-        )
-        db.session.add(sent_log)
-        db.session.flush()
-
-        failed_log = EmailSendLog(
-            tenant_id=tenant.id,
-            message_id=msg.id,
-            status="failed",
-            from_email="sender@test.com",
-            to_email="alice@test.com",
-            error="daily_quota_exceeded",
-            superseded_at=datetime.now(timezone.utc),
-            superseded_by=sent_log.id,
-        )
-        db.session.add(failed_log)
-        db.session.commit()
-
-        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
-        assert resp.status_code == 200
-        data = resp.get_json()
-        email = data["sending"]["email"]
-
-        # Default view excludes superseded rows: only one effective row
-        # (the successful send).
-        assert email["total"] == 1
-        assert email["sent"] == 1
-        assert email.get("failed", 0) == 0
-
-
 class TestCampaignAnalyticsContacts:
     """Test contact stats (with_email, with_linkedin, both)."""
 
@@ -328,19 +223,11 @@ class TestCampaignAnalyticsContacts:
         _make_campaign_contact(db, campaign.id, ct1.id, tenant.id)
 
         # Contact with linkedin only
-        ct2 = _make_contact(
-            db, tenant.id, "LinkedInOnly", linkedin_url="https://linkedin.com/in/x"
-        )
+        ct2 = _make_contact(db, tenant.id, "LinkedInOnly", linkedin_url="https://linkedin.com/in/x")
         _make_campaign_contact(db, campaign.id, ct2.id, tenant.id)
 
         # Contact with both
-        ct3 = _make_contact(
-            db,
-            tenant.id,
-            "Both",
-            email="b@test.com",
-            linkedin_url="https://linkedin.com/in/y",
-        )
+        ct3 = _make_contact(db, tenant.id, "Both", email="b@test.com", linkedin_url="https://linkedin.com/in/y")
         _make_campaign_contact(db, campaign.id, ct3.id, tenant.id)
 
         # Contact with neither
@@ -354,9 +241,9 @@ class TestCampaignAnalyticsContacts:
         data = resp.get_json()
 
         assert data["contacts"]["total"] == 4
-        assert data["contacts"]["with_email"] == 2  # EmailOnly + Both
-        assert data["contacts"]["with_linkedin"] == 2  # LinkedInOnly + Both
-        assert data["contacts"]["both_channels"] == 1  # Both only
+        assert data["contacts"]["with_email"] == 2      # EmailOnly + Both
+        assert data["contacts"]["with_linkedin"] == 2    # LinkedInOnly + Both
+        assert data["contacts"]["both_channels"] == 1    # Both only
 
 
 class TestCampaignAnalyticsCost:
@@ -368,8 +255,7 @@ class TestCampaignAnalyticsCost:
         tenant = seed_companies_contacts["tenant"]
 
         campaign = _make_campaign(
-            db,
-            tenant.id,
+            db, tenant.id,
             gen_config={"cost": {"generation_usd": 1.25}},
         )
         db.session.commit()
@@ -409,10 +295,7 @@ class TestCampaignAnalyticsAuth:
         headers = auth_header(client)
         headers["X-Namespace"] = "test-corp"
 
-        resp = client.get(
-            "/api/campaigns/00000000-0000-0000-0000-000000000000/analytics",
-            headers=headers,
-        )
+        resp = client.get("/api/campaigns/00000000-0000-0000-0000-000000000000/analytics", headers=headers)
         assert resp.status_code == 404
         assert "not found" in resp.get_json()["error"].lower()
 
@@ -427,49 +310,33 @@ class TestCampaignAnalyticsLinkedIn:
         owner = seed_companies_contacts["owners"][0]
 
         campaign = _make_campaign(db, tenant.id)
-        ct1 = _make_contact(
-            db, tenant.id, "Alice", linkedin_url="https://linkedin.com/in/alice"
-        )
+        ct1 = _make_contact(db, tenant.id, "Alice", linkedin_url="https://linkedin.com/in/alice")
         cc1 = _make_campaign_contact(db, campaign.id, ct1.id, tenant.id)
 
-        m1 = _make_message(
-            db, tenant.id, ct1.id, cc1.id, channel="linkedin_connect", status="sent"
-        )
-        m2 = _make_message(
-            db,
-            tenant.id,
-            ct1.id,
-            cc1.id,
-            channel="linkedin_message",
-            status="sent",
-            step=2,
-        )
+        m1 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="linkedin_connect", status="sent")
+        m2 = _make_message(db, tenant.id, ct1.id, cc1.id, channel="linkedin_message", status="sent", step=2)
 
         # Queue entries
-        db.session.add(
-            LinkedInSendQueue(
-                tenant_id=str(tenant.id),
-                message_id=str(m1.id),
-                contact_id=str(ct1.id),
-                owner_id=str(owner.id),
-                action_type="connection_request",
-                linkedin_url="https://linkedin.com/in/alice",
-                body="Hi",
-                status="sent",
-            )
-        )
-        db.session.add(
-            LinkedInSendQueue(
-                tenant_id=str(tenant.id),
-                message_id=str(m2.id),
-                contact_id=str(ct1.id),
-                owner_id=str(owner.id),
-                action_type="message",
-                linkedin_url="https://linkedin.com/in/alice",
-                body="Follow up",
-                status="queued",
-            )
-        )
+        db.session.add(LinkedInSendQueue(
+            tenant_id=str(tenant.id),
+            message_id=str(m1.id),
+            contact_id=str(ct1.id),
+            owner_id=str(owner.id),
+            action_type="connection_request",
+            linkedin_url="https://linkedin.com/in/alice",
+            body="Hi",
+            status="sent",
+        ))
+        db.session.add(LinkedInSendQueue(
+            tenant_id=str(tenant.id),
+            message_id=str(m2.id),
+            contact_id=str(ct1.id),
+            owner_id=str(owner.id),
+            action_type="message",
+            linkedin_url="https://linkedin.com/in/alice",
+            body="Follow up",
+            status="queued",
+        ))
         db.session.commit()
 
         resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
@@ -480,141 +347,3 @@ class TestCampaignAnalyticsLinkedIn:
         assert li["total"] == 2
         assert li["sent"] == 1
         assert li["queued"] == 1
-
-
-class TestCampaignAnalyticsMicrositePostHogMerge:
-    """BL-1047: /analytics microsite block merges PostHog + activities.
-
-    Verifies:
-    - When PostHog responds, `visits` / `unique_visitors` come from PostHog
-      and new `cta_clicks` / `form_submits` / `avg_time_on_page_sec` fields
-      are populated.
-    - When PostHog is unreachable (RuntimeError from missing env or
-      PostHogUnavailableError), response falls back to activities-table
-      counts and sets `posthog_available=False`.
-    - `product_views` (legacy activities-derived) is preserved in both
-      paths for backward compatibility.
-    """
-
-    def test_merges_posthog_metrics_when_available(
-        self, client, seed_companies_contacts, db, monkeypatch
-    ):
-        from datetime import datetime, timezone
-
-        headers = auth_header(client)
-        headers["X-Namespace"] = "test-corp"
-        tenant = seed_companies_contacts["tenant"]
-
-        campaign = _make_campaign(db, tenant.id)
-        db.session.commit()
-
-        # Patch PostHogClient.get_campaign_microsite_metrics at the route
-        # import site. The helper imports the module lazily inside
-        # _compute_campaign_analytics so we monkeypatch the module-level
-        # symbol and cover both the `PostHogClient` and
-        # `get_campaign_microsite_metrics` lookups.
-        from api.integrations import posthog as posthog_mod
-
-        fake_metrics = posthog_mod.CampaignMicrositeMetrics(
-            campaign_id=str(campaign.id),
-            since=datetime(2026, 4, 17, tzinfo=timezone.utc),
-            until=datetime(2026, 4, 24, tzinfo=timezone.utc),
-            visits=42,
-            unique_visitors=17,
-            cta_clicks=9,
-            form_submits=3,
-            avg_time_on_page_sec=12.5,
-        )
-
-        class _FakeClient:
-            def __init__(self, *a, **kw):
-                pass
-
-            def get_campaign_microsite_metrics(self, *a, **kw):
-                return fake_metrics
-
-        monkeypatch.setattr(posthog_mod, "PostHogClient", _FakeClient)
-
-        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
-        assert resp.status_code == 200
-        data = resp.get_json()
-
-        assert data["posthog_available"] is True
-        ms = data["microsite"]
-        assert ms["visits"] == 42
-        assert ms["unique_visitors"] == 17
-        assert ms["cta_clicks"] == 9
-        assert ms["form_submits"] == 3
-        assert ms["avg_time_on_page_sec"] == 12.5
-        # Legacy compat: product_views always present (zero for empty
-        # activities table in this test).
-        assert "product_views" in ms
-        assert ms["source"] == "posthog"
-
-    def test_falls_back_to_activities_when_posthog_missing_env(
-        self, client, seed_companies_contacts, db, monkeypatch
-    ):
-        headers = auth_header(client)
-        headers["X-Namespace"] = "test-corp"
-        tenant = seed_companies_contacts["tenant"]
-
-        campaign = _make_campaign(db, tenant.id)
-        db.session.commit()
-
-        from api.integrations import posthog as posthog_mod
-
-        # Simulate the env-missing case by having PostHogClient.__init__
-        # raise RuntimeError — this is the actual behavior of the real
-        # client when POSTHOG_PERSONAL_API_KEY is unset.
-        class _BrokenClient:
-            def __init__(self, *a, **kw):
-                raise RuntimeError("POSTHOG_PERSONAL_API_KEY not configured")
-
-        monkeypatch.setattr(posthog_mod, "PostHogClient", _BrokenClient)
-
-        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
-        assert resp.status_code == 200
-        data = resp.get_json()
-
-        # Degradation contract: response still 200, flag tells UI the bad
-        # news, and microsite block has activities-table counts (zeros
-        # here because the empty test campaign has no activities).
-        assert data["posthog_available"] is False
-        ms = data["microsite"]
-        assert ms["visits"] == 0
-        assert ms["unique_visitors"] == 0
-        # New PostHog fields degrade to None so the UI can distinguish
-        # "no data" from "legitimately zero".
-        assert ms["cta_clicks"] is None
-        assert ms["form_submits"] is None
-        assert ms["avg_time_on_page_sec"] is None
-        assert ms["product_views"] == 0
-        assert ms["source"] == "activities"
-
-    def test_falls_back_on_posthog_unavailable_error(
-        self, client, seed_companies_contacts, db, monkeypatch
-    ):
-        headers = auth_header(client)
-        headers["X-Namespace"] = "test-corp"
-        tenant = seed_companies_contacts["tenant"]
-
-        campaign = _make_campaign(db, tenant.id)
-        db.session.commit()
-
-        from api.integrations import posthog as posthog_mod
-
-        class _FlakyClient:
-            def __init__(self, *a, **kw):
-                pass
-
-            def get_campaign_microsite_metrics(self, *a, **kw):
-                raise posthog_mod.PostHogUnavailableError("transient 502")
-
-        monkeypatch.setattr(posthog_mod, "PostHogClient", _FlakyClient)
-
-        resp = client.get(f"/api/campaigns/{campaign.id}/analytics", headers=headers)
-        assert resp.status_code == 200
-        data = resp.get_json()
-
-        assert data["posthog_available"] is False
-        assert data["microsite"]["source"] == "activities"

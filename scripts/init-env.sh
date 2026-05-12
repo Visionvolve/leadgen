@@ -84,67 +84,11 @@ PERPLEXITY_KEY="$(get_var PERPLEXITY_API_KEY)"
 GOOGLE_CID="$(get_var GOOGLE_CLIENT_ID)"
 GOOGLE_CSECRET="$(get_var GOOGLE_CLIENT_SECRET)"
 OAUTH_ENC_KEY="$(get_var OAUTH_ENCRYPTION_KEY)"
-# BL-1034: Resend webhook svix signing secret. Pulled from staging VPS
-# .env first (same individual-secret architecture as STAGING_RESEND_API_KEY).
-# Falls back to 1Password. The webhook handler is fail-closed — there is
-# no dev-bypass path in production code. If neither source has the
-# secret, .env.dev is written with a clear note that local webhook
-# requests will return 401 until the developer sets it manually.
-RESEND_WEBHOOK_SECRET_VAL="$(get_var RESEND_WEBHOOK_SECRET)"
-# Try 1Password as a fallback source (read-only — writes are blocked by
-# the service-account token role). Silently skipped if `op` is missing
-# or the item does not exist.
-if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ] && command -v op >/dev/null 2>&1; then
-  RESEND_WEBHOOK_SECRET_VAL="$(op read \
-    'op://visionvolve-prod/Resend - leadgen-pipeline/RESEND_WEBHOOK_SECRET' \
-    2>/dev/null || true)"
-fi
-
-# PostHog — try VPS .env first, then fall back to 1Password (BL-1035)
-POSTHOG_HOST_VAL="$(get_var POSTHOG_HOST)"
-POSTHOG_PROJECT_ID_VAL="$(get_var POSTHOG_PROJECT_ID)"
-POSTHOG_PROJECT_API_KEY_VAL="$(get_var POSTHOG_PROJECT_API_KEY)"
-POSTHOG_PERSONAL_API_KEY_VAL="$(get_var POSTHOG_PERSONAL_API_KEY)"
-
-# ---------------------------------------------------------------------------
-# 1Password fallback for PostHog (uses `op` CLI if available + signed in)
-# Note titles use ASCII hyphen `-`, not em-dash — `op read` rejects em-dash.
-# ---------------------------------------------------------------------------
-op_read() {
-  local ref="$1"
-  if command -v op >/dev/null 2>&1; then
-    op read "$ref" 2>/dev/null || true
-  fi
-}
-
-if [ -z "$POSTHOG_HOST_VAL" ]; then
-  POSTHOG_HOST_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_HOST')"
-  POSTHOG_HOST_VAL="${POSTHOG_HOST_VAL:-https://us.i.posthog.com}"
-fi
-if [ -z "$POSTHOG_PROJECT_ID_VAL" ]; then
-  POSTHOG_PROJECT_ID_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_PROJECT_ID')"
-fi
-if [ -z "$POSTHOG_PROJECT_API_KEY_VAL" ]; then
-  POSTHOG_PROJECT_API_KEY_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_PROJECT_API_KEY')"
-fi
-if [ -z "$POSTHOG_PERSONAL_API_KEY_VAL" ]; then
-  POSTHOG_PERSONAL_API_KEY_VAL="$(op_read 'op://visionvolve-prod/PostHog - leadgen-pipeline/POSTHOG_PERSONAL_API_KEY')"
-fi
 
 # Validate we got at least the critical ones
 if [ -z "$JWT_SECRET" ]; then
   echo "WARNING: LEADGEN_JWT_SECRET not found on VPS .env — using placeholder."
   JWT_SECRET="local-dev-jwt-secret-change-me"
-fi
-
-# PostHog is optional for most dev work — warn but don't fail.
-POSTHOG_STATUS_NOTE=""
-if [ -z "$POSTHOG_PERSONAL_API_KEY_VAL" ]; then
-  POSTHOG_STATUS_NOTE="# PostHog integration disabled — set POSTHOG_PERSONAL_API_KEY manually"
-  POSTHOG_STATUS_NOTE="$POSTHOG_STATUS_NOTE\n# or configure 1Password (op CLI signed in, visionvolve-prod vault)."
-  echo "NOTE: POSTHOG_PERSONAL_API_KEY not available — campaign analytics microsite"
-  echo "      metrics will be disabled locally until you set it manually or sign"
-  echo "      into 1Password (op signin) and re-run this script."
 fi
 
 # ---------------------------------------------------------------------------
@@ -183,35 +127,7 @@ GOOGLE_REDIRECT_URI=http://localhost:5001/api/oauth/google/callback
 OAUTH_ENCRYPTION_KEY=${OAUTH_ENC_KEY}
 PERPLEXITY_API_KEY=${PERPLEXITY_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
-
-# Resend webhook svix signing secret (BL-1034). Fail-closed — if empty
-# or unset, local webhook POSTs return 401. There is NO dev-bypass path
-# in production code. For local testing, set this to any non-empty value
-# (e.g. 'local-dev-secret') and sign test payloads with the same value;
-# see tests/unit/test_webhook_routes.py for the signing helper.
-RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET_VAL}
-
-# --- PostHog (BL-1035) ---
-$(printf "%b" "$POSTHOG_STATUS_NOTE")
-POSTHOG_HOST=${POSTHOG_HOST_VAL:-https://us.i.posthog.com}
-POSTHOG_PROJECT_ID=${POSTHOG_PROJECT_ID_VAL}
-POSTHOG_PROJECT_API_KEY=${POSTHOG_PROJECT_API_KEY_VAL}
-POSTHOG_PERSONAL_API_KEY=${POSTHOG_PERSONAL_API_KEY_VAL}
 EOF
-
-# If neither staging VPS nor 1Password had the secret, append a clear
-# comment explaining what to do. We write the empty RESEND_WEBHOOK_SECRET
-# line above as-is so the developer sees exactly what's unset.
-if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ]; then
-  cat >> "$ENV_FILE" <<'NOTE'
-
-# NOTE: RESEND_WEBHOOK_SECRET was not found on the staging VPS or in
-# 1Password. Local webhook requests to /api/webhooks/resend will return
-# 401 until you set a value here. For local testing without Resend,
-# pick any string (e.g. 'local-dev-secret') and sign your test
-# payloads with the same string.
-NOTE
-fi
 
 echo ""
 echo "==> Done. Secrets written to .env.dev"
@@ -224,16 +140,5 @@ echo "      PERPLEXITY_API_KEY= ${PERPLEXITY_KEY:+[set]}${PERPLEXITY_KEY:-[missi
 echo "      GOOGLE_CLIENT_ID  = ${GOOGLE_CID:+[set]}${GOOGLE_CID:-[missing]}"
 echo "      GOOGLE_CLIENT_SECRET = ${GOOGLE_CSECRET:+[set]}${GOOGLE_CSECRET:-[missing]}"
 echo "      OAUTH_ENCRYPTION_KEY = ${OAUTH_ENC_KEY:+[set]}${OAUTH_ENC_KEY:-[missing]}"
-# RESEND_WEBHOOK_SECRET is logged as a mode indicator only — never echo
-# the real value. Fail-closed: if empty, local webhook requests return 401.
-if [ -z "$RESEND_WEBHOOK_SECRET_VAL" ]; then
-  echo "      RESEND_WEBHOOK_SECRET = [missing] (local webhooks will 401 — see .env.dev note)"
-else
-  echo "      RESEND_WEBHOOK_SECRET = [set]"
-fi
-echo "      POSTHOG_HOST         = ${POSTHOG_HOST_VAL:-[default]}"
-echo "      POSTHOG_PROJECT_ID   = ${POSTHOG_PROJECT_ID_VAL:+[set]}${POSTHOG_PROJECT_ID_VAL:-[missing]}"
-echo "      POSTHOG_PROJECT_API_KEY = ${POSTHOG_PROJECT_API_KEY_VAL:+[set]}${POSTHOG_PROJECT_API_KEY_VAL:-[missing]}"
-echo "      POSTHOG_PERSONAL_API_KEY = ${POSTHOG_PERSONAL_API_KEY_VAL:+[set]}${POSTHOG_PERSONAL_API_KEY_VAL:-[missing]}"
 echo ""
 echo "    Start local dev with: make dev"

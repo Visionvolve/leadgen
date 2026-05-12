@@ -4,35 +4,7 @@ All notable changes to the Leadgen Pipeline project.
 
 ## [Unreleased]
 
-### Added
-- **Multilingual mailing foundation** (BL-1110, v25 phase 9): new `api/services/template_registry.py` maps `(template_key, language)` → renderer; the EventFest template now ships both Czech (`render_eventfest_cs`) and English (`render_eventfest_en`) variants registered as `eventfest_invitation`. The Resend + Gmail send paths look up the right variant from `contact.language` at send time and gracefully fall back to Czech (the default) when the requested language is unsupported. Migration `069_email_send_log_template_language.sql` adds `template_language` + `template_language_fallback` columns on `email_send_log` so operators can audit which contacts received the fallback.
-- **Campaign Analytics v1** (Sprint 24): funnel + time-series + microsite engagement in a single view with live SSE updates. New endpoints under `/api/campaigns/:id/analytics/`:
-  - `GET /timeseries` — per-day email-lifecycle counts from `email_send_log` (BL-1037, PR #158)
-  - `GET /microsite` — visits, CTA clicks, conversion rate from PostHog HogQL Query API (BL-1038, PR #157)
-  - `GET /stream` — Server-Sent Events: `snapshot` on connect, `update` every 10s, `heartbeat` every 30s (BL-1039, PR #156)
-  - PostHog backend integration with US region (`https://us.i.posthog.com`), graceful degradation on provider failure (BL-1035, PR #153)
-  - Microsite link builder now stamps `?utm_campaign=<short_id>&utm_source=leadgen` so PostHog events attribute back to the campaign (BL-1036a, PR #155)
-- **Deploy skill integration** — `.claude/deploy.yml` wires the `/deploy` skill to this repo's staging pipeline (PR #148).
-- **Gmail OAuth foundation** (BL-1044): New `gmail_connections` table + dedicated OAuth flow (`/api/auth/gmail/connect|callback|disconnect|status`) with Fernet-encrypted access/refresh tokens and JWT-signed `state` for CSRF protection. Frontend settings page at `/:namespace/settings/gmail` (menu entry under Personal). Sets up the storage + consent surface for reply-rate tracking; inbound polling and reply attribution follow in BL-1044-b / BL-1044-c. Runbook: `docs/runbooks/gmail-oauth-setup.md`.
-
-### Changed
-- **`email_send_log` schema**: added `kind` column (preview | send | retry — excludes previews from analytics, BL-1026, PR #152) and `superseded_at` column (marks earlier attempts after a successful retry so the funnel counts each recipient once, BL-1029, PR #154).
-- **Legacy `/api/campaigns/:id/analytics` endpoint** refactored to share `_compute_campaign_analytics` helper with the new split endpoints. Existing dashboards unaffected.
-- **`/api/campaigns/:id/analytics` microsite block now PostHog-sourced** (BL-1047): the main analytics endpoint merges PostHog metrics (`visits`, `unique_visitors`, new `cta_clicks` / `form_submits` / `avg_time_on_page_sec`) into the `microsite` block. Legacy activities-table `product_views` field preserved. Top-level `posthog_available` flag tells the frontend whether to render the degraded-data banner. On PostHog failure/unavailable env, the block degrades to activities-table counts — no 5xx. Echo + OutreachTab updated to prefer `cta_clicks` over `product_views` with graceful fallback for pre-migration campaigns.
-
 ### Fixed
-- **Resend webhook timestamp semantics** (BL-1028, PR #149): earliest-observed semantics for `delivered_at`, `opened_at`, `clicked_at` so retries never overwrite real engagement with later send timestamps.
-- **Staging deploy silent-no-op** (BL-1046, PR #151): GHCR org drift made the pipeline pull a stale image and report success; now fails loudly and verifies the expected image tag before restarting the container.
-- **Werkzeug header case bug** in svix signature verification path (BL-1034).
-
-### Security
-- **Fail-closed Resend webhook verification** (BL-1034, PR #150): requests without a valid svix signature header are rejected with 401, never silently accepted. Previous behavior logged and accepted on missing secret.
-- **PostHog credentials** stored in 1Password (`op://visionvolve-prod/PostHog - leadgen-pipeline/*`), never in the repo.
-- **PostHog JSON error handling**: malformed responses return zeroed microsite metrics + `posthog_available: false` flag rather than propagating raw provider errors to the UI.
-
-### Fixed (pre-Sprint-24 items still Unreleased)
-- **Resend webhook tracking** (BL-1028): `email_send_log.opened_at` / `clicked_at` / `delivered_at` / `bounced_at` / `complained_at` / `unsubscribed_at` were being overwritten on duplicate webhook deliveries (or silently populated with wall-clock time rather than the Resend event time). All timestamp columns now follow **earliest-observed** semantics — a duplicate webhook never shifts a set timestamp. The handler also now parses the payload's top-level `created_at` so the persisted time matches the real engagement moment. Lookup is deterministic under pathological multi-tenant `resend_message_id` collisions (orders by `sent_at`). Unmatched `email_id` logs at WARNING level so production log dashboards surface the problem. Runbook added to `docs/ARCHITECTURE.md` for the "opens stay NULL" triage path.
-- **Preview Pollution in Campaign Analytics** (BL-1026): Added `kind` column to `email_send_log` (values: `production`/`preview`) — the `send-test` endpoint now tags rows `kind='preview'` and campaign analytics (`/api/campaigns/:id/analytics`, `/recipients`) filter preview rows out of sending/engagement/timeline rollups by default. Preview rows are retained for audit. Migration 062.
 - **Triage Estimate Rejected** (BL-228): Added `triage` to valid enrichment stages so the estimate endpoint accepts it
 - **QC Dispatch Broken** (BL-229): Added `qc` to direct stages with dispatch to `run_qc()`, added QC to `STAGE_PREDECESSORS` for reactive pipeline chaining
 - **Registry DAG 0 Items** (BL-230): Removed registry hard dependency on L1 — registry enrichment is independent

@@ -1,5 +1,4 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
@@ -76,7 +75,6 @@ export function ContactsPage() {
   const { namespace } = useParams<{ namespace: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const qc = useQueryClient()
 
   // Sidebar collapse state (persisted)
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorage('filters_sidebar_collapsed', false)
@@ -197,32 +195,17 @@ export function ContactsPage() {
     isLoading,
   } = useContacts(filters)
 
-  // Dedup memo safety net: even with the backend `id ASC` tiebreaker in place,
-  // a brief overlap can still leak through if pages overlap during refetch.
-  // Drop any contact whose id was already emitted by an earlier page. (BL-1116)
-  const allContacts = useMemo(() => {
-    if (!data?.pages) return []
-    const seen = new Set<string>()
-    const result: ContactListItem[] = []
-    for (const p of data.pages) {
-      for (const c of p.contacts) {
-        if (!c.id || seen.has(c.id)) continue
-        seen.add(c.id)
-        result.push(c)
-      }
-    }
-    return result
-  }, [data])
+  const allContacts = useMemo(
+    () => data?.pages.flatMap((p) => p.contacts) ?? [],
+    [data],
+  )
   const total = data?.pages[0]?.total ?? 0
 
   const handleFilterChange = useCallback((key: string, value: string) => {
     setSimpleFilter(key, value)
     setSelectedIds(new Set())
     setSelectionMode('explicit')
-    // Invalidate the cached pages so the table refetches from page 1 instead of
-    // rendering stale data accumulated under the old filter set. (BL-1116)
-    qc.invalidateQueries({ queryKey: ['contacts'] })
-  }, [setSimpleFilter, qc])
+  }, [setSimpleFilter])
 
   const handleSort = useCallback((field: string, dir: 'asc' | 'desc') => {
     setSortField(field)
