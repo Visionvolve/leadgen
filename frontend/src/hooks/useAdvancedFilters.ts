@@ -73,8 +73,6 @@ export const CONTACT_MULTI_KEYS = [
 export const COMPANY_MULTI_KEYS = [
   'enrichment_stage', 'tier',
   'industry', 'company_size', 'geo_region', 'revenue_range',
-  // BL-1108: market-facing organization type (migration 068)
-  'organization_type',
 ] as const
 
 export function useAdvancedFilters(storageKey: string, multiKeys: readonly string[] = CONTACT_MULTI_KEYS) {

@@ -2,7 +2,7 @@ import json
 import math
 import re
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, jsonify, request
 
 from ..auth import require_auth, require_role, resolve_tenant
 from ..display import (
@@ -25,8 +25,6 @@ from ..display import (
     display_tier,
 )
 from ..models import db
-from ..services.contact_helpers import write_field_change
-from ..utils.safe_lookup import is_valid_uuid
 
 companies_bp = Blueprint("companies", __name__)
 
@@ -275,10 +273,6 @@ def list_companies():
     _add_multi_filter(where, params, "company_size", "c.company_size", request)
     _add_multi_filter(where, params, "geo_region", "c.geo_region", request)
     _add_multi_filter(where, params, "revenue_range", "c.revenue_range", request)
-    # BL-1108: market-facing categorization filter (migration 068).
-    _add_multi_filter(
-        where, params, "organization_type", "c.organization_type", request
-    )
 
     # --- enrichment_stage filter (computed from status + enrichment tables) ---
     # Must match _compute_enrichment_stage() logic exactly.
@@ -431,10 +425,7 @@ def list_companies():
             ELSE 3 END"""
     else:
         sort_col = f"c.{sort}"
-    # Append `c.id ASC` as a unique tiebreaker so pagination stays stable when
-    # the primary sort column has tied/NULL values (otherwise duplicate rows can
-    # appear across page boundaries). See BL-1116.
-    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST, c.id ASC"
+    order = f"{sort_col} {'ASC' if sort_dir == 'asc' else 'DESC'} NULLS LAST"
 
     rows = db.session.execute(
         db.text(f"""
@@ -456,8 +447,7 @@ def list_companies():
                     SELECT 1 FROM contacts ct2
                     JOIN contact_enrichment ce ON ce.contact_id = ct2.id
                     WHERE ct2.company_id = c.id
-                ) THEN 1 ELSE 0 END AS has_person_enrichment,
-                c.organization_type
+                ) THEN 1 ELSE 0 END AS has_person_enrichment
             FROM companies c
             LEFT JOIN owners o ON c.owner_id = o.id
             LEFT JOIN company_enrichment_l1 l1 ON l1.company_id = c.id
@@ -515,7 +505,6 @@ def list_companies():
         has_l1 = bool(r[25])
         has_l2 = bool(r[26])
         has_person = bool(r[27])
-        organization_type = r[28]
         stage = _compute_enrichment_stage(raw_status, has_l1, has_l2, has_person)
         triage_score = float(r[8]) if r[8] is not None else None
         companies.append(
@@ -549,7 +538,6 @@ def list_companies():
                 "website_url": r[22],
                 "data_quality_score": int(r[23]) if r[23] is not None else None,
                 "last_enriched_at": r[24].isoformat() if r[24] else None,
-                "organization_type": organization_type,
             }
         )
 
@@ -713,9 +701,6 @@ def get_company(company_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    if not is_valid_uuid(company_id):
-        return jsonify({"error": "invalid_company_id"}), 400
-
     row = db.session.execute(
         db.text("""
             SELECT
@@ -733,8 +718,7 @@ def get_company(company_id):
                 c.created_at, c.updated_at,
                 o.name AS owner_name, b.name AS tag_name,
                 c.website_url, c.linkedin_url, c.logo_url,
-                c.last_enriched_at, c.data_quality_score,
-                c.organization_type
+                c.last_enriched_at, c.data_quality_score
             FROM companies c
             LEFT JOIN owners o ON c.owner_id = o.id
             LEFT JOIN tags b ON c.tag_id = b.id
@@ -784,7 +768,6 @@ def get_company(company_id):
         "logo_url": row[34],
         "last_enriched_at": _iso(row[35]),
         "data_quality_score": float(row[36]) if row[36] is not None else None,
-        "organization_type": row[37],
     }
 
     # L1 enrichment
@@ -1194,12 +1177,11 @@ def delete_company(company_id):
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
 
-    if not is_valid_uuid(company_id):
-        return jsonify({"error": "invalid_company_id"}), 400
-
     # Verify company belongs to tenant
     row = db.session.execute(
-        db.text("SELECT id FROM companies WHERE id = :id AND tenant_id = :tid"),
+        db.text(
+            "SELECT id FROM companies WHERE id = :id AND tenant_id = :tid"
+        ),
         {"id": company_id, "tid": str(tenant_id)},
     ).fetchone()
     if not row:
@@ -1217,7 +1199,9 @@ def delete_company(company_id):
 
     # Delete the company
     db.session.execute(
-        db.text("DELETE FROM companies WHERE id = :id AND tenant_id = :tid"),
+        db.text(
+            "DELETE FROM companies WHERE id = :id AND tenant_id = :tid"
+        ),
         params,
     )
     db.session.commit()
@@ -1231,9 +1215,6 @@ def update_company(company_id):
     tenant_id = resolve_tenant()
     if not tenant_id:
         return jsonify({"error": "Tenant not found"}), 404
-
-    if not is_valid_uuid(company_id):
-        return jsonify({"error": "invalid_company_id"}), 400
 
     body = request.get_json(silent=True) or {}
     allowed = {
@@ -1249,7 +1230,6 @@ def update_company(company_id):
         "domain",
         "website_url",
         "linkedin_url",
-        "organization_type",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     custom_fields_update = body.get("custom_fields")
@@ -1306,21 +1286,8 @@ def update_company(company_id):
             "churn",
         },
         "cohort": {"a", "b"},
-        # BL-1108: market-facing categorization (migration 068).
-        "organization_type": {
-            "b2b_agency",
-            "b2c_business",
-            "b2g_municipal",
-            "b2g_cultural",
-            "event_organizer",
-            "non_profit",
-            "other",
-        },
     }
     for field, value in fields.items():
-        # Allow explicit NULL to clear the field.
-        if value is None:
-            continue
         if (
             field in company_enum_validators
             and value not in company_enum_validators[field]
@@ -1333,48 +1300,15 @@ def update_company(company_id):
                 }
             ), 400
 
-    # Verify company belongs to tenant and pull current values for the audit diff.
-    existing = db.session.execute(
+    # Verify company belongs to tenant
+    row = db.session.execute(
         db.text(
-            """
-            SELECT
-                id,
-                custom_fields,
-                name,
-                domain,
-                website_url,
-                linkedin_url,
-                notes,
-                triage_notes,
-                status,
-                tier,
-                buying_stage,
-                engagement_status,
-                crm_status,
-                cohort
-            FROM companies
-            WHERE id = :id AND tenant_id = :t
-            """
+            "SELECT id, custom_fields FROM companies WHERE id = :id AND tenant_id = :t"
         ),
         {"id": company_id, "t": tenant_id},
     ).fetchone()
-    if not existing:
+    if not row:
         return jsonify({"error": "Company not found"}), 404
-
-    existing_map = {
-        "name": existing[2],
-        "domain": existing[3],
-        "website_url": existing[4],
-        "linkedin_url": existing[5],
-        "notes": existing[6],
-        "triage_notes": existing[7],
-        "status": existing[8],
-        "tier": existing[9],
-        "buying_stage": existing[10],
-        "engagement_status": existing[11],
-        "crm_status": existing[12],
-        "cohort": existing[13],
-    }
 
     set_parts = []
     params = {"id": company_id}
@@ -1383,7 +1317,7 @@ def update_company(company_id):
         params[k] = v
 
     if custom_fields_update and isinstance(custom_fields_update, dict):
-        existing_cf = _parse_jsonb(existing[1])
+        existing_cf = _parse_jsonb(row[1])
         existing_cf.update(custom_fields_update)
         set_parts.append("custom_fields = :custom_fields")
         params["custom_fields"] = json.dumps(existing_cf)
@@ -1392,23 +1326,6 @@ def update_company(company_id):
         db.text(f"UPDATE companies SET {', '.join(set_parts)} WHERE id = :id"),
         params,
     )
-
-    # Audit log: one row per actually-changed field.
-    changed_by = getattr(getattr(g, "current_user", None), "id", None)
-    for field_name, new_value in fields.items():
-        old_value = existing_map.get(field_name)
-        if old_value == new_value:
-            continue
-        write_field_change(
-            tenant_id=tenant_id,
-            entity_type="company",
-            entity_id=company_id,
-            field_name=field_name,
-            old_value=old_value,
-            new_value=new_value,
-            changed_by=changed_by,
-        )
-
     db.session.commit()
 
     return jsonify({"ok": True})
@@ -1556,7 +1473,7 @@ def triage_queue():
             LEFT JOIN owners o ON c.owner_id = o.id
             LEFT JOIN company_enrichment_l1 l1 ON l1.company_id = c.id
             WHERE {where_clause}
-            ORDER BY c.triage_score DESC NULLS LAST, c.name ASC, c.id ASC
+            ORDER BY c.triage_score DESC NULLS LAST, c.name ASC
             LIMIT :limit OFFSET :offset
         """),
         {**params, "limit": page_size, "offset": offset},

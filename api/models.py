@@ -205,11 +205,6 @@ class Company(db.Model):
     segment = db.Column(
         db.String(50)
     )  # obec, spolek, agentura, skola, korporace, dach_agentura
-    # Market-facing categorization for outreach segmentation (migration 068, BL-1108).
-    # Orthogonal to business_model + segment. Allowed values validated in API layer:
-    # b2b_agency, b2c_business, b2g_municipal, b2g_cultural, event_organizer,
-    # non_profit, other.
-    organization_type = db.Column(db.String(40))
     last_enriched_at = db.Column(db.DateTime(timezone=True))
     data_quality_score = db.Column(db.SmallInteger)
     import_job_id = db.Column(UUID(as_uuid=False), db.ForeignKey("import_jobs.id"))
@@ -702,19 +697,6 @@ class Contact(db.Model):
     error = db.Column(db.Text)
     custom_fields = db.Column(JSONB, server_default=db.text("'{}'::jsonb"))
     last_enriched_at = db.Column(db.DateTime(timezone=True))
-    # Mailing suppression (migration 065 — BL-1103/BL-1105 Unsubscribe Loop).
-    # Flipped to TRUE when the contact unsubscribes, hard-bounces, or files a
-    # spam complaint. The send-side query in api/services/send_service.py
-    # filters Contact.is_suppressed.is_(False) so suppressed contacts never
-    # receive another campaign email.
-    is_suppressed = db.Column(
-        db.Boolean,
-        nullable=False,
-        default=False,
-        server_default=db.text("FALSE"),
-    )
-    suppressed_at = db.Column(db.DateTime(timezone=True))
-    suppression_reason = db.Column(db.Text)
     employment_verified_at = db.Column(db.DateTime(timezone=True))
     employment_status = db.Column(db.Text)
     linkedin_activity_level = db.Column(db.Text, default="unknown")
@@ -730,38 +712,8 @@ class Contact(db.Model):
     last_collaboration_at = db.Column(db.DateTime(timezone=True))
     # Address style: tykat (informal) or vykat (formal) — migration 057
     address_style = db.Column(db.Text, default="vykat")
-    # Editable salutation with Czech vocative auto-derive — migration 067 (BL-1106)
-    salutation = db.Column(db.Text)
-    salutation_overridden = db.Column(
-        db.Boolean, nullable=False, server_default=db.text("false"), default=False
-    )
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
-
-
-class ContactFieldChange(db.Model):
-    """Audit log row for an inline-edit change to a contact or company field.
-
-    Written by the PATCH /api/contacts/<id> and PATCH /api/companies/<id>
-    endpoints — one row per diffed field. See migration 066 (BL-1107).
-    """
-
-    __tablename__ = "contact_field_changes"
-
-    id = db.Column(
-        UUID(as_uuid=False),
-        primary_key=True,
-        server_default=db.text("gen_random_uuid()"),
-    )
-    tenant_id = db.Column(UUID(as_uuid=False), nullable=False)
-    entity_type = db.Column(db.Text, nullable=False)  # 'contact' | 'company'
-    entity_id = db.Column(UUID(as_uuid=False), nullable=False)
-    field_name = db.Column(db.Text, nullable=False)
-    old_value = db.Column(db.Text)
-    new_value = db.Column(db.Text)
-    changed_by = db.Column(UUID(as_uuid=False))  # users.id; nullable for system writes
-    changed_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
-    source = db.Column(db.Text, nullable=False, default="user_patch")
 
 
 class ImportJob(db.Model):
@@ -1859,36 +1811,6 @@ class EmailSendLog(db.Model):
     # set when status transitions to "unsubscribed".
     unsubscribed_at = db.Column(db.DateTime(timezone=True))
     error = db.Column(db.Text)
-    # BL-1029 (migration 061): When an earlier failed send attempt is followed
-    # by a later successful send to the same message, the earlier row is
-    # marked superseded. Default analytics queries filter
-    # `superseded_at IS NULL` so audit counts don't double-count retries.
-    # `superseded_by` points to the row that won (the successful retry).
-    superseded_at = db.Column(db.DateTime(timezone=True))
-    superseded_by = db.Column(
-        UUID(as_uuid=False),
-        db.ForeignKey("email_send_log.id", ondelete="SET NULL"),
-    )
-    # BL-1026 (migration 062): distinguishes preview/test sends from real
-    # campaign sends. Defaults to 'production'; the `send-test` endpoint and
-    # any future `preview_to` helper tag their rows `'preview'`. Default
-    # analytics queries filter on `kind != 'preview'` so previews cannot
-    # pollute open/click/reply rates. Preview rows are retained for audit.
-    kind = db.Column(
-        db.String(20),
-        nullable=False,
-        default="production",
-        server_default=db.text("'production'"),
-    )
-    # BL-1110 (migration 069): multilingual mailing foundation.
-    # ``template_language`` records which language variant of a templated
-    # campaign was rendered for this send (``cs`` for the production
-    # Czech body, ``en`` for English, etc.). ``template_language_fallback``
-    # is TRUE iff the contact's requested language variant was not
-    # registered and the template registry fell back to the default
-    # language (``cs``). Both are NULL for non-templated sends.
-    template_language = db.Column(db.String(8))
-    template_language_fallback = db.Column(db.Boolean)
     created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
 
     def to_dict(self):
@@ -1898,7 +1820,6 @@ class EmailSendLog(db.Model):
             "message_id": str(self.message_id),
             "resend_message_id": self.resend_message_id,
             "status": self.status,
-            "kind": self.kind,
             "from_email": self.from_email,
             "to_email": self.to_email,
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
@@ -1919,12 +1840,6 @@ class EmailSendLog(db.Model):
             if self.unsubscribed_at
             else None,
             "error": self.error,
-            "superseded_at": self.superseded_at.isoformat()
-            if self.superseded_at
-            else None,
-            "superseded_by": str(self.superseded_by) if self.superseded_by else None,
-            "template_language": self.template_language,
-            "template_language_fallback": self.template_language_fallback,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -2087,233 +2002,3 @@ class MessageFeedback(db.Model):
             "edit_reason_text": self.edit_reason_text,
             "created_at": (self.created_at.isoformat() if self.created_at else None),
         }
-
-
-class GmailConnection(db.Model):
-    """Per-tenant Gmail connection used by the inbound-mail poller.
-
-    Stores encrypted OAuth tokens for the `gmail.readonly` scope. The inbound
-    polling worker (follow-up sub-item BL-1044-b) will read tokens, fetch new
-    messages, and feed them into reply-rate attribution. Outbound send /
-    Google Contacts flows continue to use the generic `OAuthConnection`.
-    """
-
-    __tablename__ = "gmail_connections"
-
-    id = db.Column(
-        UUID(as_uuid=False),
-        primary_key=True,
-        server_default=db.text("gen_random_uuid()"),
-    )
-    tenant_id = db.Column(
-        UUID(as_uuid=False),
-        db.ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    user_id = db.Column(
-        UUID(as_uuid=False),
-        db.ForeignKey("users.id"),
-        nullable=False,
-    )
-    email_address = db.Column(db.Text, nullable=False)
-    access_token_encrypted = db.Column(db.LargeBinary, nullable=False)
-    refresh_token_encrypted = db.Column(db.LargeBinary, nullable=False)
-    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
-    scopes = db.Column(ARRAY(db.Text), nullable=False, default=list)
-    created_at = db.Column(
-        db.DateTime(timezone=True), nullable=False, server_default=db.text("now()")
-    )
-    last_synced_at = db.Column(db.DateTime(timezone=True))
-    disconnected_at = db.Column(db.DateTime(timezone=True))
-
-    __table_args__ = (
-        db.UniqueConstraint(
-            "tenant_id",
-            "email_address",
-            name="uq_gmail_connections_tenant_email",
-        ),
-        db.Index("idx_gmail_connections_tenant", "tenant_id"),
-    )
-
-    def to_dict(self):
-        return {
-            "id": str(self.id),
-            "tenant_id": str(self.tenant_id),
-            "user_id": str(self.user_id),
-            "email_address": self.email_address,
-            "scopes": self.scopes if isinstance(self.scopes, list) else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "last_synced_at": (
-                self.last_synced_at.isoformat() if self.last_synced_at else None
-            ),
-            "disconnected_at": (
-                self.disconnected_at.isoformat() if self.disconnected_at else None
-            ),
-            "connected": self.disconnected_at is None,
-        }
-
-
-class OAuthStateNonce(db.Model):
-    """Single-use nonce store for OAuth `state` JWT replay protection.
-
-    Issued at `connect` time and deleted at `callback` time. A second
-    redemption of the same state finds no row and is rejected as already-used.
-    See migration 064_oauth_state_nonces.sql.
-    """
-
-    __tablename__ = "oauth_state_nonces"
-
-    nonce = db.Column(db.String(64), primary_key=True)
-    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
-    created_at = db.Column(
-        db.DateTime(timezone=True), nullable=False, server_default=db.text("now()")
-    )
-
-    __table_args__ = (db.Index("idx_oauth_state_nonces_expires", "expires_at"),)
-
-
-class RefToken(db.Model):
-    """Per-contact ref token for unique catalog tracking links (BL-1104).
-
-    Issued from the leadgen dashboard's Contact-detail "Generate catalog
-    link" buttons. Each token is bound to a single (contact, variant) pair
-    and powers two flows on the UA microsite:
-
-    * preferences lookup -- the microsite asks leadgen "what is this token
-      for?" and gets back (variant, contact_first_name, ...). The variant
-      decides whether prices are rendered.
-    * visit recording -- every page load records the visit (visit_count
-      bump + first/last_visited_at + an Activity row).
-
-    See migration 070_ref_tokens.sql for the schema.
-    """
-
-    __tablename__ = "ref_tokens"
-
-    token = db.Column(db.String(32), primary_key=True)
-    tenant_id = db.Column(UUID(as_uuid=False), nullable=False)
-    contact_id = db.Column(UUID(as_uuid=False), nullable=False)
-    variant = db.Column(
-        db.Text,
-        nullable=False,
-        server_default=db.text("'with_prices'"),
-        default="with_prices",
-    )
-    created_at = db.Column(
-        db.DateTime(timezone=True), nullable=False, server_default=db.text("now()")
-    )
-    created_by = db.Column(UUID(as_uuid=False))
-    expires_at = db.Column(db.DateTime(timezone=True))
-    notes = db.Column(db.Text)
-    visit_count = db.Column(
-        db.Integer, nullable=False, server_default=db.text("0"), default=0
-    )
-    first_visited_at = db.Column(db.DateTime(timezone=True))
-    last_visited_at = db.Column(db.DateTime(timezone=True))
-
-    __table_args__ = (db.Index("idx_ref_tokens_contact", "tenant_id", "contact_id"),)
-
-    def is_expired(self, now=None):
-        from datetime import datetime, timezone
-
-        if self.expires_at is None:
-            return False
-        if now is None:
-            now = datetime.now(timezone.utc)
-        # SQLite returns naive datetimes; normalise.
-        exp = self.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        return exp < now
-
-    def to_dict(self):
-        return {
-            "token": self.token,
-            "tenant_id": self.tenant_id,
-            "contact_id": self.contact_id,
-            "variant": self.variant,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "created_by": self.created_by,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "notes": self.notes,
-            "visit_count": self.visit_count,
-            "first_visited_at": (
-                self.first_visited_at.isoformat() if self.first_visited_at else None
-            ),
-            "last_visited_at": (
-                self.last_visited_at.isoformat() if self.last_visited_at else None
-            ),
-        }
-
-
-class SmartList(db.Model):
-    """Saved audience filter for picking campaign targets.
-
-    A smart list is a tenant-scoped, named JSON filter spec over either
-    contacts or companies. Operators define the filter once (e.g. "CZ B2B
-    agencies that are cold") and re-run on demand. The ``filters`` JSON
-    document is interpreted by ``api/routes/smart_list_routes.py``; the
-    filter keys mirror the existing list endpoints (``/api/companies`` and
-    ``/api/contacts``).
-
-    See migration 071_saved_smart_lists.sql; BL-1111 / BL-1112 / BL-1113
-    (v25 Phase 10 — Campaign Database Foundations).
-    """
-
-    __tablename__ = "smart_lists"
-
-    id = db.Column(
-        UUID(as_uuid=False),
-        primary_key=True,
-        server_default=db.text("uuid_generate_v4()"),
-    )
-    tenant_id = db.Column(
-        UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False, index=True
-    )
-    name = db.Column(db.Text, nullable=False)
-    description = db.Column(db.Text)
-    # 'contact' or 'company' — controls which list endpoint backs the run.
-    target = db.Column(db.Text, nullable=False)
-    # AND-of-conditions filter spec; keys match list endpoint query params.
-    filters = db.Column(JSONB, nullable=False, server_default=db.text("'{}'::jsonb"))
-    created_by = db.Column(UUID(as_uuid=False), db.ForeignKey("users.id"))
-    created_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
-    updated_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
-    last_run_at = db.Column(db.DateTime(timezone=True))
-    last_run_count = db.Column(db.Integer)
-
-    __table_args__ = (
-        # Mirrors the case-insensitive uniqueness enforced by migration 071's
-        # ``UNIQUE INDEX idx_smart_lists_tenant_name ON smart_lists(tenant_id,
-        # LOWER(name))``. SQLAlchemy can't express the LOWER() expression in a
-        # portable UniqueConstraint, so we rely on the migration for the
-        # case-insensitive variant in PostgreSQL and on this case-sensitive
-        # constraint for SQLite (test-time) parity.
-        db.UniqueConstraint("tenant_id", "name", name="uq_smart_lists_tenant_name"),
-    )
-
-    def to_dict(self, include_filters=True):
-        out = {
-            "id": str(self.id),
-            "tenant_id": str(self.tenant_id),
-            "name": self.name,
-            "description": self.description,
-            "target": self.target,
-            "created_by": str(self.created_by) if self.created_by else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
-            "last_run_count": self.last_run_count,
-        }
-        if include_filters:
-            import json as _json
-
-            raw = self.filters
-            if isinstance(raw, str):
-                try:
-                    raw = _json.loads(raw) if raw else {}
-                except (TypeError, ValueError):
-                    raw = {}
-            out["filters"] = raw or {}
-        return out

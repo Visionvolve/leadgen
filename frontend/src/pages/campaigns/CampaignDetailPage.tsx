@@ -34,7 +34,7 @@ const TAB_IDS = ['contacts', 'steps', 'generation', 'review', 'outreach', 'analy
 type TabId = (typeof TAB_IDS)[number]
 
 export function CampaignDetailPage() {
-  const { namespace, campaignId } = useParams<{ namespace: string; campaignId: string }>()
+  const { campaignId } = useParams<{ campaignId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { toast } = useToast()
@@ -205,19 +205,6 @@ export function CampaignDetailPage() {
             </span>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              onClick={() => navigate(`/${namespace}/echo?campaign=${campaign.id}`)}
-              className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded bg-transparent text-accent-cyan border border-accent-cyan/40 cursor-pointer hover:bg-accent-cyan/10 hover:border-accent-cyan transition-colors"
-              title="View analytics for this campaign"
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 13h12" />
-                <path d="M4 13V9" />
-                <path d="M8 13V5" />
-                <path d="M12 13v-6" />
-              </svg>
-              View analytics →
-            </button>
             {canSaveAsTemplate && (
               <button
                 onClick={() => {

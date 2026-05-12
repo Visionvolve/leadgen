@@ -16,11 +16,6 @@ def create_app():
     db.init_app(app)
     register_blueprints(app)
 
-    # Wire CLI commands (`flask reconcile-resend`, etc.)
-    from .cli import register_commands
-
-    register_commands(app)
-
     # Register agent tools with the tool registry
     from .services.analyze_tools import ANALYZE_TOOLS
     from .services.campaign_tools import CAMPAIGN_TOOLS

@@ -96,18 +96,6 @@ export const BUSINESS_MODEL_DISPLAY: Record<string, string> = {
   hybrid: 'Hybrid',
 }
 
-// BL-1108: market-facing organization type (migration 068).
-// Drives outreach segmentation; orthogonal to business_model/segment/industry.
-export const ORGANIZATION_TYPE_DISPLAY: Record<string, string> = {
-  b2b_agency: 'B2B Agency',
-  b2c_business: 'B2C / End Client',
-  b2g_municipal: 'B2G — Municipal / Regional',
-  b2g_cultural: 'Cultural Institution',
-  event_organizer: 'Event Organizer',
-  non_profit: 'Non-Profit',
-  other: 'Other',
-}
-
 export const COMPANY_SIZE_DISPLAY: Record<string, string> = {
   micro: 'Micro',
   startup: 'Startup',
@@ -273,7 +261,6 @@ export const ENGAGEMENT_STATUS_REVERSE = buildReverse(ENGAGEMENT_STATUS_DISPLAY)
 export const CRM_STATUS_REVERSE = buildReverse(CRM_STATUS_DISPLAY)
 export const ADDRESS_STYLE_REVERSE = buildReverse(ADDRESS_STYLE_DISPLAY)
 export const COHORT_REVERSE = buildReverse(COHORT_DISPLAY)
-export const ORGANIZATION_TYPE_REVERSE = buildReverse(ORGANIZATION_TYPE_DISPLAY)
 
 /** Look up display value from a map, returning raw value as fallback. */
 export function displayValue(map: Record<string, string>, v: string | null | undefined): string {

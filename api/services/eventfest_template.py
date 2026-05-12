@@ -1,11 +1,7 @@
 """EventFest HTML email template rendering.
 
 Renders the v4-approved branded EventFest invitation email with Czech
-vocative greeting and per-contact microsite invite links. The Czech (cs)
-variant is the production-tested template used since the LCC partnership
-launch; the English (en) variant is a literal translation registered
-alongside CS so contacts with ``language='en'`` receive the EN copy
-automatically (see ``api.services.template_registry``).
+vocative greeting and per-contact microsite invite links.
 
 The template follows Hana's v4 approved design:
 - Deep-blue header band with circular logo + "LOSERS CIRQUE" wordmark
@@ -33,49 +29,29 @@ based on ``contact.address_style`` (``vykat`` | ``tykat``):
 - ``{{you_look_verb}}`` — 2nd-person verb "to look for" (hledáte | hledáš).
 - ``{{you_can_verb}}`` — 2nd-person verb "can" (můžete | můžeš).
 - ``{{stop_by_imper}}`` — imperative "stop by" (Zastavte se | Zastav se).
-- ``{{unsubscribe_url}}`` — per-contact one-click unsubscribe URL (BL-1103).
 
 If future copy additions introduce other Vy/Vás/Váš/Vám forms, add a new
 placeholder here AND populate it in ``send_service._build_template_variables``.
 
-Legacy usage (still supported)::
+Usage::
 
     from api.services.eventfest_template import render_eventfest_email
 
     subject, html, plain = render_eventfest_email(
         "Jano", "https://demo.visionvolve.com/invite/abc123"
     )
-
-Preferred usage via the registry::
-
-    from api.services import template_registry
-
-    payload = template_registry.render(
-        "eventfest_invitation",
-        contact.language,
-        vocative_name="Jano",
-        microsite_link="https://demo.visionvolve.com/invite/abc123",
-    )
 """
 
 from __future__ import annotations
-
-from .template_registry import register
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-EVENTFEST_TEMPLATE_KEY = "eventfest_invitation"
-
 EVENTFEST_SUBJECT = "Pozvánka na EVENT FEST | Losers Cirque Company"
-"""Czech subject line (production)."""
-
-EVENTFEST_SUBJECT_EN = "Invitation to EVENT FEST | Losers Cirque Company"
-"""English subject line."""
 
 # ---------------------------------------------------------------------------
-# Czech HTML template (inline CSS for email-client compatibility — v4 approved)
+# HTML template (inline CSS for email-client compatibility — v4 approved)
 #
 # Hardcoded assets:
 # - Logo:     https://booking.loserscirque.cz/images/lcc-logo-2025.png
@@ -98,7 +74,7 @@ EVENTFEST_HTML_TEMPLATE = """\
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
   <meta name="supported-color-schemes" content="light dark">
-  <title>Pozvánka na EVENT FEST | Losers Cirque Company</title>
+  <title>Pozv\u00e1nka na EVENT FEST | Losers Cirque Company</title>
   <!--[if mso]>
   <noscript>
     <xml>
@@ -128,7 +104,7 @@ EVENTFEST_HTML_TEMPLATE = """\
 </head>
 <body style="margin:0;padding:0;background:#f4f4f7;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0A0066;max-width:600px;">
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f4f7;">
-  Čtyři vystoupení pro Vaši sezónu 2026 — Complicité, Glamour in Red, Aerial Hoop a Onyx.
+  \u010cty\u0159i vystoupen\u00ed pro Va\u0161i sez\u00f3nu 2026 \u2014 Complicit\u00e9, Glamour in Red, Aerial Hoop a Onyx.
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f7;">
@@ -169,20 +145,20 @@ EVENTFEST_HTML_TEMPLATE = """\
         <tr>
           <td class="px-32" style="padding:40px 32px 8px 32px;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
             <h1 class="hero-h1" style="margin:0 0 16px 0;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:30px;line-height:1.15;font-weight:800;color:#0A0066;letter-spacing:-0.01em;">
-              Hezký den, {{vocative_name}},
+              Hezk\u00fd den, {{vocative_name}},
             </h1>
             <p style="margin:0 0 14px 0;font-size:16px;line-height:1.6;color:#222;">
-              {{you_look_verb}} zajímavý opening pro konferenci, gala večeři či společenské setkání?
+              {{you_look_verb}} zaj\u00edmav\u00fd opening pro konferenci, gala ve\u010de\u0159i \u010di spole\u010densk\u00e9 setk\u00e1n\u00ed?
             </p>
             <p style="margin:0 0 14px 0;font-size:16px;line-height:1.6;color:#222;">
-              Losers Cirque Company má pro {{you_acc}} několik novinek, které si {{you_can_verb}} prohlédnout v naší aktualizované <a href="{{microsite_link}}" style="color:#1A0DAB;text-decoration:underline;">nabídce vystoupení</a>.
+              Losers Cirque Company m\u00e1 pro {{you_acc}} n\u011bkolik novinek, kter\u00e9 si {{you_can_verb}} prohl\u00e9dnout v\u00a0na\u0161\u00ed aktualizovan\u00e9 <a href="{{microsite_link}}" style="color:#1A0DAB;text-decoration:underline;">nab\u00eddce vystoupen\u00ed</a>.
             </p>
             <p style="margin:0 0 14px 0;font-size:16px;line-height:1.6;color:#222;">
-              Některá z nich {{you_can_verb}} vidět i naživo v rámci <strong style="color:#0A0066;">EVENT FESTu</strong> ve středu <strong style="color:#0A0066;">22.4.2026</strong> na pražském Výstavišti Letňany.
+              N\u011bkter\u00e1 z\u00a0nich {{you_can_verb}} vid\u011bt i\u00a0na\u017eivo v\u00a0r\u00e1mci <strong style="color:#0A0066;">EVENT FESTu</strong> ve st\u0159edu <strong style="color:#0A0066;">22.4.2026</strong> na pra\u017esk\u00e9m V\u00fdstavi\u0161ti Let\u0148any.
             </p>
-            <ul style="margin:0 0 16px 0; padding-left:20px;font-size:16px;line-height:1.6;color:#222;"><li style="margin-bottom:8px">Od 12:00 hodin na Expo stage — <strong style="color:#0A0066;">Hat Jazz</strong></li><li>Od 13:00 hodin v prostoru Experience show — <strong style="color:#0A0066;">Handstand</strong></li></ul>
+            <ul style="margin:0 0 16px 0; padding-left:20px;font-size:16px;line-height:1.6;color:#222;"><li style="margin-bottom:8px">Od 12:00 hodin na Expo stage \u2014 <strong style="color:#0A0066;">Hat Jazz</strong></li><li>Od 13:00 hodin v\u00a0prostoru Experience show \u2014 <strong style="color:#0A0066;">Handstand</strong></li></ul>
             <p style="margin:0 0 28px 0;font-size:16px;line-height:1.6;color:#222;">
-              {{stop_by_imper}} i na našem stánku ve vstupní hale, budeme se na {{you_acc}} těšit.
+              {{stop_by_imper}} i\u00a0na na\u0161em st\u00e1nku ve vstupn\u00ed hale, budeme se na {{you_acc}} t\u011b\u0161it.
             </p>
           </td>
         </tr>
@@ -191,7 +167,7 @@ EVENTFEST_HTML_TEMPLATE = """\
         <tr>
           <td class="px-32" style="padding:0 32px 20px 32px;">
             <h2 style="margin:0;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;line-height:1.25;font-weight:700;color:#0A0066;">
-              Vybrali jsme pro {{you_acc}} čtyři vystoupení, která stojí za pozornost
+              Vybrali jsme pro {{you_acc}} \u010dty\u0159i vystoupen\u00ed, kter\u00e1 stoj\u00ed za pozornost
             </h2>
             <div style="height:3px;width:48px;background:#FF0000;margin:10px 0 0 0;line-height:3px;font-size:0;">&nbsp;</div>
           </td>
@@ -206,12 +182,12 @@ EVENTFEST_HTML_TEMPLATE = """\
                 <td class="card-cell" width="50%" valign="top" style="padding:8px 8px 16px 0;">
                   <a href="{{microsite_link}}" style="text-decoration:none;color:#0A0066;display:block;">
                     <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-2-768x512.jpg"
-                         alt="Complicité — skupinová akrobacie"
+                         alt="Complicit\u00e9 \u2014 skupinov\u00e1 akrobacie"
                          width="260"
                          style="display:block;border:0;width:100%;max-width:260px;height:auto;border-radius:6px;background:#e6e6f0;">
                     <div style="padding:12px 2px 0 2px;">
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Complicité</div>
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">Pět akrobatů, síla a důvěra ve vizuálně strhující choreografii.</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Complicit\u00e9</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">P\u011bt akrobat\u016f, s\u00edla a d\u016fv\u011bra ve vizu\u00e1ln\u011b strhuj\u00edc\u00ed choreografii.</div>
                     </div>
                   </a>
                 </td>
@@ -219,12 +195,12 @@ EVENTFEST_HTML_TEMPLATE = """\
                 <td class="card-cell" width="50%" valign="top" style="padding:8px 0 16px 8px;">
                   <a href="{{microsite_link}}" style="text-decoration:none;color:#0A0066;display:block;">
                     <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-17-768x512.jpg"
-                         alt="Onyx — skupinová akrobacie"
+                         alt="Onyx \u2014 skupinov\u00e1 akrobacie"
                          width="260"
                          style="display:block;border:0;width:100%;max-width:260px;height:auto;border-radius:6px;background:#e6e6f0;">
                     <div style="padding:12px 2px 0 2px;">
                       <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Onyx</div>
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">Párová i skupinová akrobacie s handstandem — přesnost a síla v každém gestu.</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">P\u00e1rov\u00e1 i skupinov\u00e1 akrobacie s handstandem \u2014 p\u0159esnost a s\u00edla v\u00a0ka\u017ed\u00e9m gestu.</div>
                     </div>
                   </a>
                 </td>
@@ -242,12 +218,12 @@ EVENTFEST_HTML_TEMPLATE = """\
                 <td class="card-cell" width="50%" valign="top" style="padding:8px 8px 16px 0;">
                   <a href="{{microsite_link}}" style="text-decoration:none;color:#0A0066;display:block;">
                     <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/40_1-768x512.jpg"
-                         alt="Aerial Hoop — Armagedon"
+                         alt="Aerial Hoop \u2014 Armagedon"
                          width="260"
                          style="display:block;border:0;width:100%;max-width:260px;height:auto;border-radius:6px;background:#e6e6f0;">
                     <div style="padding:12px 2px 0 2px;">
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Aerial Hoop — Armagedon</div>
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">Sólo na závěsném kruhu — poetické a atraktivní, ideální pro gala večery.</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Aerial Hoop \u2014 Armagedon</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">S\u00f3lo na z\u00e1v\u011bsn\u00e9m kruhu \u2014 poetick\u00e9 a atraktivn\u00ed, ide\u00e1ln\u00ed pro gala ve\u010dery.</div>
                     </div>
                   </a>
                 </td>
@@ -255,12 +231,12 @@ EVENTFEST_HTML_TEMPLATE = """\
                 <td class="card-cell" width="50%" valign="top" style="padding:8px 0 16px 8px;">
                   <a href="{{microsite_link}}" style="text-decoration:none;color:#0A0066;display:block;">
                     <img class="card-img" src="https://booking.loserscirque.cz/api/media/file/01-11-768x512.jpg"
-                         alt="Glamour in Red — animační program"
+                         alt="Glamour in Red \u2014 anima\u010dn\u00ed program"
                          width="260"
                          style="display:block;border:0;width:100%;max-width:260px;height:auto;border-radius:6px;background:#e6e6f0;">
                     <div style="padding:12px 2px 0 2px;">
                       <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;line-height:1.2;font-weight:700;color:#0A0066;">Glamour in Red</div>
-                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">Živé sochy v červené — smyslná, elegantní animace pro Váš prostor.</div>
+                      <div style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#555;margin-top:4px;">\u017div\u00e9 sochy v \u010derven\u00e9 \u2014 smysln\u00e1, elegantn\u00ed animace pro V\u00e1\u0161 prostor.</div>
                     </div>
                   </a>
                 </td>
@@ -275,13 +251,13 @@ EVENTFEST_HTML_TEMPLATE = """\
             <!--[if mso]>
             <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{microsite_link}}" style="height:52px;v-text-anchor:middle;width:320px;" arcsize="10%" stroke="f" fillcolor="#FF0000">
               <w:anchorlock/>
-              <center style="color:#FFFFFF;font-family:Arial,sans-serif;font-size:16px;font-weight:700;">Prohlédněte si celou nabídku</center>
+              <center style="color:#FFFFFF;font-family:Arial,sans-serif;font-size:16px;font-weight:700;">Prohl\u00e9dn\u011bte si celou nab\u00eddku</center>
             </v:roundrect>
             <![endif]-->
             <!--[if !mso]><!-- -->
             <a class="cta-btn" href="{{microsite_link}}"
                style="display:inline-block;background:#FF0000;color:#FFFFFF;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-weight:700;font-size:16px;letter-spacing:0.02em;text-decoration:none;padding:16px 32px;border-radius:6px;mso-hide:all;">
-              Prohlédněte si celou nabídku →
+              Prohl\u00e9dn\u011bte si celou nab\u00eddku \u2192
             </a>
             <!--<![endif]-->
           </td>
@@ -307,7 +283,7 @@ EVENTFEST_HTML_TEMPLATE = """\
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
               <tr>
                 <td style="font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-                  <div style="font-size:16px;font-weight:700;color:#0A0066;line-height:1.3;">Hana Faková</div>
+                  <div style="font-size:16px;font-weight:700;color:#0A0066;line-height:1.3;">Hana Fakov\u00e1</div>
                   <div style="font-size:14px;font-weight:400;color:#555555;line-height:1.4;margin-top:2px;">Event Producer</div>
                   <div style="font-size:13px;font-weight:500;color:#0A0066;line-height:1.5;margin-top:8px;">United Arts s.r.o. | Losers Cirque Company | Divadlo BRAVO!</div>
                   <div style="font-size:13px;font-weight:400;color:#333333;line-height:1.6;margin-top:12px;">
@@ -329,10 +305,10 @@ EVENTFEST_HTML_TEMPLATE = """\
         <tr>
           <td style="background:#f4f4f7;padding:20px 32px;border-top:1px solid #e6e6ec;">
             <p style="margin:0 0 4px 0;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:1.5;color:#888;text-align:center;">
-              United Arts s.r.o. · Praha · Česká republika
+              United Arts s.r.o. \u00b7 Praha \u00b7 \u010cesk\u00e1 republika
             </p>
             <p style="margin:0;font-family:Barlow,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:1.5;color:#888;text-align:center;">
-              Tento e-mail jste obdržel jako partner Losers Cirque Company pro sezónu 2026. Pokud si nepřejete další zprávy, <a href="{{unsubscribe_url}}" style="color:#888;text-decoration:underline;">odhlašte se</a>.
+              Tento e-mail jste obdr\u017eel jako partner Losers Cirque Company pro sez\u00f3nu 2026. Pokud si nep\u0159ejete dal\u0161\u00ed zpr\u00e1vy, <a href="mailto:hana@unitedarts.cz?subject=unsubscribe" style="color:#888;text-decoration:underline;">odhla\u0161te se</a>.
             </p>
           </td>
         </tr>
@@ -345,132 +321,46 @@ EVENTFEST_HTML_TEMPLATE = """\
 </html>"""
 
 # ---------------------------------------------------------------------------
-# Czech plain text version (richer than before — mirrors HTML structure)
+# Plain text version (richer than before — mirrors HTML structure)
 # ---------------------------------------------------------------------------
 
 EVENTFEST_PLAIN_TEMPLATE = """\
 LOSERS CIRQUE COMPANY
 ---------------------
 
-Hezký den, {{vocative_name}},
+Hezk\u00fd den, {{vocative_name}},
 
-{{you_look_verb}} zajímavý opening pro konferenci, gala večeři či společenské setkání?
+{{you_look_verb}} zaj\u00edmav\u00fd opening pro konferenci, gala ve\u010de\u0159i \u010di spole\u010densk\u00e9 setk\u00e1n\u00ed?
 
-Losers Cirque Company má pro {{you_acc}} několik novinek, které si {{you_can_verb}} prohlédnout v naší aktualizované nabídce vystoupení ({{microsite_link}}).
+Losers Cirque Company m\u00e1 pro {{you_acc}} n\u011bkolik novinek, kter\u00e9 si {{you_can_verb}} prohl\u00e9dnout v na\u0161\u00ed aktualizovan\u00e9 nab\u00eddce vystoupen\u00ed ({{microsite_link}}).
 
-Některá z nich {{you_can_verb}} vidět i naživo v rámci EVENT FESTu ve středu 22.4.2026 na pražském Výstavišti Letňany.
+N\u011bkter\u00e1 z nich {{you_can_verb}} vid\u011bt i na\u017eivo v r\u00e1mci EVENT FESTu ve st\u0159edu 22.4.2026 na pra\u017esk\u00e9m V\u00fdstavi\u0161ti Let\u0148any.
 
-• Od 12:00 hodin na Expo stage — Hat Jazz
-• Od 13:00 hodin v prostoru Experience show — Handstand
+\u2022 Od 12:00 hodin na Expo stage \u2014 Hat Jazz
+\u2022 Od 13:00 hodin v prostoru Experience show \u2014 Handstand
 
-{{stop_by_imper}} i na našem stánku ve vstupní hale, budeme se na {{you_acc}} těšit.
+{{stop_by_imper}} i na na\u0161em st\u00e1nku ve vstupn\u00ed hale, budeme se na {{you_acc}} t\u011b\u0161it.
 
-Vybrali jsme pro {{you_acc}} čtyři vystoupení, která stojí za pozornost:
-- Complicité — Pět akrobatů, síla a důvěra ve vizuálně strhující choreografii.
-- Onyx — Párová i skupinová akrobacie s handstandem.
-- Aerial Hoop — Armagedon — Sólo na závěsném kruhu, ideální pro gala večery.
-- Glamour in Red — Živé sochy v červené, smyslná a elegantní animace.
+Vybrali jsme pro {{you_acc}} \u010dty\u0159i vystoupen\u00ed, kter\u00e1 stoj\u00ed za pozornost:
+- Complicit\u00e9 \u2014 P\u011bt akrobat\u016f, s\u00edla a d\u016fv\u011bra ve vizu\u00e1ln\u011b strhuj\u00edc\u00ed choreografii.
+- Onyx \u2014 P\u00e1rov\u00e1 i skupinov\u00e1 akrobacie s handstandem.
+- Aerial Hoop \u2014 Armagedon \u2014 S\u00f3lo na z\u00e1v\u011bsn\u00e9m kruhu, ide\u00e1ln\u00ed pro gala ve\u010dery.
+- Glamour in Red \u2014 \u017div\u00e9 sochy v \u010derven\u00e9, smysln\u00e1 a elegantn\u00ed animace.
 
-Prohlédněte si celou nabídku: {{microsite_link}}
+Prohl\u00e9dn\u011bte si celou nab\u00eddku: {{microsite_link}}
 
 Hanka
 
 --
-Hana Faková
+Hana Fakov\u00e1
 Event Producer
 United Arts s.r.o. | Losers Cirque Company | Divadlo BRAVO!
 M: +420 737 853 490
 E: hana@unitedarts.cz
 booking.loserscirque.cz ({{microsite_link}})
 
-United Arts s.r.o. · Praha · Česká republika
-Pokud si nepřejete další zprávy, klikněte zde: {{unsubscribe_url}}"""
-
-# ---------------------------------------------------------------------------
-# English HTML template (literal translation of the v4 CS template)
-# ---------------------------------------------------------------------------
-
-EVENTFEST_HTML_TEMPLATE_EN = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <meta name="supported-color-schemes" content="light dark">
-  <title>Invitation to EVENT FEST | Losers Cirque Company</title>
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f4;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f4;">
-    <tr>
-      <td align="center" style="padding:24px 16px;">
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0"
-               style="background-color:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;">
-          <tr>
-            <td style="padding:32px 32px 16px 32px;color:#333333;font-size:15px;line-height:1.6;">
-              <p style="margin:0 0 16px 0;">
-                Hello {{vocative_name}},
-              </p>
-              <p style="margin:0 0 16px 0;">
-                are you looking for an engaging opening act for a conference,
-                gala dinner, or corporate event?
-              </p>
-              <p style="margin:0 0 16px 0;">
-                Losers Cirque Company has several new pieces for you to
-                explore in our updated
-                <a href="{{microsite_link}}"
-                   target="_blank"
-                   style="color:#e63946;text-decoration:underline;">performance offer</a>.
-              </p>
-              <p style="margin:0 0 16px 0;">
-                You can also see some of them live at
-                <strong>EVENT FEST</strong> on Wednesday, April 22nd at
-                Prague Exhibition Grounds Letňany. From 12:00 on the
-                Expo stage you can enjoy <em>Hat Jazz</em>, and from 13:00
-                in the Experience show area look forward to <em>Handstand</em>.
-              </p>
-              <p style="margin:0 0 24px 0;">
-                Stop by our booth too — we look forward to meeting you.
-              </p>
-              <p style="margin:0 0 0 0;">
-                Hanka
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color:#f8f8f8;padding:16px 32px;
-                       font-size:11px;color:#999999;text-align:center;
-                       border-top:1px solid #eeeeee;">
-              United Arts s.r.o. | Prague, Czech Republic<br>
-              <a href="{{unsubscribe_url}}"
-                 style="color:#999999;text-decoration:underline;">Unsubscribe</a>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
-
-# ---------------------------------------------------------------------------
-# English plain text version
-# ---------------------------------------------------------------------------
-
-EVENTFEST_PLAIN_TEMPLATE_EN = """\
-Hello {{vocative_name}},
-
-are you looking for an engaging opening act for a conference, gala dinner, or corporate event?
-
-Losers Cirque Company has several new pieces for you to explore in our updated performance offer ({{microsite_link}}).
-
-You can also see some of them live at EVENT FEST on Wednesday, April 22nd at Prague Exhibition Grounds Letňany. From 12:00 on the Expo stage you can enjoy Hat Jazz, and from 13:00 in the Experience show area look forward to Handstand.
-
-Stop by our booth too — we look forward to meeting you.
-
-Hanka
-
-To unsubscribe: {{unsubscribe_url}}"""
+United Arts s.r.o. \u00b7 Praha \u00b7 \u010cesk\u00e1 republika
+Pokud si nep\u0159ejete dal\u0161\u00ed zpr\u00e1vy, odpov\u011bzte na tento e-mail (hana@unitedarts.cz) s p\u0159edm\u011btem "unsubscribe"."""
 
 
 def _replace_template_variables(template: str, variables: dict[str, str]) -> str:
@@ -498,7 +388,9 @@ def _escape_html_attr(value: str) -> str:
 
 def _escape_html_text(value: str) -> str:
     """Minimal HTML text-node escaping. See ``_escape_html_attr`` note."""
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
 
 
 def _build_featured_acts_html(
@@ -612,17 +504,17 @@ def _build_featured_acts_plain(
 _TONE_VARIANTS: dict[str, dict[str, str]] = {
     # Formal "Vy" register — default for 351/357 EventFest contacts.
     "vykat": {
-        "you_acc": "Vás",  # accusative: "pro Vás" / "na Vás"
-        "you_look_verb": "hledáte",  # 2pl: are you looking for
-        "you_can_verb": "můžete",  # 2pl: you can
+        "you_acc": "V\u00e1s",          # accusative: "pro V\u00e1s" / "na V\u00e1s"
+        "you_look_verb": "hled\u00e1te",  # 2pl: are you looking for
+        "you_can_verb": "m\u016f\u017eete",  # 2pl: you can
         "stop_by_imper": "Zastavte se",  # 2pl imperative: stop by
     },
     # Informal "Ty" register — 6/357 EventFest contacts flagged in DB.
     "tykat": {
-        "you_acc": "Tebe",  # accusative: "pro Tebe" / "na Tebe"
-        "you_look_verb": "hledáš",  # 2sg: are you looking for
-        "you_can_verb": "můžeš",  # 2sg: you can
-        "stop_by_imper": "Zastav se",  # 2sg imperative: stop by
+        "you_acc": "Tebe",               # accusative: "pro Tebe" / "na Tebe"
+        "you_look_verb": "hled\u00e1\u0161",  # 2sg: are you looking for
+        "you_can_verb": "m\u016f\u017ee\u0161",  # 2sg: you can
+        "stop_by_imper": "Zastav se",    # 2sg imperative: stop by
     },
 }
 
@@ -657,80 +549,6 @@ def _tone_passthrough_variables() -> dict[str, str]:
 TONE_PASSTHROUGH = "passthrough"
 
 
-_UNSUBSCRIBE_FALLBACK = "mailto:unsubscribe@example.com?subject=unsubscribe"
-
-
-# ---------------------------------------------------------------------------
-# Language-specific renderers (registry-compatible signatures)
-# ---------------------------------------------------------------------------
-
-
-def render_eventfest_cs(
-    vocative_name: str | None = None,
-    microsite_link: str = "",
-    unsubscribe_url: str | None = None,
-    tone: str | None = "vykat",
-    **_: object,
-) -> dict:
-    """Render the Czech EventFest invitation (v4 approved design).
-
-    Returns a dict with ``subject``, ``html`` and ``text`` keys. Extra
-    kwargs are accepted (and ignored) so the registry can pass arbitrary
-    template context without each renderer caring.
-
-    ``unsubscribe_url`` (BL-1103) is injected into the ``{{unsubscribe_url}}``
-    placeholder. When omitted, a mailto fallback keeps the footer link
-    intact for callers that don't yet wire the send-side suppression flow.
-
-    ``tone`` selects pronoun/verb register. ``"vykat"`` (default), ``"tykat"``,
-    or ``TONE_PASSTHROUGH`` to leave tone placeholders unsubstituted.
-    """
-    variables: dict[str, str] = {
-        "vocative_name": vocative_name or "",
-        "microsite_link": microsite_link or "",
-        "unsubscribe_url": unsubscribe_url or _UNSUBSCRIBE_FALLBACK,
-    }
-    if tone == TONE_PASSTHROUGH:
-        variables.update(_tone_passthrough_variables())
-    else:
-        variables.update(tone_variables(tone))
-
-    return {
-        "subject": EVENTFEST_SUBJECT,
-        "html": _replace_template_variables(EVENTFEST_HTML_TEMPLATE, variables),
-        "text": _replace_template_variables(EVENTFEST_PLAIN_TEMPLATE, variables),
-    }
-
-
-def render_eventfest_en(
-    vocative_name: str | None = None,
-    microsite_link: str = "",
-    unsubscribe_url: str | None = None,
-    **_: object,
-) -> dict:
-    """Render the English EventFest invitation.
-
-    ``unsubscribe_url`` (BL-1103) is injected into the ``{{unsubscribe_url}}``
-    placeholder. When omitted, a mailto fallback keeps the footer link
-    intact for callers that don't yet wire the send-side suppression flow.
-    """
-    variables = {
-        "vocative_name": vocative_name or "",
-        "microsite_link": microsite_link or "",
-        "unsubscribe_url": unsubscribe_url or _UNSUBSCRIBE_FALLBACK,
-    }
-    return {
-        "subject": EVENTFEST_SUBJECT_EN,
-        "html": _replace_template_variables(EVENTFEST_HTML_TEMPLATE_EN, variables),
-        "text": _replace_template_variables(EVENTFEST_PLAIN_TEMPLATE_EN, variables),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Legacy API — preserved for existing callers / tests
-# ---------------------------------------------------------------------------
-
-
 def render_eventfest_email(
     vocative_name: str | None,
     microsite_link: str,
@@ -738,9 +556,8 @@ def render_eventfest_email(
     site_url: str = "",
     featured_acts: list[dict] | None = None,
     tone: str | None = "vykat",
-    unsubscribe_url: str | None = None,
 ) -> tuple[str, str, str]:
-    """Render the EventFest invitation email (v4 approved design, legacy tuple API).
+    """Render the EventFest invitation email (v4 approved design).
 
     Args:
         vocative_name: Contact's name already in vocative form (or ``None``).
@@ -758,10 +575,9 @@ def render_eventfest_email(
             helper is retained only for external callers.
         tone: Address style — ``"vykat"`` (formal, default), ``"tykat"``
             (informal), or ``TONE_PASSTHROUGH`` to keep tone placeholders
-            unsubstituted for later per-recipient rendering.
-        unsubscribe_url: Per-contact one-click unsubscribe URL (BL-1103).
-            When omitted, a mailto fallback is rendered so the footer link
-            is never broken even outside the send-service code path.
+            unsubstituted for later per-recipient rendering. Any other
+            value (including ``None`` and ``""``) falls back to ``vykat``
+            so a missing ``address_style`` still produces a valid email.
 
     Returns:
         Tuple of ``(subject, html_body, plain_text_body)``.
@@ -770,18 +586,19 @@ def render_eventfest_email(
     # but the v4 template doesn't consume them (hardcoded thumbnails).
     del recipient_token, site_url, featured_acts  # silence unused warnings
 
-    payload = render_eventfest_cs(
-        vocative_name=vocative_name,
-        microsite_link=microsite_link,
-        unsubscribe_url=unsubscribe_url,
-        tone=tone,
-    )
-    return (payload["subject"], payload["html"], payload["text"])
+    variables: dict[str, str] = {
+        "vocative_name": vocative_name or "",
+        "microsite_link": microsite_link,
+    }
+    # Tone overlay: normal tones produce the final pronoun strings; the
+    # passthrough sentinel keeps ``{{you_acc}}`` etc. literal so the
+    # provisioner's stored body survives re-rendering at send time.
+    if tone == TONE_PASSTHROUGH:
+        variables.update(_tone_passthrough_variables())
+    else:
+        variables.update(tone_variables(tone))
 
+    html = _replace_template_variables(EVENTFEST_HTML_TEMPLATE, variables)
+    plain = _replace_template_variables(EVENTFEST_PLAIN_TEMPLATE, variables)
 
-# ---------------------------------------------------------------------------
-# Registry wiring — runs at import time
-# ---------------------------------------------------------------------------
-
-register(EVENTFEST_TEMPLATE_KEY, "cs", render_eventfest_cs)
-register(EVENTFEST_TEMPLATE_KEY, "en", render_eventfest_en)
+    return (EVENTFEST_SUBJECT, html, plain)

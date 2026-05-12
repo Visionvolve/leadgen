@@ -10,40 +10,6 @@
 
 Call `backlog_onboard("leadgen-pipeline")` at session start to load full governance context including directives, process documents, routing tables, sprint status, and recommended next items.
 
-If the session is picking up GSD milestone work, ALSO read `.planning/STATE.md` first, then `.planning/ROADMAP.md` for the active milestone's phase plan, then `.planning/PROJECT.md` for context. The directive `gsd-phase-mapping` in the backlog service is the canonical phase→backlog item mapping.
-
-## Active GSD Milestone
-
-**v25 — LCC Client Requests** (started 2026-05-11). 11 phases, 17 backlog items (BL-1100..BL-1116) in `Sprint 25 — LCC client requests`. See `.planning/ROADMAP.md` for the full phase plan.
-
-### GSD ↔ Backlog Status Bridge (MANDATORY)
-
-Every phase executor MUST update mapped backlog items at the right lifecycle boundaries — this is how the project keeps phase progress visible across sessions and agents.
-
-```
-Phase Building   →  backlog_claim_item(short_id)
-                    backlog_update_item(short_id, status='Building')
-                    (BEFORE writing any code)
-
-Phase PR Open    →  backlog_update_item(short_id, status='PR Open', pr=<url>)
-                    (AFTER branch pushed + PR created)
-
-Phase Done       →  backlog_update_item(short_id, status='Done')
-                    backlog_release_item(short_id)
-                    (AFTER PR merged to staging)
-```
-
-Skipping any of these transitions is a process violation. The phase→backlog mapping lives in the backlog directive `gsd-phase-mapping` (also mirrored in `.planning/ROADMAP.md`).
-
-### Cross-Repo Phases (1, 7, 8)
-
-Phases 1, 7, and 8 of milestone v25 execute in `/Users/michal/git/ua-microsite`, NOT in this repo. Rules:
-
-- The executor agent must `cd /Users/michal/git/ua-microsite` first.
-- Branch from `staging` of that repo, PR back to its `staging` (NOT to leadgen-pipeline).
-- The leadgen-pipeline backlog item still tracks the cross-repo PR URL in its `pr` field for unified visibility.
-- Phase 7 specifically requires TWO coordinated PRs (one per repo) sharing one backlog item (BL-1104). Neither merges until both pass review.
-
 ## Hard Rules (Enforced by Tooling)
 
 - **No direct writes to main** — GitHub branch protection requires PR with 1 approval + CI passing (lint + test).
