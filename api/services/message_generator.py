@@ -25,7 +25,7 @@ from .llm_logger import log_llm_usage, compute_cost
 logger = logging.getLogger(__name__)
 
 # Generation model config
-GENERATION_MODEL = "claude-3-haiku-20240307"
+GENERATION_MODEL = "claude-haiku-4-5-20251001"
 GENERATION_PROVIDER = "anthropic"
 
 # Estimated tokens per message (for cost estimation)
