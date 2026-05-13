@@ -33,7 +33,7 @@ services:
       # AITRANSFORMERS_ADMIN_TOKEN is required for the sync to run; the
       # other variables fall back to the defaults in
       # api/jobs/aitransformers_contact_sync.py.
-      - AITRANSFORMERS_API_URL=${AITRANSFORMERS_API_URL:-https://aitransformers.eu/api}
+      - AITRANSFORMERS_API_URL=${AITRANSFORMERS_API_URL:-https://app.aitransformers.eu/api}
       - AITRANSFORMERS_ADMIN_TOKEN=${AITRANSFORMERS_ADMIN_TOKEN:-}
       - LEADGEN_AITRANSFORMERS_TENANT_SLUG=${LEADGEN_AITRANSFORMERS_TENANT_SLUG:-visionvolve}
       - LEADGEN_AITRANSFORMERS_BATCH_SIZE=${LEADGEN_AITRANSFORMERS_BATCH_SIZE:-200}
