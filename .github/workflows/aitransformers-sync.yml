@@ -79,8 +79,12 @@ jobs:
           # interpolation under our control). Inputs are workflow_dispatch
           # only -- author must have write access -- so injection surface
           # is limited to authorized actors.
+          # docker exec needs FLASK_APP -- the runtime container starts via
+          # gunicorn so FLASK_APP is not in the baseline env. Pass it via
+          # `-e` so the CLI can discover the factory.
           ssh -i ~/.ssh/deploy_key ec2-user@3.124.110.199 \
-            "docker exec leadgen-api flask sync-aitransformers \
+            "docker exec -e FLASK_APP='api:create_app' leadgen-api \
+               flask sync-aitransformers \
                --tenant-slug '$TENANT_SLUG' \
                --batch-size '$BATCH_SIZE'"
 
