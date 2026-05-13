@@ -28,6 +28,16 @@ services:
       # campaign_contacts, so tracking-ingest campaign attribution fails.
       - UA_MICROSITE_URL=${UA_MICROSITE_URL:-https://booking.loserscirque.cz}
       - UA_INVITE_API_KEY=${UA_INVITE_API_KEY:-}
+      # BL-1200: AITransformers contact sync — `flask sync-aitransformers`
+      # invoked by cron (.github/workflows/aitransformers-sync.yml).
+      # AITRANSFORMERS_ADMIN_TOKEN is required for the sync to run; the
+      # other variables fall back to the defaults in
+      # api/jobs/aitransformers_contact_sync.py.
+      - AITRANSFORMERS_API_URL=${AITRANSFORMERS_API_URL:-https://aitransformers.eu/api}
+      - AITRANSFORMERS_ADMIN_TOKEN=${AITRANSFORMERS_ADMIN_TOKEN:-}
+      - LEADGEN_AITRANSFORMERS_TENANT_SLUG=${LEADGEN_AITRANSFORMERS_TENANT_SLUG:-visionvolve}
+      - LEADGEN_AITRANSFORMERS_BATCH_SIZE=${LEADGEN_AITRANSFORMERS_BATCH_SIZE:-200}
+      - LEADGEN_AITRANSFORMERS_TAG_NAME=${LEADGEN_AITRANSFORMERS_TAG_NAME:-AITransformers}
     ports:
       - "127.0.0.1:5000:5000"
     restart: unless-stopped

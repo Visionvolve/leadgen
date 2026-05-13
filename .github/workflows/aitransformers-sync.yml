@@ -1,0 +1,70 @@
+name: AITransformers contact sync (daily)
+
+# Syncs authenticated AITransformers users from cases-api into the
+# Visionvolve namespace of leadgen-pipeline as tagged contacts. Runs the
+# `flask sync-aitransformers` CLI on the production API container.
+#
+# The workflow scaffolds the schedule and a manual dispatch path. The
+# final SSH-to-VPS step mirrors the resend-reconcile.yml pattern and is
+# wired through the same VPS deploy secrets. Until those secrets are
+# attached the schedule is commented out so we do not silently fail on
+# cron.
+#
+# See `api/jobs/aitransformers_contact_sync.py` and
+# `api/cli/aitransformers_sync.py` for the underlying job. BL-1200.
+
+on:
+  # schedule:
+  #   - cron: '0 3 * * *'   # 03:00 UTC daily - enable after staging soak
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (staging|production)'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      tenant_slug:
+        description: 'Override tenant slug (defaults to visionvolve)'
+        required: false
+        default: 'visionvolve'
+      batch_size:
+        description: 'Override page size (default 200)'
+        required: false
+        default: '200'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print run parameters
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TENANT_SLUG: ${{ inputs.tenant_slug }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          echo "Environment: $ENVIRONMENT"
+          echo "Tenant slug: $TENANT_SLUG"
+          echo "Batch size: $BATCH_SIZE"
+
+      # TODO (BL-1200 follow-up): wire the actual invocation. The
+      # equivalent of the resend reconciler's TODO -- SSH to the target
+      # VPS and exec the flask CLI inside the API container, e.g.:
+      #
+      #   docker exec leadgen-api flask sync-aitransformers \
+      #     --tenant-slug "$TENANT_SLUG" --batch-size "$BATCH_SIZE"
+      #
+      # Requires the VPS SSH key + AITRANSFORMERS_ADMIN_TOKEN already
+      # populated in the container's environment (deploy/.env on prod).
+      - name: Placeholder - not yet automated
+        env:
+          TENANT_SLUG: ${{ inputs.tenant_slug }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          echo "Manual runs are a no-op stub. Exec the CLI directly on the target host:"
+          echo "  docker exec leadgen-api flask sync-aitransformers \\"
+          echo "    --tenant-slug $TENANT_SLUG --batch-size $BATCH_SIZE"
