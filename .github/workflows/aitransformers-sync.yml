@@ -1,0 +1,93 @@
+name: AITransformers contact sync (daily)
+
+# Syncs authenticated AITransformers users from cases-api into the
+# Visionvolve namespace of leadgen-pipeline as tagged contacts. Runs the
+# `flask sync-aitransformers` CLI on the production API container.
+#
+# The workflow scaffolds the schedule and a manual dispatch path. The
+# final SSH-to-VPS step mirrors the resend-reconcile.yml pattern and is
+# wired through the same VPS deploy secrets. Until those secrets are
+# attached the schedule is commented out so we do not silently fail on
+# cron.
+#
+# See `api/jobs/aitransformers_contact_sync.py` and
+# `api/cli/aitransformers_sync.py` for the underlying job. BL-1200.
+
+on:
+  # schedule:
+  #   - cron: '0 3 * * *'   # 03:00 UTC daily - enable after staging soak
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (staging|production)'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      tenant_slug:
+        description: 'Override tenant slug (defaults to visionvolve)'
+        required: false
+        default: 'visionvolve'
+      batch_size:
+        description: 'Override page size (default 200)'
+        required: false
+        default: '200'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print run parameters
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TENANT_SLUG: ${{ inputs.tenant_slug }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          echo "Environment: $ENVIRONMENT"
+          echo "Tenant slug: $TENANT_SLUG"
+          echo "Batch size: $BATCH_SIZE"
+
+      # BL-1200: SSH to the target VPS and exec the flask CLI inside the
+      # leadgen-api container. The container already has
+      # AITRANSFORMERS_ADMIN_TOKEN injected via compose env (staging:
+      # docker-compose.leadgen.yml in visionvolve-vps; prod: deploy/.env).
+      #
+      # Staging uses the existing STAGING_SSH_KEY secret.
+      # Prod path will need an analogous PROD_SSH_KEY secret added later.
+      - name: Setup SSH (staging)
+        if: inputs.environment == 'staging'
+        env:
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 3.124.110.199 >> ~/.ssh/known_hosts
+
+      - name: Run sync against staging
+        if: inputs.environment == 'staging'
+        env:
+          TENANT_SLUG: ${{ inputs.tenant_slug }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          set -euo pipefail
+          # Pass overrides through env via SSH SendEnv-equivalent (literal
+          # interpolation under our control). Inputs are workflow_dispatch
+          # only -- author must have write access -- so injection surface
+          # is limited to authorized actors.
+          ssh -i ~/.ssh/deploy_key ec2-user@3.124.110.199 \
+            "docker exec leadgen-api flask sync-aitransformers \
+               --tenant-slug '$TENANT_SLUG' \
+               --batch-size '$BATCH_SIZE'"
+
+      - name: Production sync not yet wired
+        if: inputs.environment == 'production'
+        run: |
+          echo "::error::Production sync path not yet wired. Add PROD_SSH_KEY"
+          echo "secret + a matching SSH step here once BL-1200 graduates"
+          echo "from staging soak."
+          exit 1
