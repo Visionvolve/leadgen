@@ -54,10 +54,8 @@ jobs:
       # BL-1200: SSH to the target VPS and exec the flask CLI inside the
       # leadgen-api container. The container already has
       # AITRANSFORMERS_ADMIN_TOKEN injected via compose env (staging:
-      # docker-compose.leadgen.yml in visionvolve-vps; prod: deploy/.env).
-      #
-      # Staging uses the existing STAGING_SSH_KEY secret.
-      # Prod path will need an analogous PROD_SSH_KEY secret added later.
+      # docker-compose.leadgen.yml in visionvolve-vps; prod: .env upserted
+      # by visionvolve-vps deploy-prod-infra.yml MANAGED dict).
       - name: Setup SSH (staging)
         if: inputs.environment == 'staging'
         env:
@@ -88,10 +86,29 @@ jobs:
                --tenant-slug '$TENANT_SLUG' \
                --batch-size '$BATCH_SIZE'"
 
-      - name: Production sync not yet wired
+      - name: Setup SSH (production)
         if: inputs.environment == 'production'
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
         run: |
-          echo "::error::Production sync path not yet wired. Add PROD_SSH_KEY"
-          echo "secret + a matching SSH step here once BL-1200 graduates"
-          echo "from staging soak."
-          exit 1
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 52.58.119.191 >> ~/.ssh/known_hosts
+
+      - name: Run sync against production
+        if: inputs.environment == 'production'
+        env:
+          TENANT_SLUG: ${{ inputs.tenant_slug }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          set -euo pipefail
+          # Production VPS: 52.58.119.191. AITRANSFORMERS_ADMIN_TOKEN is
+          # upserted into ~/n8n-docker-caddy/.env by visionvolve-vps
+          # deploy-prod-infra.yml and exposed to the container via
+          # leadgen-pipeline deploy/docker-compose.api.yml.
+          ssh -i ~/.ssh/deploy_key ec2-user@52.58.119.191 \
+            "docker exec -e FLASK_APP='api:create_app' leadgen-api \
+               flask sync-aitransformers \
+               --tenant-slug '$TENANT_SLUG' \
+               --batch-size '$BATCH_SIZE'"
