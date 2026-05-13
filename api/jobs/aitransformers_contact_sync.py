@@ -531,7 +531,12 @@ def process_row(
             first_name=first,
             last_name=last or "",
             import_source="aitransformers",
-            contact_source="aitransformers",
+            # NOTE: contact_source is an ENUM ('inbound','outbound','referral',
+            # 'event','social','other') — "aitransformers" is NOT a valid value.
+            # The canonical AITransformers marker is `import_source` per the spec
+            # (docs/superpowers/specs/2026-05-13-aitransformers-contact-sync-design.md
+            # section 13). Leave contact_source NULL; downstream campaign logic
+            # can promote later if needed.
         )
         db.session.add(contact)
         db.session.flush()  # populate contact.id
@@ -542,7 +547,7 @@ def process_row(
         # overwrite an existing import_source — the original ingest path
         # owns that field.
         _fill_if_empty(contact, "import_source", "aitransformers")
-        _fill_if_empty(contact, "contact_source", "aitransformers")
+        # contact_source intentionally NOT set — see note above.
         first, last = _split_name(row.get("name") or row.get("display_name"))
         _fill_if_empty(contact, "first_name", first)
         if last:
