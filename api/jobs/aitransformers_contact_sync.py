@@ -40,7 +40,11 @@ AITransformers payload field → leadgen ``Contact`` column
 - ``maturity_level``     → ``custom_fields.aitransformers.maturity_level``
 - ``tier``               → ``custom_fields.aitransformers.tier``
 - ``is_founding_member`` → ``custom_fields.aitransformers.is_founding_member``
-- ``newsletter_subscribed`` → ``custom_fields.aitransformers.newsletter_subscribed``
+- ``newsletter_subscribed`` → ``custom_fields.aitransformers.aitransformers_newsletter_subscribed``
+  (renamed deliberately: this is the AITransformers platform's local
+  ``email_subscriptions.status='active'`` derivation, NOT the IAM
+  ``newsletter`` scope of record. Prefix avoids future confusion if we
+  ever sync an authoritative IAM-side flag.)
 """
 
 from __future__ import annotations
@@ -347,7 +351,7 @@ def _merge_aitransformers_metadata(contact: Contact, payload: dict) -> None:
         "maturity_level",
         "tier",
         "is_founding_member",
-        "newsletter_subscribed",
+        "aitransformers_newsletter_subscribed",
     ):
         new_val = payload.get(key)
         if new_val is None or new_val == "":
@@ -558,7 +562,11 @@ def process_row(
             "maturity_level": row.get("maturity_level"),
             "tier": row.get("tier"),
             "is_founding_member": row.get("is_founding_member"),
-            "newsletter_subscribed": row.get("newsletter_subscribed"),
+            # Upstream key is ``newsletter_subscribed``; we deliberately
+            # store it under a platform-prefixed name so it's clearly the
+            # AITransformers email_subscriptions flag (current local
+            # state, NOT the IAM newsletter scope of record).
+            "aitransformers_newsletter_subscribed": row.get("newsletter_subscribed"),
         },
     )
 

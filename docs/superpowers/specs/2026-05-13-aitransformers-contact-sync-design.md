@@ -386,6 +386,18 @@ Resolved during BL-1200 implementation (2026-05-13):
   `docker exec leadgen-api flask sync-aitransformers` invocation. Final
   SSH wiring is a small follow-up that mirrors the resend reconciler.
 - **Owner assignment**: left blank in v1. Campaign layer can backfill.
+- **`newsletter_subscribed` semantics**: the aitransformers-platform half
+  derives this field from the local ``email_subscriptions.status='active'``
+  table, NOT from the IAM ``newsletter`` scope (avoids N IAM round-trips
+  per page). The leadgen side stores it under the deliberately-prefixed
+  key ``custom_fields.aitransformers.aitransformers_newsletter_subscribed``
+  to keep "current platform-local subscription state" visually distinct
+  from any future IAM-of-record value we might want to sync.
+- **`AITRANSFORMERS_ADMIN_TOKEN` is shared**: the same env-var name and
+  value lives in BOTH containers — leadgen-pipeline uses it as the
+  outbound Bearer to `/api/admin/leads-export`; aitransformers-platform
+  uses it as the inbound service-token check. Rotation must update both
+  environments in lock-step.
 
 ---
 
