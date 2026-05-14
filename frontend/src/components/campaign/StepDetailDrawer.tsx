@@ -132,27 +132,22 @@ export function StepDetailDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, selectedContactId, campaignId, stepPosition])
 
-  // Pipe preview body into the iframe
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  useEffect(() => {
-    const iframe = iframeRef.current
-    if (!iframe) return
-    const doc = iframe.contentDocument
-    if (!doc) return
+  // Build srcdoc for the preview iframe. Using `srcDoc` (declarative)
+  // instead of imperative population means the iframe paints reliably
+  // on first render — older approach left the iframe blank on some
+  // Chromium versions until the user re-triggered a re-render.
+  const previewSrcdoc = useMemo(() => {
     const body = previewMutation.data?.body ?? ''
-    const html = body
-      ? `<!doctype html><html><head><meta charset="utf-8"><style>
+    if (!body) return ''
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                 font-size: 14px; color: #222; padding: 16px; line-height: 1.55; margin: 0; }
+                 font-size: 14px; color: #222; padding: 16px; line-height: 1.55; margin: 0;
+                 background: #ffffff; }
           a { color: #2563eb; }
           pre, code { white-space: pre-wrap; word-break: break-word; }
           img { max-width: 100%; }
           table { max-width: 100%; }
         </style></head><body>${body}</body></html>`
-      : ''
-    doc.open()
-    doc.write(html)
-    doc.close()
   }, [previewMutation.data])
 
   // Close on Escape + lock body scroll
@@ -533,10 +528,12 @@ export function StepDetailDrawer({
                     </div>
                   )}
                   <iframe
-                    ref={iframeRef}
                     data-testid="step-preview-iframe"
                     title="Rendered email preview"
-                    sandbox=""
+                    // allow-same-origin lets the CSS inside srcdoc apply;
+                    // we deliberately omit allow-scripts so JS is blocked.
+                    sandbox="allow-same-origin"
+                    srcDoc={previewSrcdoc}
                     className="w-full bg-white"
                     style={{ minHeight: 360, height: 420 }}
                   />

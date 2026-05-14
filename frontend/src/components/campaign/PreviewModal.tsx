@@ -118,24 +118,19 @@ export function PreviewModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, selectedContactId, campaignId, stepPosition])
 
-  // Pipe rendered HTML into the sandboxed iframe
-  useEffect(() => {
-    if (!iframeRef.current) return
-    const doc = iframeRef.current.contentDocument
-    if (!doc) return
+  // Build the srcdoc for the rendered iframe (atomic, paints reliably).
+  const previewSrcdoc = useMemo(() => {
     const body = previewMutation.data?.body
-    const html = body
-      ? `<!doctype html><html><head><meta charset="utf-8"><style>
+    if (!body) return ''
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                 font-size: 14px; color: #222; padding: 16px; line-height: 1.55; margin: 0; }
+                 font-size: 14px; color: #222; padding: 16px; line-height: 1.55; margin: 0;
+                 background: #ffffff; }
           a { color: #2563eb; }
           pre, code { white-space: pre-wrap; word-break: break-word; }
           img { max-width: 100%; }
+          table { max-width: 100%; }
         </style></head><body>${escapeForIframe(body)}</body></html>`
-      : ''
-    doc.open()
-    doc.write(html)
-    doc.close()
   }, [previewMutation.data])
 
   // Find an existing message for the selected contact (for Send-Test)
@@ -294,7 +289,10 @@ export function PreviewModal({
                 ref={iframeRef}
                 data-testid="preview-iframe"
                 title="Rendered email preview"
-                sandbox=""
+                // allow-same-origin lets the CSS inside srcdoc apply; we
+                // do not add allow-scripts so JS is still blocked.
+                sandbox="allow-same-origin"
+                srcDoc={previewSrcdoc}
                 className="w-full bg-white"
                 style={{ minHeight: 320, height: 360 }}
               />

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 interface MessageBodyViewProps {
@@ -18,30 +18,22 @@ interface MessageBodyViewProps {
  * In `compact` mode (used inside dense table rows) the HTML is stripped
  * to a plain-text snippet so the row stays small; users open the full
  * PreviewModal to see the rendered email.
+ *
+ * Implementation note: we feed the HTML to the iframe via the `srcdoc`
+ * attribute. The previous implementation populated the iframe imperatively
+ * after mount which was fragile across Chromium versions (the iframe
+ * could remain blank if paint occurred before the imperative write
+ * landed). `srcDoc` is the standard, atomic, declarative way to embed
+ * snippet HTML into a sandboxed frame.
  */
 export function MessageBodyView({ body, compact = false, minHeight = 280 }: MessageBodyViewProps) {
-  const iframeRef = useRef<HTMLIFrameElement>(null)
   const looksHtml = isHtml(body)
 
-  // Render HTML into the sandboxed iframe whenever the body changes.
-  useEffect(() => {
-    if (compact) return
-    if (!looksHtml) return
-    const iframe = iframeRef.current
-    if (!iframe) return
-    const doc = iframe.contentDocument
-    if (!doc) return
-    const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-             font-size: 14px; color: #222; padding: 16px; line-height: 1.55; margin: 0; }
-      a { color: #2563eb; }
-      pre, code { white-space: pre-wrap; word-break: break-word; }
-      img { max-width: 100%; }
-      table { max-width: 100%; }
-    </style></head><body>${body}</body></html>`
-    doc.open()
-    doc.write(html)
-    doc.close()
+  // Pre-compute the full HTML document so it's stable across renders and
+  // React diff doesn't trigger needless srcdoc re-parses.
+  const srcdoc = useMemo(() => {
+    if (!looksHtml || compact) return ''
+    return buildSrcdoc(body)
   }, [body, looksHtml, compact])
 
   if (compact) {
@@ -62,9 +54,12 @@ export function MessageBodyView({ body, compact = false, minHeight = 280 }: Mess
     return (
       <div className="rounded border border-border bg-white overflow-hidden">
         <iframe
-          ref={iframeRef}
           title="Rendered message body"
-          sandbox=""
+          // allow-same-origin is required so the CSS in srcdoc actually
+          // applies; we do NOT add allow-scripts, so the iframe still
+          // cannot execute JavaScript (the threat model for messages).
+          sandbox="allow-same-origin"
+          srcDoc={srcdoc}
           className="w-full bg-white"
           style={{ minHeight, height: minHeight }}
         />
@@ -81,6 +76,24 @@ export function MessageBodyView({ body, compact = false, minHeight = 280 }: Mess
 
 function isHtml(body: string): boolean {
   return /<[a-z][\s\S]*>/i.test(body)
+}
+
+/**
+ * Wrap a raw HTML body in a complete srcdoc document with our preview
+ * styles. The body is interpolated verbatim — it's already trusted
+ * server-rendered template HTML and the iframe sandbox blocks scripts.
+ */
+function buildSrcdoc(body: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         font-size: 14px; color: #222; padding: 16px; line-height: 1.55; margin: 0;
+         background: #ffffff; }
+  a { color: #2563eb; }
+  pre, code { white-space: pre-wrap; word-break: break-word; }
+  img { max-width: 100%; }
+  table { max-width: 100%; }
+</style></head><body>${body}</body></html>`
 }
 
 /**
