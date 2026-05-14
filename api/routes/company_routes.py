@@ -1479,6 +1479,56 @@ def update_company(company_id):
     return jsonify({"ok": True})
 
 
+# ── Company Merge (BL-1203 / Phase 12) ────────────────────
+@companies_bp.route("/api/companies/<company_id>/merge", methods=["POST"])
+@require_role("editor")
+def merge_company(company_id):
+    """Merge ``company_id`` INTO the surviving company referenced by
+    ``?into=<surviving_id>``. Hard-deletes the loser. Both must be in the
+    caller's tenant.
+
+    Wraps the whole operation in a single transaction with SELECT … FOR
+    UPDATE on both rows; rolls back on any failure.
+    """
+    # Late import so the route module's import graph doesn't cycle:
+    # dedup imports from contact_helpers which is fine, but the dedup
+    # module also re-imports company-related things at the bottom.
+    from ..services.dedup import MergeError, merge_companies
+
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+    if not is_valid_uuid(company_id):
+        return jsonify({"error": "invalid_company_id"}), 400
+    surviving_id = request.args.get("into")
+    if not surviving_id or not is_valid_uuid(surviving_id):
+        return jsonify(
+            {"error": "missing_or_invalid_into_query_param", "code": "missing_into"}
+        ), 400
+    if surviving_id == company_id:
+        return jsonify(
+            {"error": "Cannot merge a company into itself", "code": "self_merge"}
+        ), 400
+
+    changed_by = getattr(getattr(g, "current_user", None), "id", None)
+    try:
+        payload = merge_companies(
+            tenant_id=tenant_id,
+            deleted_id=company_id,
+            surviving_id=surviving_id,
+            changed_by=changed_by,
+        )
+    except MergeError as e:
+        db.session.rollback()
+        return jsonify({"error": str(e), "code": "merge_failed"}), 404
+    except Exception:
+        db.session.rollback()
+        raise
+
+    db.session.commit()
+    return jsonify(payload), 200
+
+
 # ── Triage Review (BL-176) ────────────────────────────────
 VALID_TRIAGE_ACTIONS = {"pass", "review", "disqualify"}
 
