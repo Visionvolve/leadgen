@@ -12,9 +12,11 @@ Strategies:
 Companies always link to existing when matched (never duplicate).
 """
 
+from __future__ import annotations
+
 from sqlalchemy import func
 
-from ..models import Company, Contact, db
+from ..models import Company, Contact, Owner, db
 from .phone_normalize import normalize_phone
 
 
@@ -504,3 +506,72 @@ def _create_contact(
     )
     db.session.add(ct)
     return ct
+
+
+# ---------------------------------------------------------------------------
+# BL-1203 / Phase 12: name-collision lookup for the duplicate-name gate.
+# ---------------------------------------------------------------------------
+
+
+def find_name_collisions(
+    tenant_id,
+    normalized_name: str,
+    exclude_id: str | None = None,
+) -> list[dict]:
+    """Return same-tenant companies whose stored normalized_name matches.
+
+    Used by PATCH /api/companies/<id> to surface duplicates BEFORE writing
+    a rename. Tenant-scoped; never crosses tenants. Empty normalized_name
+    short-circuits to [] without touching the DB.
+
+    Each returned dict has keys:
+        id, name, domain, status, owner ({id,name}|None), contact_count,
+        last_activity_at (iso8601|None).
+    """
+    if not normalized_name:
+        return []
+    q = (
+        db.session.query(
+            Company.id,
+            Company.name,
+            Company.domain,
+            Company.status,
+            Company.owner_id,
+            Owner.name.label("owner_name"),
+            func.count(Contact.id).label("contact_count"),
+            func.max(Contact.updated_at).label("last_activity_at"),
+        )
+        .outerjoin(Owner, Owner.id == Company.owner_id)
+        .outerjoin(Contact, Contact.company_id == Company.id)
+        .filter(Company.tenant_id == str(tenant_id))
+        .filter(Company.normalized_name == normalized_name)
+        .group_by(
+            Company.id,
+            Company.name,
+            Company.domain,
+            Company.status,
+            Company.owner_id,
+            Owner.name,
+        )
+    )
+    if exclude_id:
+        q = q.filter(Company.id != str(exclude_id))
+    out: list[dict] = []
+    for row in q.all():
+        last_activity = row[7]
+        out.append(
+            {
+                "id": row[0],
+                "name": row[1],
+                "domain": row[2],
+                "status": row[3],
+                "owner": {"id": row[4], "name": row[5]} if row[4] else None,
+                "contact_count": int(row[6] or 0),
+                "last_activity_at": (
+                    last_activity.isoformat() if last_activity else None
+                ),
+            }
+        )
+    # Sort: highest contact_count first (most "real" companies float to top)
+    out.sort(key=lambda m: m["contact_count"], reverse=True)
+    return out

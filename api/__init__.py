@@ -14,6 +14,13 @@ def create_app():
 
     CORS(app, origins=app.config["CORS_ORIGINS"])
     db.init_app(app)
+
+    # BL-1203 / Phase 12: keep companies.normalized_name in sync with
+    # companies.name on every ORM insert/update.
+    from .services.name_normalize import register_listeners as _register_name_listeners
+
+    _register_name_listeners()
+
     register_blueprints(app)
 
     # Wire CLI commands (`flask reconcile-resend`, etc.)
