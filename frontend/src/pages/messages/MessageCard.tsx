@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
-import ReactMarkdown from 'react-markdown'
 import { useUpdateMessage, useMarkMessageSent, type Message } from '../../api/queries/useMessages'
 import { useToast } from '../../components/ui/Toast'
+import { MessageBodyView } from '../../components/campaign/MessageBodyView'
 
 const EDIT_REASONS = [
   { value: 'too_formal', label: 'Too formal' },
@@ -229,9 +229,7 @@ export function MessageCard({ message, selected, onToggleSelect }: MessageCardPr
         </div>
       ) : mode === 'reject' ? (
         <div className="space-y-2">
-          <div className="text-sm text-text prose-sm-msg">
-            <ReactMarkdown>{message.body}</ReactMarkdown>
-          </div>
+          <MessageBodyView body={message.body} minHeight={220} />
           <textarea
             value={rejectNotes}
             onChange={(e) => setRejectNotes(e.target.value)}
@@ -256,9 +254,7 @@ export function MessageCard({ message, selected, onToggleSelect }: MessageCardPr
           </div>
         </div>
       ) : (
-        <div className="text-sm text-text prose-sm-msg">
-          <ReactMarkdown>{message.body}</ReactMarkdown>
-        </div>
+        <MessageBodyView body={message.body} minHeight={220} />
       )}
 
       {/* Review notes (shown when approved/rejected) */}
