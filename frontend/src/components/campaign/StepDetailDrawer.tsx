@@ -64,11 +64,16 @@ export function StepDetailDrawer({
 
   // Pull the current values from template_config[0].config + sender_config
   // to seed the editor fields. Falls back to empty strings.
+  // We cast through `unknown` because the backend serialises
+  // `template_config` items as flexible dicts (sometimes carrying a
+  // `config` blob with subject/body_html) while the frontend
+  // `TemplateStep` interface is the narrower legacy shape.
   const seed = useMemo(() => {
-    const tpl = (campaign?.template_config ?? []) as Array<Record<string, unknown>>
-    const first = (tpl[0] as Record<string, unknown> | undefined) ?? {}
+    const tplRaw = (campaign?.template_config ?? []) as unknown
+    const tpl = (Array.isArray(tplRaw) ? tplRaw : []) as Array<Record<string, unknown>>
+    const first = (tpl[0] ?? {}) as Record<string, unknown>
     const cfg = (first.config as Record<string, unknown> | undefined) ?? {}
-    const sender = (campaign?.sender_config ?? {}) as Record<string, unknown>
+    const sender = (campaign?.sender_config ?? {}) as unknown as Record<string, unknown>
     return {
       subject: String(cfg.subject ?? first.subject ?? ''),
       body_html: String(cfg.body_html ?? ''),
