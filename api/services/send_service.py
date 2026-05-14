@@ -430,13 +430,20 @@ def send_campaign_emails(campaign_id: str, tenant_id: str) -> dict:
     quota_message = ""
 
     for message, contact, cc in valid_messages:
-        # Idempotent: check if already sent (non-failed log exists)
+        # Idempotent: check if already sent (non-failed log exists).
+        # Filter `kind != 'preview'` so /send-test rows (kind='preview',
+        # status='sent') do not block the real campaign send, and
+        # `superseded_at IS NULL` so a prior failed-then-superseded row
+        # does not block a fresh retry. Matches analytics filters in
+        # campaign_reach_routes.py:241,368 and campaign_routes.py:2844,4689.
         existing_log = (
             db.session.query(EmailSendLog)
             .filter(
                 EmailSendLog.message_id == message.id,
                 EmailSendLog.tenant_id == tenant_id,
                 EmailSendLog.status != "failed",
+                EmailSendLog.kind != "preview",
+                EmailSendLog.superseded_at.is_(None),
             )
             .first()
         )
@@ -1184,13 +1191,17 @@ def send_campaign_emails_gmail(campaign_id: str, tenant_id: str) -> dict:
     quota_message = ""
 
     for message, contact, cc in valid_messages:
-        # Idempotent check
+        # Idempotent check. Filter preview rows and superseded retries so
+        # neither /send-test rows nor an earlier failed-and-superseded row
+        # blocks a real send. Same filter as the Resend path above.
         existing_log = (
             db.session.query(EmailSendLog)
             .filter(
                 EmailSendLog.message_id == message.id,
                 EmailSendLog.tenant_id == tenant_id,
                 EmailSendLog.status != "failed",
+                EmailSendLog.kind != "preview",
+                EmailSendLog.superseded_at.is_(None),
             )
             .first()
         )
