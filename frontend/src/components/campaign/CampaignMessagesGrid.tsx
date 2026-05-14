@@ -5,6 +5,7 @@ import { useCampaignMessages, useBatchAction, type Message } from '../../api/que
 import { useBatchUpdateMessages } from '../../api/queries/useMessages'
 import { useToast } from '../ui/Toast'
 import { REVIEW_STATUS_DISPLAY, filterOptions } from '../../lib/display'
+import { MessageBodyView } from './MessageBodyView'
 
 // ── Constants ──────────────────────────────────────────
 
@@ -469,18 +470,18 @@ export function CampaignMessagesGrid({ campaignId, onNavigate }: Props) {
                       onClick={() => setExpandedId(isExpanded ? null : msg.id)}
                     >
                       {isExpanded ? (
-                        <div className="text-sm text-text whitespace-pre-wrap py-1">
+                        <div className="text-sm text-text py-1 space-y-2">
                           {msg.subject && (
-                            <div className="text-xs text-text-muted mb-1">
+                            <div className="text-xs text-text-muted">
                               <span className="font-medium">Subject:</span> {msg.subject}
                             </div>
                           )}
-                          {msg.body}
+                          <MessageBodyView body={msg.body} minHeight={200} />
                         </div>
                       ) : (
-                        <span className="text-sm text-text-muted line-clamp-2">
-                          {msg.body}
-                        </span>
+                        <div className="line-clamp-2">
+                          <MessageBodyView body={msg.body} compact />
+                        </div>
                       )}
                     </td>
 
