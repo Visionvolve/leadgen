@@ -26,6 +26,8 @@ from ..display import (
 )
 from ..models import db
 from ..services.contact_helpers import write_field_change
+from ..services.dedup import find_name_collisions
+from ..services.name_normalize import normalize_company_name
 from ..utils.safe_lookup import is_valid_uuid
 
 companies_bp = Blueprint("companies", __name__)
@@ -1333,6 +1335,54 @@ def update_company(company_id):
                 }
             ), 400
 
+    # ──────────────────────────────────────────────────────────────
+    # BL-1203 / Phase 12: company-name duplicate gate.
+    #
+    # When the payload changes `name`:
+    #   1. Reject empty-after-normalize with 400.
+    #   2. If ?confirm_duplicate=keep_both is NOT set, look up same-tenant
+    #      collisions on normalized_name. Any match → 409 with matches[].
+    #   3. Otherwise (keep_both set OR no collision), fall through; the
+    #      UPDATE below will also write the new normalized_name and the
+    #      audit row gets an extra metadata note when keep_both was used.
+    # ──────────────────────────────────────────────────────────────
+    new_normalized_name = None
+    keep_both = request.args.get("confirm_duplicate") == "keep_both"
+    if "name" in fields:
+        raw_name = fields["name"]
+        new_name = (raw_name or "").strip() if raw_name is not None else None
+        if not new_name:
+            return jsonify(
+                {
+                    "error": "Company name cannot be empty",
+                    "code": "empty_name",
+                    "field": "name",
+                }
+            ), 400
+        new_normalized_name = normalize_company_name(new_name)
+        if new_normalized_name == "":
+            return jsonify(
+                {
+                    "error": "Company name normalizes to empty (only legal suffixes / punctuation)",
+                    "code": "empty_name_after_normalize",
+                    "field": "name",
+                }
+            ), 400
+        if not keep_both:
+            matches = find_name_collisions(
+                tenant_id=tenant_id,
+                normalized_name=new_normalized_name,
+                exclude_id=company_id,
+            )
+            if matches:
+                return jsonify(
+                    {
+                        "code": "duplicate_company_name",
+                        "error": "A company with this normalized name already exists in this tenant.",
+                        "matches": matches,
+                    }
+                ), 409
+
     # Verify company belongs to tenant and pull current values for the audit diff.
     existing = db.session.execute(
         db.text(
@@ -1382,6 +1432,12 @@ def update_company(company_id):
         set_parts.append(f"{k} = :{k}")
         params[k] = v
 
+    # BL-1203: keep companies.normalized_name in sync alongside any raw
+    # UPDATE that touches `name`. (ORM listener doesn't fire for raw SQL.)
+    if "name" in fields and new_normalized_name is not None:
+        set_parts.append("normalized_name = :normalized_name")
+        params["normalized_name"] = new_normalized_name
+
     if custom_fields_update and isinstance(custom_fields_update, dict):
         existing_cf = _parse_jsonb(existing[1])
         existing_cf.update(custom_fields_update)
@@ -1399,6 +1455,14 @@ def update_company(company_id):
         old_value = existing_map.get(field_name)
         if old_value == new_value:
             continue
+        # BL-1203: when the operator chose 'Keep both' on a name collision,
+        # annotate the audit row so we can later audit who kept duplicates.
+        extra_meta = None
+        if field_name == "name" and keep_both:
+            extra_meta = {
+                "note": "duplicate_kept_intentionally",
+                "normalized_name": new_normalized_name,
+            }
         write_field_change(
             tenant_id=tenant_id,
             entity_type="company",
@@ -1407,6 +1471,7 @@ def update_company(company_id):
             old_value=old_value,
             new_value=new_value,
             changed_by=changed_by,
+            metadata=extra_meta,
         )
 
     db.session.commit()
