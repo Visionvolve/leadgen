@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
+import { PreviewModal } from '../../../components/campaign/PreviewModal'
 import {
   useCampaignSteps,
   useAddCampaignStep,
@@ -101,6 +102,8 @@ export function StepsTab({ campaignId, isEditable }: Props) {
 
   // View toggle: 'editor' (existing) or 'sequence' (timeline)
   const [view, setView] = useState<'editor' | 'sequence'>('editor')
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewStepPosition, setPreviewStepPosition] = useState<number>(1)
 
   // Track which step card is expanded for config editing
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -294,28 +297,47 @@ export function StepsTab({ campaignId, isEditable }: Props) {
 
   return (
     <div className="max-w-2xl space-y-4">
-      {/* View toggle */}
-      <div className="flex items-center gap-1 p-0.5 bg-surface-alt/50 rounded-md w-fit">
-        <button
-          onClick={() => setView('editor')}
-          className={`px-3 py-1 text-xs font-medium rounded transition-colors border-none cursor-pointer ${
-            view === 'editor'
-              ? 'bg-surface text-text shadow-sm'
-              : 'bg-transparent text-text-muted hover:text-text'
-          }`}
-        >
-          Editor
-        </button>
-        <button
-          onClick={() => setView('sequence')}
-          className={`px-3 py-1 text-xs font-medium rounded transition-colors border-none cursor-pointer ${
-            view === 'sequence'
-              ? 'bg-surface text-text shadow-sm'
-              : 'bg-transparent text-text-muted hover:text-text'
-          }`}
-        >
-          Sequence
-        </button>
+      {/* View toggle + Preview action */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 p-0.5 bg-surface-alt/50 rounded-md w-fit">
+          <button
+            onClick={() => setView('editor')}
+            className={`px-3 py-1 text-xs font-medium rounded transition-colors border-none cursor-pointer ${
+              view === 'editor'
+                ? 'bg-surface text-text shadow-sm'
+                : 'bg-transparent text-text-muted hover:text-text'
+            }`}
+          >
+            Editor
+          </button>
+          <button
+            onClick={() => setView('sequence')}
+            className={`px-3 py-1 text-xs font-medium rounded transition-colors border-none cursor-pointer ${
+              view === 'sequence'
+                ? 'bg-surface text-text shadow-sm'
+                : 'bg-transparent text-text-muted hover:text-text'
+            }`}
+          >
+            Sequence
+          </button>
+        </div>
+        {steps.length > 0 && (
+          <button
+            data-testid="steps-preview-button"
+            onClick={() => {
+              setPreviewStepPosition(steps[0]?.position ?? 1)
+              setPreviewOpen(true)
+            }}
+            className="ml-auto px-3 py-1.5 text-xs bg-surface border border-border text-text rounded-md hover:bg-surface-alt transition-colors flex items-center gap-1.5"
+            title="Preview the first step rendered for a sample contact"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1.5 8s2.5-5 6.5-5 6.5 5 6.5 5-2.5 5-6.5 5-6.5-5-6.5-5z" />
+              <circle cx="8" cy="8" r="2" />
+            </svg>
+            Preview
+          </button>
+        )}
       </div>
 
       {/* Sequence Timeline View */}
@@ -583,6 +605,13 @@ export function StepsTab({ campaignId, isEditable }: Props) {
         </button>
       )}
       </>}
+
+      <PreviewModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        campaignId={campaignId}
+        stepPosition={previewStepPosition}
+      />
     </div>
   )
 }

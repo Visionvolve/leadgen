@@ -4042,6 +4042,61 @@ def generate_message_preview(campaign_id):
     if not contact_id or step_position is None:
         return jsonify({"error": "contact_id and step_position required"}), 400
 
+    # Fixed-template campaigns (e.g. event invitations) bypass the LLM:
+    # return the stored Message body with per-recipient placeholders
+    # substituted so the Preview modal shows the email exactly as it
+    # will be sent. Falls through to the LLM path when no template_type
+    # is set or no Message exists yet for this contact.
+    from ..models import Contact as _ContactModel
+    from ..services.send_service import (
+        _build_template_variables,
+        _replace_template_variables,
+        _template_type_for,
+    )
+
+    campaign_obj = db.session.get(Campaign, campaign_id)
+    if not campaign_obj or str(campaign_obj.tenant_id) != str(tenant_id):
+        return jsonify({"error": "Campaign not found"}), 404
+
+    template_type = _template_type_for(campaign_obj)
+    if template_type:
+        contact = db.session.get(_ContactModel, contact_id)
+        if contact is None or str(contact.tenant_id) != str(tenant_id):
+            return jsonify({"error": "Contact not found"}), 404
+        cc = (
+            db.session.query(CampaignContact)
+            .filter(
+                CampaignContact.campaign_id == campaign_id,
+                CampaignContact.contact_id == contact_id,
+            )
+            .first()
+        )
+        msg = None
+        if cc is not None:
+            msg = (
+                db.session.query(Message)
+                .filter(
+                    Message.campaign_contact_id == cc.id,
+                    Message.channel == "email",
+                )
+                .order_by(Message.created_at.desc())
+                .first()
+            )
+        if msg is not None and cc is not None:
+            tpl_vars = _build_template_variables(contact, cc, campaign_obj)
+            rendered_body = _replace_template_variables(msg.body or "", tpl_vars)
+            rendered_subject = _replace_template_variables(msg.subject or "", tpl_vars)
+            return jsonify(
+                {
+                    "subject": rendered_subject,
+                    "body": rendered_body,
+                    "template_type": template_type,
+                    "templated": True,
+                    "recommended_products": [],
+                    "segment": None,
+                }
+            )
+
     from ..services.message_generator import generate_preview
 
     try:
@@ -4259,6 +4314,246 @@ def delete_attachment(campaign_id, attachment_id):
     return jsonify({"ok": True}), 200
 
 
+# ── Set Template Body (fixed-template campaigns) ──────────────────────────
+
+
+@campaigns_bp.route("/api/campaigns/<campaign_id>/set-template-body", methods=["POST"])
+@require_role("editor")
+def set_template_body(campaign_id):
+    """Write a fixed HTML body to every contact's Message on this campaign.
+
+    Bypasses the LLM-driven ``/generate`` path for fixed-template
+    transactional campaigns (e.g. event invitations). The HTML and subject
+    are stored verbatim on each ``messages`` row and substituted with
+    per-recipient placeholders (``{{first_name}}``, ``{{vocative_name}}``,
+    ``{{recipient_token}}``, ``{{unsubscribe_url}}``) at send time by the
+    send-service. Idempotent: re-running updates any existing Messages
+    and skips contacts that already have an approved Message with the
+    same body+subject.
+
+    Request body::
+
+        {
+          "subject": "string",
+          "body_html": "string",   # contains {{first_name}} placeholders
+          "body_text": "string",   # optional plain-text fallback
+          "from_name": "string",
+          "from_email": "string"
+        }
+
+    Effect (single transaction):
+      * For each ``CampaignContact`` on the campaign:
+        - If a ``Message`` exists for the contact on the canonical
+          ``campaign_step_id`` (or any existing email Message for that
+          contact when no step is set), its ``body`` / ``subject`` /
+          ``status='approved'`` are updated.
+        - Otherwise a new ``Message`` is inserted (channel='email',
+          status='approved').
+        - ``CampaignContact.status`` is set to ``'generated'`` and
+          ``generated_at`` to ``now()``.
+      * ``Campaign.sender_config`` is merged with the supplied
+        ``from_name`` / ``from_email``.
+      * ``Campaign.template_config[0].config`` is updated to expose the
+        stored ``body_html`` / ``body_text`` / ``subject`` for
+        round-trip readability.
+      * ``Campaign.generation_config['template_type']`` is set to
+        ``'aitransformers_meetup'`` so review/send paths know to apply
+        placeholder substitution.
+      * Counters: ``generated_count = total_contacts``,
+        ``generation_started_at`` / ``generation_completed_at = now()``,
+        ``generation_cost = 0``.
+      * ``Campaign.status`` is set to ``'review'`` unless it is already
+        past review (``'approved'``, ``'exported'``, ``'archived'``).
+
+    Response::
+
+        {"ok": true, "messages_created": N, "messages_updated": M,
+         "campaign_contacts_updated": K}
+    """
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+
+    campaign = db.session.get(Campaign, campaign_id)
+    if not campaign or str(campaign.tenant_id) != str(tenant_id):
+        return jsonify({"error": "Campaign not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    subject = (body.get("subject") or "").strip()
+    body_html = body.get("body_html") or ""
+    body_text = body.get("body_text") or ""
+    from_name = (body.get("from_name") or "").strip()
+    from_email = (body.get("from_email") or "").strip()
+
+    if not subject:
+        return jsonify({"error": "subject is required"}), 400
+    if not body_html:
+        return jsonify({"error": "body_html is required"}), 400
+    if not from_email:
+        return jsonify({"error": "from_email is required"}), 400
+
+    now = datetime.now(timezone.utc)
+
+    # ── 1. Merge sender_config ───────────────────────────────────────
+    existing_sender = campaign.sender_config or {}
+    if isinstance(existing_sender, str):
+        try:
+            existing_sender = json.loads(existing_sender)
+        except (ValueError, TypeError):
+            existing_sender = {}
+    if not isinstance(existing_sender, dict):
+        existing_sender = {}
+    new_sender = dict(existing_sender)
+    new_sender["from_email"] = from_email
+    if from_name:
+        new_sender["from_name"] = from_name
+    campaign.sender_config = new_sender
+
+    # ── 2. Update template_config[0] for round-trip readability ──────
+    existing_tpl = campaign.template_config or []
+    if isinstance(existing_tpl, str):
+        try:
+            existing_tpl = json.loads(existing_tpl)
+        except (ValueError, TypeError):
+            existing_tpl = []
+    if not isinstance(existing_tpl, list):
+        existing_tpl = []
+
+    if not existing_tpl:
+        existing_tpl = [{"step": 1, "channel": "email", "day_offset": 0}]
+
+    first = dict(existing_tpl[0]) if isinstance(existing_tpl[0], dict) else {"step": 1}
+    existing_cfg = first.get("config") or {}
+    if isinstance(existing_cfg, str):
+        try:
+            existing_cfg = json.loads(existing_cfg)
+        except (ValueError, TypeError):
+            existing_cfg = {}
+    if not isinstance(existing_cfg, dict):
+        existing_cfg = {}
+    new_cfg = dict(existing_cfg)
+    new_cfg["subject"] = subject
+    new_cfg["body_html"] = body_html
+    if body_text:
+        new_cfg["body_text"] = body_text
+    first["config"] = new_cfg
+    first["subject"] = subject
+    new_tpl = [first] + existing_tpl[1:]
+    campaign.template_config = new_tpl
+
+    # ── 3. Mark this campaign as a fixed-template one ────────────────
+    existing_gen = campaign.generation_config or {}
+    if isinstance(existing_gen, str):
+        try:
+            existing_gen = json.loads(existing_gen)
+        except (ValueError, TypeError):
+            existing_gen = {}
+    if not isinstance(existing_gen, dict):
+        existing_gen = {}
+    new_gen = dict(existing_gen)
+    new_gen["template_type"] = "aitransformers_meetup"
+    campaign.generation_config = new_gen
+
+    # ── 4. Identify canonical campaign_step (the email step) ─────────
+    step = (
+        CampaignStep.query.filter_by(
+            campaign_id=campaign_id, tenant_id=str(tenant_id), channel="email"
+        )
+        .order_by(CampaignStep.position.asc())
+        .first()
+    )
+    step_id = step.id if step else None
+
+    # ── 5. Iterate CampaignContacts ──────────────────────────────────
+    ccs = (
+        db.session.query(CampaignContact)
+        .filter(CampaignContact.campaign_id == campaign_id)
+        .all()
+    )
+
+    messages_created = 0
+    messages_updated = 0
+    contacts_updated = 0
+
+    try:
+        for cc in ccs:
+            # Find existing email Message for this campaign_contact (any step).
+            q = db.session.query(Message).filter(
+                Message.campaign_contact_id == cc.id,
+                Message.channel == "email",
+            )
+            if step_id is not None:
+                # Prefer the message tied to the canonical step.
+                existing = q.filter(Message.campaign_step_id == step_id).first()
+                if existing is None:
+                    existing = q.first()
+            else:
+                existing = q.first()
+
+            if existing is not None:
+                existing.body = body_html
+                existing.subject = subject
+                existing.status = "approved"
+                if step_id is not None and existing.campaign_step_id != step_id:
+                    existing.campaign_step_id = step_id
+                if existing.approved_at is None:
+                    existing.approved_at = now
+                messages_updated += 1
+            else:
+                msg = Message(
+                    tenant_id=tenant_id,
+                    contact_id=cc.contact_id,
+                    channel="email",
+                    sequence_step=1,
+                    variant="a",
+                    subject=subject,
+                    body=body_html,
+                    status="approved",
+                    language=campaign.language or "en",
+                    campaign_contact_id=cc.id,
+                    campaign_step_id=step_id,
+                    approved_at=now,
+                )
+                db.session.add(msg)
+                messages_created += 1
+
+            if cc.status != "generated":
+                cc.status = "generated"
+                cc.generated_at = now
+                contacts_updated += 1
+            elif cc.generated_at is None:
+                cc.generated_at = now
+
+        # ── 6. Campaign-level counters / status ──────────────────────
+        total = len(ccs)
+        campaign.generated_count = total
+        campaign.generation_cost = 0
+        campaign.generation_started_at = now
+        campaign.generation_completed_at = now
+        # Only advance into review; don't yank a campaign back from
+        # approved/exported/archived.
+        terminal = {"approved", "exported", "archived"}
+        if (campaign.status or "").lower() not in terminal:
+            campaign.status = "review"
+
+        db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        logger.exception("set-template-body: failed for campaign %s", campaign_id)
+        return jsonify({"error": "Failed to apply template body"}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "messages_created": messages_created,
+            "messages_updated": messages_updated,
+            "campaign_contacts_updated": contacts_updated,
+            "total_contacts": len(ccs),
+        }
+    ), 200
+
+
 # ── Test Email ──────────────────────────────────
 
 
@@ -4337,12 +4632,35 @@ def send_test_email(campaign_id):
     user = g.current_user
     to_email = user.email
 
-    subject = f"[TEST] {message.subject or '(no subject)'}"
+    # Build HTML body with header note. For templated campaigns the body
+    # contains {{first_name}}/{{vocative_name}}/{{unsubscribe_url}}
+    # placeholders that production send substitutes per-recipient — apply
+    # the same substitution here so the test preview shows the rendered
+    # email exactly as it will land in real inboxes.
+    from ..services.send_service import (
+        _build_template_variables,
+        _render_body_html,
+        _replace_template_variables,
+        _template_type_for,
+    )
 
-    # Build HTML body with header note
-    from ..services.send_service import _render_body_html
+    original_body = message.body or ""
+    rendered_subject = message.subject or "(no subject)"
+    template_type = _template_type_for(campaign)
+    if template_type and contact is not None:
+        cc_for_msg = None
+        if message.campaign_contact_id:
+            cc_for_msg = db.session.get(CampaignContact, message.campaign_contact_id)
+        if cc_for_msg is not None:
+            tpl_vars = _build_template_variables(contact, cc_for_msg, campaign)
+            if tpl_vars:
+                original_body = _replace_template_variables(original_body, tpl_vars)
+                rendered_subject = _replace_template_variables(
+                    rendered_subject, tpl_vars
+                )
 
-    original_body_html = _render_body_html(message.body)
+    subject = f"[TEST] {rendered_subject}"
+    original_body_html = _render_body_html(original_body)
     header_note = (
         '<div style="background:#f0f0f0;padding:12px;margin-bottom:16px;'
         'border-left:4px solid #2196F3;font-size:13px;color:#555;">'
