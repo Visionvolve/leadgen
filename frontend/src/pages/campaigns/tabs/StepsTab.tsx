@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { PreviewModal } from '../../../components/campaign/PreviewModal'
+import { StepDetailDrawer } from '../../../components/campaign/StepDetailDrawer'
 import {
   useCampaignSteps,
   useAddCampaignStep,
@@ -107,6 +108,10 @@ export function StepsTab({ campaignId, isEditable }: Props) {
 
   // Track which step card is expanded for config editing
   const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  // Step Detail drawer (email template authoring)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerStepPosition, setDrawerStepPosition] = useState<number>(1)
 
   // Template dropdown
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
@@ -578,6 +583,14 @@ export function StepsTab({ campaignId, isEditable }: Props) {
               isExpanded={expandedId === step.id}
               feedbackSummary={feedbackData ?? null}
               onToggleExpand={() => toggleExpand(step.id)}
+              onOpenDetail={
+                step.channel === 'email'
+                  ? () => {
+                      setDrawerStepPosition(step.position)
+                      setDrawerOpen(true)
+                    }
+                  : undefined
+              }
               onMoveUp={() => handleMoveUp(idx)}
               onMoveDown={() => handleMoveDown(idx)}
               onDelete={() => handleDelete(step.id)}
@@ -611,6 +624,13 @@ export function StepsTab({ campaignId, isEditable }: Props) {
         onClose={() => setPreviewOpen(false)}
         campaignId={campaignId}
         stepPosition={previewStepPosition}
+      />
+
+      <StepDetailDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        campaignId={campaignId}
+        stepPosition={drawerStepPosition}
       />
     </div>
   )
@@ -795,6 +815,9 @@ interface StepCardProps {
   isExpanded: boolean
   feedbackSummary: FeedbackSummary | null
   onToggleExpand: () => void
+  /** When provided, clicking the card opens this step's detail drawer
+   * instead of toggling the inline expansion (email steps only). */
+  onOpenDetail?: () => void
   onMoveUp: () => void
   onMoveDown: () => void
   onDelete: () => void
@@ -809,6 +832,7 @@ function StepCard({
   isExpanded,
   feedbackSummary,
   onToggleExpand,
+  onOpenDetail,
   onMoveUp,
   onMoveDown,
   onDelete,
@@ -840,12 +864,27 @@ function StepCard({
   if (config.max_length) summaryParts.push(`${config.max_length} chars`)
   if (config.example_messages?.length) summaryParts.push(`${config.example_messages.length} example(s)`)
 
+  const hasDetailDrawer = !!onOpenDetail
+  const handleHeaderClick = hasDetailDrawer ? onOpenDetail! : onToggleExpand
+
   return (
-    <div className="border border-border rounded-lg bg-surface overflow-hidden">
+    <div
+      data-testid={`step-card-${step.position}`}
+      className="border border-border rounded-lg bg-surface overflow-hidden hover:border-accent/40 hover:shadow-sm transition-all"
+    >
       {/* Collapsed header */}
       <div
-        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-surface-alt/50 transition-colors"
-        onClick={onToggleExpand}
+        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-surface-alt/50 transition-colors group"
+        onClick={handleHeaderClick}
+        title={hasDetailDrawer ? 'Click to edit template' : 'Click to edit step'}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            handleHeaderClick()
+          }
+        }}
       >
         {/* Position badge */}
         <span className="w-6 h-6 flex items-center justify-center text-[10px] font-bold text-text-muted bg-surface-alt rounded-md flex-shrink-0">
@@ -910,22 +949,38 @@ function StepCard({
           </div>
         )}
 
-        {/* Expand indicator */}
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className={`text-text-dim flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-        >
-          <path d="M3 4.5l3 3 3-3" />
-        </svg>
+        {/* Expand / open indicator */}
+        {hasDetailDrawer ? (
+          <span className="flex items-center gap-1 text-[10px] text-text-dim group-hover:text-accent-cyan transition-colors flex-shrink-0">
+            <span className="hidden sm:inline">Edit template</span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <path d="M4.5 3l3 3-3 3" />
+            </svg>
+          </span>
+        ) : (
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className={`text-text-dim flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+          >
+            <path d="M3 4.5l3 3 3-3" />
+          </svg>
+        )}
       </div>
 
       {/* Expanded config editor */}
-      {isExpanded && (
+      {!hasDetailDrawer && isExpanded && (
         <div className="px-4 py-4 border-t border-border space-y-4">
           {/* Basic fields */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

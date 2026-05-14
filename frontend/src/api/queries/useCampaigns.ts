@@ -211,6 +211,46 @@ export function useDeleteCampaignTemplate() {
   })
 }
 
+// ── Set Template Body (fixed-template campaigns) ───────
+
+export interface SetTemplateBodyRequest {
+  subject: string
+  body_html: string
+  body_text?: string
+  from_name?: string
+  from_email: string
+}
+
+export interface SetTemplateBodyResponse {
+  ok: boolean
+  messages_created: number
+  messages_updated: number
+  campaign_contacts_updated: number
+}
+
+/**
+ * Write a fixed HTML body + subject + sender to every Message on this
+ * campaign. This is the canonical "generate messages for fixed-template
+ * campaigns" operation — it does NOT call the LLM. Also persists the
+ * editor values back to `Campaign.template_config[0].config` and
+ * `Campaign.sender_config` so the editor can round-trip the values.
+ */
+export function useSetTemplateBody() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campaignId, data }: { campaignId: string; data: SetTemplateBodyRequest }) =>
+      apiFetch<SetTemplateBodyResponse>(`/campaigns/${campaignId}/set-template-body`, {
+        method: 'POST',
+        body: data,
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaign', vars.campaignId] })
+      qc.invalidateQueries({ queryKey: ['campaigns'] })
+      qc.invalidateQueries({ queryKey: ['messages'] })
+    },
+  })
+}
+
 // ── Campaign Contacts ──────────────────────────────────
 
 export interface CampaignContactItem {

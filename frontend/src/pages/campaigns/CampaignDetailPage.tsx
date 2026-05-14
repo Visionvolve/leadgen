@@ -10,7 +10,6 @@ import { ContactDetail } from '../contacts/ContactDetail'
 import { CompanyDetail } from '../companies/CompanyDetail'
 import { EditableTextarea, FieldGrid, Field } from '../../components/ui/DetailField'
 import { ContactsTab } from './tabs/ContactsTab'
-import { MessageGenTab } from './tabs/MessageGenTab'
 import { MessagesTab } from './tabs/MessagesTab'
 import { OutreachTab } from './tabs/OutreachTab'
 import { SettingsTab } from './tabs/SettingsTab'
@@ -30,8 +29,13 @@ const STATUS_COLORS: Record<string, string> = {
   Archived: 'bg-[#8B92A0]/10 text-text-dim border-[#8B92A0]/20',
 }
 
-const TAB_IDS = ['contacts', 'steps', 'generation', 'review', 'outreach', 'analytics', 'settings'] as const
+const TAB_IDS = ['contacts', 'steps', 'review', 'outreach', 'analytics', 'settings'] as const
 type TabId = (typeof TAB_IDS)[number]
+
+// Legacy tab ids that still appear in old bookmarked URLs.
+const LEGACY_TAB_REDIRECTS: Record<string, TabId> = {
+  generation: 'steps',
+}
 
 export function CampaignDetailPage() {
   const { namespace, campaignId } = useParams<{ namespace: string; campaignId: string }>()
@@ -41,9 +45,14 @@ export function CampaignDetailPage() {
   const updateCampaign = useUpdateCampaign()
   const cloneCampaign = useCloneCampaign()
 
-  // Active tab from URL
+  // Active tab from URL (with legacy redirects)
   const rawTab = searchParams.get('tab')
-  const activeTab: TabId = TAB_IDS.includes(rawTab as TabId) ? (rawTab as TabId) : 'contacts'
+  const redirected = rawTab && rawTab in LEGACY_TAB_REDIRECTS ? LEGACY_TAB_REDIRECTS[rawTab] : null
+  const activeTab: TabId = redirected
+    ? redirected
+    : TAB_IDS.includes(rawTab as TabId)
+      ? (rawTab as TabId)
+      : 'contacts'
 
   const handleTabChange = useCallback((tabId: string) => {
     setSearchParams({ tab: tabId }, { replace: true })
@@ -145,11 +154,11 @@ export function CampaignDetailPage() {
 
   const modalLoading = isContactOpen ? contactLoading : companyLoading
 
-  // Tab definitions
+  // Tab definitions — the old "Generation" tab is replaced by per-step
+  // Step Detail authoring (open from Steps tab → email step).
   const tabs: Tab[] = useMemo(() => [
     { id: 'contacts', label: 'Contacts', badge: contactCount || undefined },
     { id: 'steps', label: 'Steps' },
-    { id: 'generation', label: 'Generation' },
     { id: 'review', label: 'Messages', badge: campaign?.generated_count || undefined },
     { id: 'outreach', label: 'Outreach' },
     { id: 'analytics', label: 'Analytics' },
@@ -305,9 +314,6 @@ export function CampaignDetailPage() {
         )}
         {activeTab === 'steps' && (
           <StepsTab campaignId={campaign.id} isEditable={isEditable} />
-        )}
-        {activeTab === 'generation' && (
-          <MessageGenTab campaign={campaign} isEditable={isEditable} />
         )}
         {activeTab === 'review' && (
           <MessagesTab campaignId={campaign.id} onNavigate={handleNavigate} />
