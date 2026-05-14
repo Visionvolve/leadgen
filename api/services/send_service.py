@@ -607,6 +607,12 @@ def _send_single_email(
     """
     import resend
 
+    # Open + click tracking is *not* configured here — Resend has no
+    # per-send tracking flags. Tracking lives at the *domain* layer
+    # (``PATCH /domains/{id}`` with ``open_tracking`` + ``click_tracking``
+    # + ``tracking_subdomain``) and only activates once the tracking
+    # CNAME is verified at the DNS provider. See ADR-011 and
+    # ``scripts/configure_resend_tracking.py``.
     params = {
         "from": sender,
         "to": [to_email],
