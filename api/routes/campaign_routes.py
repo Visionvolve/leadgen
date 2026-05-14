@@ -4698,9 +4698,10 @@ def send_test_email(campaign_id):
                     e,
                 )
 
-    # Send via Resend
+    # Send via Resend — note: Resend's API expects ``from`` (a reserved
+    # word in Python; the SDK accepts it as a string dict key).
     params = {
-        "from_": sender,
+        "from": sender,
         "to": [to_email],
         "subject": subject,
         "html": body_html,
