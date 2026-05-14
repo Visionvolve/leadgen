@@ -9,6 +9,7 @@ import { ConfirmDialog } from '../../../components/ui/ConfirmDialog'
 import { ContactGroup } from '../../messages/ContactGroup'
 import { CampaignMessagesGrid } from '../../../components/campaign/CampaignMessagesGrid'
 import { MessageReviewQueue } from '../../../components/campaign/MessageReviewQueue'
+import { PreviewModal } from '../../../components/campaign/PreviewModal'
 import { REVIEW_STATUS_DISPLAY, filterOptions } from '../../../lib/display'
 
 interface ContactMessages {
@@ -47,6 +48,20 @@ export function MessagesTab({ campaignId, onNavigate }: Props) {
   // Review queue overlay state
   const [showReviewQueue, setShowReviewQueue] = useState(false)
   const [showBulkApproveConfirm, setShowBulkApproveConfirm] = useState(false)
+
+  // Preview modal state
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewContactId, setPreviewContactId] = useState<string | null>(null)
+
+  const openBulkPreview = useCallback(() => {
+    setPreviewContactId(null)
+    setPreviewOpen(true)
+  }, [])
+
+  const openContactPreview = useCallback((contactId: string | null) => {
+    setPreviewContactId(contactId)
+    setPreviewOpen(true)
+  }, [])
 
   // Persist view preference in localStorage
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -172,6 +187,14 @@ export function MessagesTab({ campaignId, onNavigate }: Props) {
         <div className="flex items-center gap-2 mb-3 px-6 pt-1">
           <ViewToggle mode={viewMode} onChange={handleViewChange} />
           <div className="flex items-center gap-2 ml-auto">
+            <button
+              data-testid="messages-preview-button"
+              onClick={openBulkPreview}
+              className="px-3 py-1.5 text-xs bg-surface border border-border text-text rounded-md hover:bg-surface-alt transition-colors"
+              title="Preview a rendered message for any contact in this campaign"
+            >
+              Preview
+            </button>
             {draftCount > 0 && (
               <>
                 <button
@@ -210,6 +233,13 @@ export function MessagesTab({ campaignId, onNavigate }: Props) {
             onClose={() => setShowReviewQueue(false)}
           />
         )}
+
+        <PreviewModal
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          campaignId={campaignId}
+          initialContactId={previewContactId}
+        />
       </div>
     )
   }
@@ -224,6 +254,14 @@ export function MessagesTab({ campaignId, onNavigate }: Props) {
         action={
           <div className="flex items-center gap-2 ml-auto">
             <ViewToggle mode={viewMode} onChange={handleViewChange} />
+            <button
+              data-testid="messages-preview-button"
+              onClick={openBulkPreview}
+              className="px-3 py-1.5 text-xs bg-surface border border-border text-text rounded-md hover:bg-surface-alt transition-colors"
+              title="Preview a rendered message for any contact in this campaign"
+            >
+              Preview
+            </button>
             {draftCount > 0 && (
               <>
                 <button
@@ -305,6 +343,9 @@ export function MessagesTab({ campaignId, onNavigate }: Props) {
               messages={g.messages}
               onContactClick={g.contactId !== 'unknown' ? () => onNavigate('contact', g.contactId) : undefined}
               onCompanyClick={g.companyId ? () => onNavigate('company', g.companyId!) : undefined}
+              onPreview={g.contactId !== 'unknown' ? () => openContactPreview(g.contactId) : undefined}
+              campaignId={campaignId}
+              onRequestSendTest={g.contactId !== 'unknown' ? () => openContactPreview(g.contactId) : undefined}
             />
           ))
         )}
@@ -325,6 +366,13 @@ export function MessagesTab({ campaignId, onNavigate }: Props) {
         confirmLabel="Approve All"
         onConfirm={executeBulkApprove}
         onCancel={() => setShowBulkApproveConfirm(false)}
+      />
+
+      <PreviewModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        campaignId={campaignId}
+        initialContactId={previewContactId}
       />
     </div>
   )
