@@ -1379,7 +1379,11 @@ def update_company(company_id):
                     {
                         "code": "duplicate_company_name",
                         "error": "A company with this normalized name already exists in this tenant.",
+                        # Keep matches at the top level for legacy clients AND under
+                        # `details` so the frontend ApiError (which only forwards
+                        # `details`) can read them.
                         "matches": matches,
+                        "details": {"matches": matches},
                     }
                 ), 409
 
