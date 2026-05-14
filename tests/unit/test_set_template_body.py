@@ -247,6 +247,79 @@ class TestSetTemplateBody:
         )
         assert resp.status_code == 404
 
+    def test_persists_reply_to_email_into_sender_config(
+        self, client, db, seed_companies_contacts, seed_tenant
+    ):
+        """When ``reply_to_email`` is supplied, it is stored under
+        ``sender_config["reply_to"]`` -- the key the send-service reads
+        when wiring Resend's reply-to address."""
+        headers = _headers(client)
+        campaign_id = _create_campaign(client, headers)
+        contacts = _add_contacts_directly(db, seed_tenant.id, count=1)
+        _attach_to_campaign(db, seed_tenant.id, campaign_id, contacts)
+        db.session.commit()
+
+        payload = {
+            "subject": "x",
+            "body_html": "<p>Hi {{first_name}}</p>",
+            "from_email": "barbora@aitransformers.eu",
+            "from_name": "Barbora Maroto",
+            "reply_to_email": "barbora@aitransformers.eu",
+        }
+        resp = client.post(
+            f"/api/campaigns/{campaign_id}/set-template-body",
+            headers=headers,
+            json=payload,
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        from api.models import Campaign
+
+        camp = db.session.get(Campaign, campaign_id)
+        sender = _coerce_jsonb(camp.sender_config)
+        assert sender.get("from_email") == "barbora@aitransformers.eu"
+        assert sender.get("from_name") == "Barbora Maroto"
+        assert sender.get("reply_to") == "barbora@aitransformers.eu"
+
+    def test_omitting_reply_to_leaves_existing_value_alone(
+        self, client, db, seed_companies_contacts, seed_tenant
+    ):
+        """A subsequent call without ``reply_to_email`` must not clobber
+        an already-persisted ``sender_config.reply_to``."""
+        headers = _headers(client)
+        campaign_id = _create_campaign(client, headers)
+        contacts = _add_contacts_directly(db, seed_tenant.id, count=1)
+        _attach_to_campaign(db, seed_tenant.id, campaign_id, contacts)
+        db.session.commit()
+
+        # First call sets reply_to.
+        client.post(
+            f"/api/campaigns/{campaign_id}/set-template-body",
+            headers=headers,
+            json={
+                "subject": "x",
+                "body_html": "<p>Hi {{first_name}}</p>",
+                "from_email": "a@example.test",
+                "reply_to_email": "reply@example.test",
+            },
+        )
+        # Second call omits it.
+        client.post(
+            f"/api/campaigns/{campaign_id}/set-template-body",
+            headers=headers,
+            json={
+                "subject": "y",
+                "body_html": "<p>Hi {{first_name}}</p>",
+                "from_email": "a@example.test",
+            },
+        )
+
+        from api.models import Campaign
+
+        camp = db.session.get(Campaign, campaign_id)
+        sender = _coerce_jsonb(camp.sender_config)
+        assert sender.get("reply_to") == "reply@example.test"
+
 
 class TestGeneratePreviewTemplatedShortCircuit:
     def test_returns_stored_body_with_first_name_substituted(

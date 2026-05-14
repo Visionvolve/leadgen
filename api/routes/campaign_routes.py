@@ -4338,7 +4338,8 @@ def set_template_body(campaign_id):
           "body_html": "string",   # contains {{first_name}} placeholders
           "body_text": "string",   # optional plain-text fallback
           "from_name": "string",
-          "from_email": "string"
+          "from_email": "string",
+          "reply_to_email": "string"  # optional, persisted as sender_config.reply_to
         }
 
     Effect (single transaction):
@@ -4352,7 +4353,9 @@ def set_template_body(campaign_id):
         - ``CampaignContact.status`` is set to ``'generated'`` and
           ``generated_at`` to ``now()``.
       * ``Campaign.sender_config`` is merged with the supplied
-        ``from_name`` / ``from_email``.
+        ``from_name`` / ``from_email`` (and ``reply_to`` when
+        ``reply_to_email`` is provided -- the send service reads this
+        key and passes it through to Resend).
       * ``Campaign.template_config[0].config`` is updated to expose the
         stored ``body_html`` / ``body_text`` / ``subject`` for
         round-trip readability.
@@ -4384,6 +4387,7 @@ def set_template_body(campaign_id):
     body_text = body.get("body_text") or ""
     from_name = (body.get("from_name") or "").strip()
     from_email = (body.get("from_email") or "").strip()
+    reply_to_email = (body.get("reply_to_email") or "").strip()
 
     if not subject:
         return jsonify({"error": "subject is required"}), 400
@@ -4395,6 +4399,11 @@ def set_template_body(campaign_id):
     now = datetime.now(timezone.utc)
 
     # ── 1. Merge sender_config ───────────────────────────────────────
+    # ``sender_config["reply_to"]`` is the canonical key the send-service
+    # reads (see ``send_service.send_campaign_emails``); accept the more
+    # explicit ``reply_to_email`` from the API payload but persist it
+    # under ``reply_to`` so existing send wiring picks it up without
+    # changes. When the caller omits it, leave any existing value alone.
     existing_sender = campaign.sender_config or {}
     if isinstance(existing_sender, str):
         try:
@@ -4407,6 +4416,8 @@ def set_template_body(campaign_id):
     new_sender["from_email"] = from_email
     if from_name:
         new_sender["from_name"] = from_name
+    if reply_to_email:
+        new_sender["reply_to"] = reply_to_email
     campaign.sender_config = new_sender
 
     # ── 2. Update template_config[0] for round-trip readability ──────
