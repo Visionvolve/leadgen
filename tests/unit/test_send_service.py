@@ -187,6 +187,97 @@ class TestSendCampaignEmails:
 
     @patch("api.services.send_service.time.sleep")
     @patch("api.services.send_service._send_single_email")
+    def test_send_worker_dedup_ignores_preview_kind(
+        self, mock_send, mock_sleep, app, db, seed_companies_contacts
+    ):
+        """A kind='preview' EmailSendLog row (left by /send-test) must NOT block
+        the real campaign send for the same Message. Regression test for the
+        BL-1026 send-worker oversight where 4 prod contacts on campaign
+        389a02a6-... were silently skipped because they had received send-tests.
+        """
+        from api.models import EmailSendLog
+
+        seed = seed_companies_contacts
+        _setup_tenant_with_resend_key(db, seed)
+        campaign, messages, contacts = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=2
+        )
+
+        # Pre-create a preview log for the first message (simulates /send-test).
+        # status='sent', kind='preview' — exactly what /send-test writes.
+        preview_log = EmailSendLog(
+            tenant_id=seed["tenant"].id,
+            message_id=messages[0].id,
+            resend_message_id="re_preview_001",
+            status="sent",
+            kind="preview",
+            from_email="outreach@test.com",
+            to_email=contacts[0].email_address or "test@test.com",
+        )
+        db.session.add(preview_log)
+        db.session.commit()
+
+        mock_send.return_value = {"id": "resend_msg_real"}
+
+        from api.services.send_service import send_campaign_emails
+
+        with app.app_context():
+            result = send_campaign_emails(str(campaign.id), str(seed["tenant"].id))
+
+        # Both messages should be sent — the preview row must not block.
+        contacts_with_email = [c for c in contacts if c.email_address]
+        assert result["sent_count"] == len(contacts_with_email)
+        # The preview row should NOT have counted as a prior send.
+        assert result["skipped_count"] == 0
+
+    @patch("api.services.send_service.time.sleep")
+    @patch("api.services.send_service._send_single_email")
+    def test_send_worker_dedup_ignores_superseded(
+        self, mock_send, mock_sleep, app, db, seed_companies_contacts
+    ):
+        """A superseded EmailSendLog row (an earlier failed-then-retried send,
+        marked via BL-1029 migration 061) must NOT block a fresh retry attempt
+        for the same Message.
+        """
+        from datetime import datetime, timezone
+
+        from api.models import EmailSendLog
+
+        seed = seed_companies_contacts
+        _setup_tenant_with_resend_key(db, seed)
+        campaign, messages, contacts = _setup_campaign_with_approved_emails(
+            db, seed, msg_count=1
+        )
+
+        # Pre-create a non-failed, non-preview, but SUPERSEDED log row.
+        # status='sent' (not failed), kind='production', superseded_at=now.
+        superseded_log = EmailSendLog(
+            tenant_id=seed["tenant"].id,
+            message_id=messages[0].id,
+            resend_message_id="re_superseded_001",
+            status="sent",
+            kind="production",
+            superseded_at=datetime.now(timezone.utc),
+            from_email="outreach@test.com",
+            to_email=contacts[0].email_address or "test@test.com",
+        )
+        db.session.add(superseded_log)
+        db.session.commit()
+
+        mock_send.return_value = {"id": "resend_msg_retry"}
+
+        from api.services.send_service import send_campaign_emails
+
+        with app.app_context():
+            result = send_campaign_emails(str(campaign.id), str(seed["tenant"].id))
+
+        # The superseded row must not block; the retry send should fire.
+        contacts_with_email = [c for c in contacts if c.email_address]
+        assert result["sent_count"] == len(contacts_with_email)
+        assert result["skipped_count"] == 0
+
+    @patch("api.services.send_service.time.sleep")
+    @patch("api.services.send_service._send_single_email")
     def test_send_handles_failure_gracefully(
         self, mock_send, mock_sleep, app, db, seed_companies_contacts
     ):
@@ -634,9 +725,7 @@ class TestUnsubscribeHeader:
             )
 
             call_args = mock_send.call_args[0][0]
-            assert "from" in call_args, (
-                "Resend SDK expects 'from' key in params dict"
-            )
+            assert "from" in call_args, "Resend SDK expects 'from' key in params dict"
             assert "from_" not in call_args, (
                 "'from_' key must not be present — SDK rejects it with "
                 "ValueError('Missing from field')"
