@@ -298,5 +298,35 @@ Phases execute in numeric order with parallelism per the Wave plan above. Lead a
 
 No orphans. No duplicates. Mapping is also stored in the backlog service under directive `gsd-phase-mapping` for runtime discovery.
 
+### Phase 12: allow edit company name both inline and from company detail, check trimmed/lowercased/diacritics removed version, try to find duplicates, if you find duplicate prompt user to select what should be done - merge, pick one, etc. Validate on staging and push to prod
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 12 to break down)
+
+### Phase 13: LinkedIn Sales Nav Contact Loader — Chrome extension pushes Sales Nav contacts into production with batch tagging and contact location captured to contacts.location
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 13 to break down)
+
+### Phase 14: LinkedIn Multi-Step Outreach via Extension — Campaign-driven invite + message sequence sent through our Chrome extension; first-degree connections skip the invite step and receive a different message variant
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 13
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 14 to break down)
+
 ---
 *Created: 2026-05-11 during GSD bootstrap for Milestone v25 (LCC Client Requests).*
