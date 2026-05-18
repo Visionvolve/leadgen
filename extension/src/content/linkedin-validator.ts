@@ -12,6 +12,9 @@
  * - Only send data to user's own leadgen instance
  */
 
+// ============== BUILD-TIME GLOBALS ==============
+declare const __EXT_ENV__: 'prod' | 'staging';
+
 // ============== LOGGING ==============
 const LOG_PREFIX = '[VV LinkedIn Validator]';
 
@@ -62,7 +65,9 @@ interface CachedValidation {
 // ============== CONSTANTS ==============
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const DEBOUNCE_MS = 1000;
-const OVERLAY_ID = 'vv-linkedin-validator-overlay';
+// Namespace the DOM id per env so prod and staging extension builds can
+// coexist on the same LinkedIn page without one overlay stomping the other.
+const OVERLAY_ID = `vv-linkedin-validator-overlay-${__EXT_ENV__}`;
 
 // ============== STATE ==============
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -337,6 +342,8 @@ function createStyles(): string {
     `.vv-enrichment-badge--high { background: #e8f5e9; color: #2e7d32; }`,
     `.vv-enrichment-badge--medium { background: #fff8e1; color: #f57f17; }`,
     `.vv-enrichment-badge--low { background: #ffebee; color: #c62828; }`,
+    `.vv-env-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; margin-left: 6px; text-transform: uppercase; }`,
+    `.vv-env-badge-staging { background: #ff6f00; color: #fff; }`,
   ].join('\n');
 }
 
@@ -415,6 +422,18 @@ function renderCard(result: ValidationResult): HTMLElement {
   dot.style.background = dotColor;
   statusDiv.appendChild(dot);
   statusDiv.appendChild(el('span', {}, label));
+
+  // Env badge — only show for non-prod so the user can tell which build
+  // rendered this overlay when prod + staging are loaded side-by-side.
+  if (__EXT_ENV__ !== 'prod') {
+    statusDiv.appendChild(
+      el(
+        'span',
+        { className: `vv-env-badge vv-env-badge-${__EXT_ENV__}` },
+        `[${__EXT_ENV__.toUpperCase()}]`,
+      ),
+    );
+  }
 
   // Enrichment quality badge
   if (result.enrichment_quality && result.enrichment_quality.score) {

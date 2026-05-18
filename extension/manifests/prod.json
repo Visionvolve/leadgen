@@ -6,6 +6,9 @@
     "48": "icons/prod/48.png",
     "128": "icons/prod/128.png"
   },
+  "action": {
+    "default_title": "VisionVolve Leads"
+  },
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://leadgen.visionvolve.com/*"
