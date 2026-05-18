@@ -1,4 +1,24 @@
-FROM python:3.13-slim
+# Stage 1: Build the Chrome extension (prod + staging) so the API can serve
+# both bundles via /api/extension/download (BL-1209).
+FROM node:20-alpine AS extension-builder
+
+WORKDIR /build
+
+# Copy only what npm needs first so we can cache the install layer.
+# The lockfile is committed so `npm ci` produces a reproducible install.
+COPY extension/package.json extension/package-lock.json ./
+
+RUN npm ci
+
+# Copy the rest of the extension sources and build both env variants.
+COPY extension/tsconfig.json extension/vite.config.ts ./
+COPY extension/manifests ./manifests
+COPY extension/src ./src
+
+RUN npm run build:all
+
+# Stage 2: Final API image.
+FROM python:3.13-slim AS api
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
@@ -11,6 +31,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ api/
 COPY scripts/ scripts/
 COPY migrations/ migrations/
+
+# Bake the prebuilt extension bundles into the image. The download endpoint
+# resolves /app/extension/dist/{env} at runtime.
+COPY --from=extension-builder /build/dist /app/extension/dist
 
 EXPOSE 5000
 

@@ -1,9 +1,16 @@
 """Browser extension API routes for lead import, activity sync, LinkedIn queue, validation, and status."""
 
-import re
-from datetime import datetime, timezone
+from __future__ import annotations
 
-from flask import Blueprint, g, jsonify, request
+import io
+import json
+import os
+import re
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+from flask import Blueprint, Response, g, jsonify, request
 
 from ..auth import require_auth, resolve_tenant
 from ..models import (
@@ -283,6 +290,110 @@ def extension_status():
             "total_leads_imported": lead_count,
             "total_activities_synced": activity_count,
         }
+    )
+
+
+# --- Extension self-serve download (BL-1209) ---
+
+
+# Required files that MUST be present in the bundled extension zip.
+# Used by the CI smoke test (test_extension_download.py) and as a runtime
+# sanity check before producing the response.
+_REQUIRED_EXTENSION_FILES = (
+    "manifest.json",
+    "service-worker.js",
+    "sales-navigator.js",
+    "activity-monitor.js",
+    "linkedin-validator.js",
+    "sidepanel.html",
+)
+
+
+def _resolve_extension_dist_dir(env: str) -> Path | None:
+    """Locate the built extension dist directory for the given environment.
+
+    Resolution order:
+        1. Test/env override: ``EXTENSION_DIST_DIR/{env}`` if set.
+        2. Production container layout: ``/app/extension/dist/{env}``.
+        3. Local dev layout: ``<repo-root>/extension/dist/{env}``.
+
+    Returns the first directory that exists, or None if no build is present.
+    """
+    candidates: list[Path] = []
+
+    override = os.environ.get("EXTENSION_DIST_DIR")
+    if override:
+        candidates.append(Path(override) / env)
+
+    candidates.append(Path("/app/extension/dist") / env)
+    # api/routes/extension_routes.py -> repo root is three parents up.
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates.append(repo_root / "extension" / "dist" / env)
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+@extension_bp.route("/api/extension/download", methods=["GET"])
+@require_auth
+def download_extension():
+    """Serve the bundled Chrome extension as a zip file.
+
+    Query params:
+        env: "prod" (default) or "staging".
+
+    AuthZ:
+        - Any authenticated user may download the prod build.
+        - Only super_admin users may download the staging build.
+
+    Response:
+        200 with ``application/zip`` and
+        ``Content-Disposition: attachment; filename="visionvolve-leads-{env}-v{version}.zip"``.
+        404 if the bundled extension is not present in the container.
+    """
+    env = (request.args.get("env") or "prod").strip().lower()
+    if env not in ("prod", "staging"):
+        return jsonify({"error": "invalid env (must be 'prod' or 'staging')"}), 400
+
+    user = g.current_user
+    if env == "staging" and not user.is_super_admin:
+        return jsonify({"error": "staging build requires super_admin"}), 403
+
+    dist_dir = _resolve_extension_dist_dir(env)
+    if dist_dir is None:
+        return jsonify({"error": f"extension build not found: {env}"}), 404
+
+    manifest_path = dist_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return jsonify({"error": f"manifest.json missing in {env} build"}), 404
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return jsonify({"error": "manifest.json is invalid"}), 500
+    version = str(manifest.get("version", "0.0.0"))
+
+    # Stream-zip the directory in memory. The dist is small (~500KB), so the
+    # in-memory buffer is acceptable; deflate keeps the zip compact.
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(dist_dir.rglob("*")):
+            if file_path.is_file():
+                zf.write(file_path, file_path.relative_to(dist_dir))
+    payload = buffer.getvalue()
+
+    filename = f"visionvolve-leads-{env}-v{version}.zip"
+    return Response(
+        payload,
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(payload)),
+            "Cache-Control": "no-store",
+            "X-Extension-Version": version,
+        },
     )
 
 

@@ -67,6 +67,7 @@ docs/
 - [Architecture](docs/ARCHITECTURE.md) - System overview, components, data flow
 - [Migration Plan](docs/postgres-migration.md) - Airtable to PostgreSQL migration design
 - [Workflows](WORKFLOWS.md) - n8n pipeline workflow documentation
+- [Chrome Extension Setup](docs/extension-setup.md) - Install and use the VisionVolve Leads browser extension
 - [Changelog](CHANGELOG.md) - Release history
 - [Project Rules](CLAUDE.md) - Development workflow and standards
 
