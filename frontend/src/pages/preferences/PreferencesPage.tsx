@@ -10,6 +10,7 @@ import { GeneralSection } from './sections/GeneralSection'
 import { LanguageSection } from './sections/LanguageSection'
 import { CampaignTemplatesSection } from './sections/CampaignTemplatesSection'
 import { StrategyTemplatesSection } from './sections/StrategyTemplatesSection'
+import { BrowserExtensionSection } from './sections/BrowserExtensionSection'
 
 interface SettingsTab {
   id: string
@@ -19,6 +20,7 @@ interface SettingsTab {
 
 const TABS: SettingsTab[] = [
   { id: 'general', label: 'General', component: GeneralSection },
+  { id: 'browser-extension', label: 'Browser Extension', component: BrowserExtensionSection },
   { id: 'language', label: 'Language', component: LanguageSection },
   { id: 'campaign-templates', label: 'Campaign Templates', component: CampaignTemplatesSection },
   { id: 'strategy-templates', label: 'Strategy Templates', component: StrategyTemplatesSection },
