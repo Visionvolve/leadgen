@@ -1,0 +1,204 @@
+name: Clone Prod DB to Staging (Managed RDS)
+
+# Restores the managed `leadgen_staging` database on the Lightsail `dbmaster`
+# RDS instance from a pg_dump of the production `leadgen` database on the same
+# RDS instance.
+#
+# Connectivity: pg_dump and psql both run on the staging VPS (which can reach
+# managed RDS via the default Lightsail VPC). The GHA runner SSHes to the
+# staging VPS and pipes pg_dump output straight into psql with no intermediate
+# disk write.
+#
+# Pre-restore safety: dumps the current state of `leadgen_staging` to
+# /tmp/staging-pre-restore-YYYYMMDD.sql.gz on the staging VPS before the drop.
+#
+# After restore: optionally inserts test@staging.local super_admin user with a
+# fresh bcrypt hash of `staging123` so QA can log in.
+#
+# Required GitHub secrets:
+#   STAGING_SSH_KEY        — SSH key to the staging VPS (existing)
+#   PROD_DBMASTER_PASSWORD — RDS master password for dbmasteruser (NEW; must be
+#                            added before running). Same value as
+#                            `op://visionvolve-prod/AWS Lightsail dbmaster - master password/password`
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed_test_user:
+        description: 'Insert test@staging.local super_admin after restore'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      confirm:
+        description: 'Type "CLONE" to confirm destructive overwrite of managed leadgen_staging'
+        required: true
+        type: string
+
+jobs:
+  clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RDS_HOST: ls-934f096d99ba4e98dd82196e6e7470f8a9e993bc.cz6y8ke6ynad.eu-central-1.rds.amazonaws.com
+      RDS_USER: dbmasteruser
+      PROD_DB: leadgen
+      STAGING_DB: leadgen_staging
+      VPS_HOST: 3.124.110.199
+      VPS_USER: ec2-user
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate confirmation
+        env:
+          CONFIRM_INPUT: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM_INPUT" != "CLONE" ]; then
+            echo "::error::Confirmation input did not match expected value 'CLONE'. Aborting."
+            exit 1
+          fi
+          echo "Confirmation received."
+
+      - name: Setup SSH to staging VPS
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/staging.pem
+          chmod 600 ~/.ssh/staging.pem
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Probe managed RDS reachability from staging VPS
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' docker run --rm -i \
+               -e PGPASSWORD postgres:17-alpine \
+               psql -h '${RDS_HOST}' -p 5432 -U '${RDS_USER}' -d '${PROD_DB}' \
+                    -c 'SELECT current_database(), version();'"
+
+      - name: Capture prod state (read-only)
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' docker run --rm -i \
+               -e PGPASSWORD postgres:17-alpine \
+               psql -h '${RDS_HOST}' -p 5432 -U '${RDS_USER}' -d '${PROD_DB}' \
+                    -c \"SELECT count(*) AS table_count FROM information_schema.tables WHERE table_schema='public';\" \
+                    -c \"SELECT 'companies' AS t, count(*) FROM companies UNION ALL SELECT 'contacts', count(*) FROM contacts UNION ALL SELECT 'tenants', count(*) FROM tenants UNION ALL SELECT 'users', count(*) FROM users;\""
+
+      - name: Backup current managed leadgen_staging
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          DUMP_PATH="/tmp/staging-pre-restore-${STAMP}.sql.gz"
+          echo "Backing up to ${DUMP_PATH} on staging VPS"
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' docker run --rm -i \
+               -e PGPASSWORD postgres:17-alpine \
+               pg_dump -h '${RDS_HOST}' -p 5432 -U '${RDS_USER}' -d '${STAGING_DB}' \
+                       --no-owner --no-privileges --no-comments \
+               | gzip > '${DUMP_PATH}' && ls -la '${DUMP_PATH}'"
+
+      - name: Drop public schema on managed leadgen_staging
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' docker run --rm -i \
+               -e PGPASSWORD postgres:17-alpine \
+               psql -h '${RDS_HOST}' -p 5432 -U '${RDS_USER}' -d '${STAGING_DB}' \
+                    -v ON_ERROR_STOP=1 \
+                    -c 'DROP SCHEMA IF EXISTS public CASCADE;' \
+                    -c 'CREATE SCHEMA public;' \
+                    -c 'GRANT ALL ON SCHEMA public TO ${RDS_USER};' \
+                    -c 'GRANT ALL ON SCHEMA public TO PUBLIC;'"
+
+      - name: pg_dump leadgen | psql leadgen_staging
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          echo "Streaming pg_dump ${PROD_DB} -> psql ${STAGING_DB} on the staging VPS..."
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' bash -c '
+               set -euo pipefail
+               docker run --rm -i -e PGPASSWORD postgres:17-alpine \
+                 pg_dump -h ${RDS_HOST} -p 5432 -U ${RDS_USER} -d ${PROD_DB} \
+                         --no-owner --no-privileges --no-comments \
+               | docker run --rm -i -e PGPASSWORD postgres:17-alpine \
+                   psql -h ${RDS_HOST} -p 5432 -U ${RDS_USER} -d ${STAGING_DB} \
+                        -v ON_ERROR_STOP=1 -q
+             '"
+
+      - name: Verify restore (table + row counts)
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' docker run --rm -i \
+               -e PGPASSWORD postgres:17-alpine \
+               psql -h '${RDS_HOST}' -p 5432 -U '${RDS_USER}' -d '${STAGING_DB}' \
+                    -c \"SELECT count(*) AS table_count FROM information_schema.tables WHERE table_schema='public';\" \
+                    -c \"SELECT 'companies' AS t, count(*) FROM companies UNION ALL SELECT 'contacts', count(*) FROM contacts UNION ALL SELECT 'tenants', count(*) FROM tenants UNION ALL SELECT 'users', count(*) FROM users;\""
+
+      - name: Seed test@staging.local super_admin
+        if: inputs.seed_test_user == 'true'
+        env:
+          PROD_DBMASTER_PASSWORD: ${{ secrets.PROD_DBMASTER_PASSWORD }}
+        run: |
+          # Generate bcrypt('staging123') on the staging VPS, then INSERT/UPDATE
+          # the user row and link to the visionvolve tenant. The hash and the
+          # SQL are passed via heredoc files on the VPS to avoid quoting hell.
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "docker run --rm python:3.13-alpine sh -c 'pip install -q bcrypt && python -c \"import bcrypt; print(bcrypt.hashpw(b\\\"staging123\\\", bcrypt.gensalt(rounds=12)).decode())\"' > /tmp/_seed_hash.txt && wc -c /tmp/_seed_hash.txt"
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" "cat > /tmp/_seed.sql" <<'SQL'
+          \set hash `cat /tmp/_seed_hash.txt | tr -d '\n'`
+          INSERT INTO users (email, password_hash, display_name, is_super_admin, is_active)
+          VALUES ('test@staging.local', :'hash', 'Staging Test User', true, true)
+          ON CONFLICT (email) DO UPDATE
+            SET password_hash = EXCLUDED.password_hash,
+                is_super_admin = true,
+                is_active = true;
+          INSERT INTO user_tenant_roles (user_id, tenant_id, role)
+          SELECT u.id, t.id, 'admin'
+          FROM users u
+          CROSS JOIN tenants t
+          WHERE u.email = 'test@staging.local'
+            AND t.slug = 'visionvolve'
+            AND NOT EXISTS (
+              SELECT 1 FROM user_tenant_roles utr
+              WHERE utr.user_id = u.id AND utr.tenant_id = t.id
+            );
+          SELECT u.id, u.email, u.is_super_admin,
+                 array_agg(t.slug || ':' || utr.role) AS tenant_roles
+          FROM users u
+          LEFT JOIN user_tenant_roles utr ON utr.user_id = u.id
+          LEFT JOIN tenants t ON t.id = utr.tenant_id
+          WHERE u.email = 'test@staging.local'
+          GROUP BY u.id, u.email, u.is_super_admin;
+          SQL
+          ssh -i ~/.ssh/staging.pem "${VPS_USER}@${VPS_HOST}" \
+            "PGPASSWORD='${PROD_DBMASTER_PASSWORD}' docker run --rm -i \
+               -v /tmp/_seed.sql:/tmp/_seed.sql:ro \
+               -v /tmp/_seed_hash.txt:/tmp/_seed_hash.txt:ro \
+               -e PGPASSWORD postgres:17-alpine \
+               psql -h '${RDS_HOST}' -p 5432 -U '${RDS_USER}' -d '${STAGING_DB}' \
+                    -v ON_ERROR_STOP=1 -f /tmp/_seed.sql && \
+             rm -f /tmp/_seed.sql /tmp/_seed_hash.txt"
+
+      - name: Summary
+        run: |
+          echo "=== Clone complete ==="
+          echo "Pre-restore backup: /tmp/staging-pre-restore-*.sql.gz on staging VPS"
+          echo "Restored: managed RDS ${STAGING_DB} from ${PROD_DB}"
+          if [ "${{ inputs.seed_test_user }}" = "true" ]; then
+            echo "Seeded: test@staging.local super_admin (password: staging123)"
+          fi
+          echo ""
+          echo "Next: ensure docker-compose.leadgen.yml DATABASE_URL points at"
+          echo "managed RDS ${RDS_HOST}/${STAGING_DB} and restart leadgen-api."
