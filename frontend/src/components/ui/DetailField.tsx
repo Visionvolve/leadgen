@@ -482,9 +482,16 @@ export function EditableHeading({
   }
 
   if (!editing) {
+    // BL-1205: clicking the heading text itself enters edit mode (mirrors
+    // the InlineEditCell behaviour where the value-text is the primary
+    // affordance). The pencil button stays as a discoverable hint on hover.
     return (
       <div className={`group flex items-center gap-2 min-w-0 ${className}`}>
-        <h2 className="text-lg font-semibold font-title text-text truncate">
+        <h2
+          onClick={() => setEditing(true)}
+          className="text-lg font-semibold font-title text-text truncate cursor-text rounded px-1 -mx-1 transition-colors hover:bg-white/[0.04]"
+          title="Click to edit"
+        >
           {value || placeholder || '—'}
         </h2>
         <button
