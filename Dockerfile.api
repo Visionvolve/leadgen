@@ -5,11 +5,10 @@ FROM node:20-alpine AS extension-builder
 WORKDIR /build
 
 # Copy only what npm needs first so we can cache the install layer.
-COPY extension/package.json extension/package-lock.json* ./
+# The lockfile is committed so `npm ci` produces a reproducible install.
+COPY extension/package.json extension/package-lock.json ./
 
-# `npm ci` requires a lockfile; fall back to `npm install` if one is not
-# committed yet (the extension lockfile is typically absent from the repo).
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+RUN npm ci
 
 # Copy the rest of the extension sources and build both env variants.
 COPY extension/tsconfig.json extension/vite.config.ts ./
