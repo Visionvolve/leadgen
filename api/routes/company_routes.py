@@ -26,6 +26,8 @@ from ..display import (
 )
 from ..models import db
 from ..services.contact_helpers import write_field_change
+from ..services.dedup import find_name_collisions
+from ..services.name_normalize import normalize_company_name
 from ..utils.safe_lookup import is_valid_uuid
 
 companies_bp = Blueprint("companies", __name__)
@@ -1333,6 +1335,58 @@ def update_company(company_id):
                 }
             ), 400
 
+    # ──────────────────────────────────────────────────────────────
+    # BL-1203 / Phase 12: company-name duplicate gate.
+    #
+    # When the payload changes `name`:
+    #   1. Reject empty-after-normalize with 400.
+    #   2. If ?confirm_duplicate=keep_both is NOT set, look up same-tenant
+    #      collisions on normalized_name. Any match → 409 with matches[].
+    #   3. Otherwise (keep_both set OR no collision), fall through; the
+    #      UPDATE below will also write the new normalized_name and the
+    #      audit row gets an extra metadata note when keep_both was used.
+    # ──────────────────────────────────────────────────────────────
+    new_normalized_name = None
+    keep_both = request.args.get("confirm_duplicate") == "keep_both"
+    if "name" in fields:
+        raw_name = fields["name"]
+        new_name = (raw_name or "").strip() if raw_name is not None else None
+        if not new_name:
+            return jsonify(
+                {
+                    "error": "Company name cannot be empty",
+                    "code": "empty_name",
+                    "field": "name",
+                }
+            ), 400
+        new_normalized_name = normalize_company_name(new_name)
+        if new_normalized_name == "":
+            return jsonify(
+                {
+                    "error": "Company name normalizes to empty (only legal suffixes / punctuation)",
+                    "code": "empty_name_after_normalize",
+                    "field": "name",
+                }
+            ), 400
+        if not keep_both:
+            matches = find_name_collisions(
+                tenant_id=tenant_id,
+                normalized_name=new_normalized_name,
+                exclude_id=company_id,
+            )
+            if matches:
+                return jsonify(
+                    {
+                        "code": "duplicate_company_name",
+                        "error": "A company with this normalized name already exists in this tenant.",
+                        # Keep matches at the top level for legacy clients AND under
+                        # `details` so the frontend ApiError (which only forwards
+                        # `details`) can read them.
+                        "matches": matches,
+                        "details": {"matches": matches},
+                    }
+                ), 409
+
     # Verify company belongs to tenant and pull current values for the audit diff.
     existing = db.session.execute(
         db.text(
@@ -1382,6 +1436,12 @@ def update_company(company_id):
         set_parts.append(f"{k} = :{k}")
         params[k] = v
 
+    # BL-1203: keep companies.normalized_name in sync alongside any raw
+    # UPDATE that touches `name`. (ORM listener doesn't fire for raw SQL.)
+    if "name" in fields and new_normalized_name is not None:
+        set_parts.append("normalized_name = :normalized_name")
+        params["normalized_name"] = new_normalized_name
+
     if custom_fields_update and isinstance(custom_fields_update, dict):
         existing_cf = _parse_jsonb(existing[1])
         existing_cf.update(custom_fields_update)
@@ -1399,6 +1459,14 @@ def update_company(company_id):
         old_value = existing_map.get(field_name)
         if old_value == new_value:
             continue
+        # BL-1203: when the operator chose 'Keep both' on a name collision,
+        # annotate the audit row so we can later audit who kept duplicates.
+        extra_meta = None
+        if field_name == "name" and keep_both:
+            extra_meta = {
+                "note": "duplicate_kept_intentionally",
+                "normalized_name": new_normalized_name,
+            }
         write_field_change(
             tenant_id=tenant_id,
             entity_type="company",
@@ -1407,11 +1475,62 @@ def update_company(company_id):
             old_value=old_value,
             new_value=new_value,
             changed_by=changed_by,
+            metadata=extra_meta,
         )
 
     db.session.commit()
 
     return jsonify({"ok": True})
+
+
+# ── Company Merge (BL-1203 / Phase 12) ────────────────────
+@companies_bp.route("/api/companies/<company_id>/merge", methods=["POST"])
+@require_role("editor")
+def merge_company(company_id):
+    """Merge ``company_id`` INTO the surviving company referenced by
+    ``?into=<surviving_id>``. Hard-deletes the loser. Both must be in the
+    caller's tenant.
+
+    Wraps the whole operation in a single transaction with SELECT … FOR
+    UPDATE on both rows; rolls back on any failure.
+    """
+    # Late import so the route module's import graph doesn't cycle:
+    # dedup imports from contact_helpers which is fine, but the dedup
+    # module also re-imports company-related things at the bottom.
+    from ..services.dedup import MergeError, merge_companies
+
+    tenant_id = resolve_tenant()
+    if not tenant_id:
+        return jsonify({"error": "Tenant not found"}), 404
+    if not is_valid_uuid(company_id):
+        return jsonify({"error": "invalid_company_id"}), 400
+    surviving_id = request.args.get("into")
+    if not surviving_id or not is_valid_uuid(surviving_id):
+        return jsonify(
+            {"error": "missing_or_invalid_into_query_param", "code": "missing_into"}
+        ), 400
+    if surviving_id == company_id:
+        return jsonify(
+            {"error": "Cannot merge a company into itself", "code": "self_merge"}
+        ), 400
+
+    changed_by = getattr(getattr(g, "current_user", None), "id", None)
+    try:
+        payload = merge_companies(
+            tenant_id=tenant_id,
+            deleted_id=company_id,
+            surviving_id=surviving_id,
+            changed_by=changed_by,
+        )
+    except MergeError as e:
+        db.session.rollback()
+        return jsonify({"error": str(e), "code": "merge_failed"}), 404
+    except Exception:
+        db.session.rollback()
+        raise
+
+    db.session.commit()
+    return jsonify(payload), 200
 
 
 # ── Triage Review (BL-176) ────────────────────────────────

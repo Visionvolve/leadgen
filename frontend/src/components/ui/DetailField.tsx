@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode } from 'react'
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { Badge } from './Badge'
 import { SourceTooltip, type SourceInfo } from './SourceTooltip'
 
@@ -394,6 +394,146 @@ export function MiniTable<T extends object>({ columns, data, onRowClick, onRowAc
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+
+/* ---- EditableHeading (BL-1203 / Phase 12) ---- */
+
+export interface EditableHeadingProps {
+  /** Aria-label for the pencil button + name attribute. */
+  name: string
+  value: string
+  /** Async save callback. May throw — error.message displayed inline. */
+  onSave: (newValue: string) => Promise<void>
+  onCancel?: () => void
+  placeholder?: string
+  /** Tailwind class string applied to the non-editing heading element. */
+  className?: string
+}
+
+/**
+ * Click-to-edit heading. Renders as an `<h2>` with a hover-revealed pencil
+ * button; clicking the pencil (or the heading itself) switches to an input
+ * with Save / Cancel buttons.
+ *
+ * Enter = save, Esc = cancel. `onSave` is awaited; on throw the input stays
+ * open and the error message is shown in red beneath the input.
+ *
+ * Used by CompanyDetailPage to inline-edit the company name with the
+ * shared 409-duplicate gate.
+ */
+export function EditableHeading({
+  name,
+  value,
+  onSave,
+  onCancel,
+  placeholder,
+  className = '',
+}: EditableHeadingProps) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  // Re-sync draft to value when value changes externally AND not editing.
+  useEffect(() => {
+    if (!editing) setDraft(value)
+  }, [value, editing])
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  const cancel = () => {
+    setDraft(value)
+    setEditing(false)
+    setError(null)
+    onCancel?.()
+  }
+
+  const save = async () => {
+    if (draft === value) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave(draft)
+      setEditing(false)
+    } catch (e) {
+      setError((e as Error).message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void save()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancel()
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className={`group flex items-center gap-2 min-w-0 ${className}`}>
+        <h2 className="text-lg font-semibold font-title text-text truncate">
+          {value || placeholder || '—'}
+        </h2>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text transition-opacity"
+          aria-label={`Edit ${name}`}
+          title="Edit"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M11 1l4 4-9 9H2v-4l9-9z" />
+          </svg>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-1 min-w-0">
+      <div className="flex items-center gap-2">
+        <input
+          ref={inputRef}
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder={placeholder}
+          disabled={saving}
+          className="flex-1 min-w-0 bg-surface-alt border border-border-solid rounded-md px-2 py-1 text-lg font-semibold font-title text-text focus:outline-none focus:border-accent disabled:opacity-50"
+          aria-label={name}
+        />
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving || draft === value}
+          className="px-2 py-1 text-xs rounded bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          type="button"
+          onClick={cancel}
+          disabled={saving}
+          className="px-2 py-1 text-xs rounded border border-border-solid text-text-muted hover:bg-surface-alt disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+      {error && <p className="text-xs text-status-error">{error}</p>}
     </div>
   )
 }

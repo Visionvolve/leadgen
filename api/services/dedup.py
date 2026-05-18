@@ -12,9 +12,11 @@ Strategies:
 Companies always link to existing when matched (never duplicate).
 """
 
+from __future__ import annotations
+
 from sqlalchemy import func
 
-from ..models import Company, Contact, db
+from ..models import Company, Contact, Owner, db
 from .phone_normalize import normalize_phone
 
 
@@ -504,3 +506,294 @@ def _create_contact(
     )
     db.session.add(ct)
     return ct
+
+
+# ---------------------------------------------------------------------------
+# BL-1203 / Phase 12: name-collision lookup for the duplicate-name gate.
+# ---------------------------------------------------------------------------
+
+
+def find_name_collisions(
+    tenant_id,
+    normalized_name: str,
+    exclude_id: str | None = None,
+) -> list[dict]:
+    """Return same-tenant companies whose stored normalized_name matches.
+
+    Used by PATCH /api/companies/<id> to surface duplicates BEFORE writing
+    a rename. Tenant-scoped; never crosses tenants. Empty normalized_name
+    short-circuits to [] without touching the DB.
+
+    Each returned dict has keys:
+        id, name, domain, status, owner ({id,name}|None), contact_count,
+        last_activity_at (iso8601|None).
+    """
+    if not normalized_name:
+        return []
+    q = (
+        db.session.query(
+            Company.id,
+            Company.name,
+            Company.domain,
+            Company.status,
+            Company.owner_id,
+            Owner.name.label("owner_name"),
+            func.count(Contact.id).label("contact_count"),
+            func.max(Contact.updated_at).label("last_activity_at"),
+        )
+        .outerjoin(Owner, Owner.id == Company.owner_id)
+        .outerjoin(Contact, Contact.company_id == Company.id)
+        .filter(Company.tenant_id == str(tenant_id))
+        .filter(Company.normalized_name == normalized_name)
+        .group_by(
+            Company.id,
+            Company.name,
+            Company.domain,
+            Company.status,
+            Company.owner_id,
+            Owner.name,
+        )
+    )
+    if exclude_id:
+        q = q.filter(Company.id != str(exclude_id))
+    out: list[dict] = []
+    for row in q.all():
+        last_activity = row[7]
+        out.append(
+            {
+                "id": row[0],
+                "name": row[1],
+                "domain": row[2],
+                "status": row[3],
+                "owner": {"id": row[4], "name": row[5]} if row[4] else None,
+                "contact_count": int(row[6] or 0),
+                "last_activity_at": (
+                    last_activity.isoformat() if last_activity else None
+                ),
+            }
+        )
+    # Sort: highest contact_count first (most "real" companies float to top)
+    out.sort(key=lambda m: m["contact_count"], reverse=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# BL-1203 / Phase 12: company merge engine.
+# ---------------------------------------------------------------------------
+
+from sqlalchemy import text as _sa_text  # noqa: E402
+
+from .contact_helpers import write_field_change  # noqa: E402
+
+
+class MergeError(ValueError):
+    """Domain error for the company-merge transaction.
+
+    Routes catch this to translate into HTTP 404 (cross-tenant / missing row)
+    without leaking which side of the merge was wrong.
+    """
+
+
+# Tables whose ``company_id`` references companies(id). Each entry is
+# ``(table, is_pk)`` where is_pk means company_id is part of (or is) the
+# primary key — naive UPDATE conflicts on duplicate row, so we delete the
+# deleted-side row when the surviving side already has one.
+_COMPANY_FK_TABLES: list[tuple[str, bool]] = [
+    # PK tables (one row per company)
+    ("company_enrichment_l1", True),
+    ("company_enrichment_l2", True),
+    ("company_enrichment_market", True),
+    ("company_enrichment_opportunity", True),
+    ("company_enrichment_profile", True),
+    ("company_enrichment_signals", True),
+    ("company_legal_profile", True),
+    ("company_news", True),
+    ("company_registry_data", True),
+    # Non-PK tables (FK only, many rows per company allowed)
+    ("contacts", False),
+    ("company_insolvency_data", False),
+    ("company_tag_assignments", False),
+    ("company_tags", False),
+]
+
+# Strategy documents use ``enrichment_id`` not ``company_id``. Handled
+# separately in merge_companies.
+_STRATEGY_DOCS_TABLE = "strategy_documents"
+
+# Surviving fields that win when non-NULL; otherwise fall back to
+# deleted's value. (Excludes id/tenant_id/created_at/updated_at/name/
+# normalized_name.)
+_FILLABLE_FIELDS: list[str] = [
+    "domain",
+    "website_url",
+    "linkedin_url",
+    "logo_url",
+    "notes",
+    "summary",
+    "triage_notes",
+    "industry",
+    "industry_category",
+    "geo_region",
+    "hq_city",
+    "hq_country",
+    "tier",
+    "status",
+    "owner_id",
+    "tag_id",
+    "business_model",
+    "company_size",
+    "ownership_type",
+    "revenue_range",
+    "buying_stage",
+    "engagement_status",
+    "crm_status",
+    "ai_adoption",
+    "news_confidence",
+    "business_type",
+    "cohort",
+    "ico",
+    "official_name",
+    "tax_id",
+    "legal_form",
+    "registration_status",
+    "date_established",
+    "credibility_score",
+    "verified_revenue_eur_m",
+    "verified_employees",
+    "organization_type",
+    "segment",
+]
+
+
+def merge_companies(
+    tenant_id,
+    deleted_id: str,
+    surviving_id: str,
+    changed_by: str | None,
+) -> dict:
+    """Atomically merge ``deleted_id`` INTO ``surviving_id`` (same tenant).
+
+    Raises:
+        MergeError: cross-tenant, missing row, or self-merge.
+
+    Returns the surviving company's payload (dict, same shape as a SELECT
+    on companies).
+    """
+    if deleted_id == surviving_id:
+        raise MergeError("Cannot merge a company into itself")
+
+    # Lock both rows. ORDER BY id keeps deadlocks deterministic.
+    rows = (
+        db.session.execute(
+            _sa_text(
+                "SELECT id, tenant_id, name, normalized_name, "
+                + ", ".join(_FILLABLE_FIELDS)
+                + " FROM companies WHERE id IN (:a, :b) AND tenant_id = :t "
+                "ORDER BY id"
+            ),
+            {"a": deleted_id, "b": surviving_id, "t": str(tenant_id)},
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) != 2:
+        raise MergeError("Both companies must exist in caller's tenant")
+
+    by_id = {r["id"]: dict(r) for r in rows}
+    deleted = by_id[deleted_id]
+    surviving = by_id[surviving_id]
+
+    # Snapshot for the audit row BEFORE mutation
+    snapshot: dict = {}
+    for k, v in deleted.items():
+        if v is None:
+            snapshot[k] = None
+        elif hasattr(v, "isoformat"):
+            snapshot[k] = v.isoformat()
+        else:
+            snapshot[k] = str(v)
+
+    # 1. Fill NULL fields on surviving from deleted
+    fills: dict = {}
+    for f in _FILLABLE_FIELDS:
+        if surviving.get(f) in (None, "") and deleted.get(f) not in (None, ""):
+            fills[f] = deleted[f]
+    if fills:
+        set_parts = ", ".join(f"{k} = :{k}" for k in fills)
+        params = dict(fills)
+        params["id"] = surviving_id
+        db.session.execute(
+            _sa_text(f"UPDATE companies SET {set_parts} WHERE id = :id"),
+            params,
+        )
+
+    # 2. Re-point FK tables
+    for table, is_pk in _COMPANY_FK_TABLES:
+        if is_pk:
+            db.session.execute(
+                _sa_text(
+                    f"DELETE FROM {table} WHERE company_id = :d "
+                    f"AND EXISTS (SELECT 1 FROM {table} WHERE company_id = :s)"
+                ),
+                {"d": deleted_id, "s": surviving_id},
+            )
+            db.session.execute(
+                _sa_text(f"UPDATE {table} SET company_id = :s WHERE company_id = :d"),
+                {"d": deleted_id, "s": surviving_id},
+            )
+        else:
+            db.session.execute(
+                _sa_text(f"UPDATE {table} SET company_id = :s WHERE company_id = :d"),
+                {"d": deleted_id, "s": surviving_id},
+            )
+
+    # 2b. strategy_documents uses enrichment_id, not company_id
+    db.session.execute(
+        _sa_text(
+            f"UPDATE {_STRATEGY_DOCS_TABLE} SET enrichment_id = :s "
+            "WHERE enrichment_id = :d"
+        ),
+        {"d": deleted_id, "s": surviving_id},
+    )
+
+    # 3. Re-point semantic refs in audit table (entity_id not a FK in schema)
+    db.session.execute(
+        _sa_text(
+            "UPDATE contact_field_changes SET entity_id = :s "
+            "WHERE entity_type = 'company' AND entity_id = :d"
+        ),
+        {"d": deleted_id, "s": surviving_id},
+    )
+
+    # 4. Audit row recording the merge + snapshot of deleted
+    write_field_change(
+        tenant_id=str(tenant_id),
+        entity_type="company",
+        entity_id=str(surviving_id),
+        field_name="merged_from",
+        old_value=str(deleted_id),
+        new_value=str(surviving_id),
+        changed_by=changed_by,
+        source="merge",
+        metadata={"deleted_snapshot": snapshot},
+    )
+
+    # 5. Hard-delete the duplicate
+    db.session.execute(
+        _sa_text("DELETE FROM companies WHERE id = :d AND tenant_id = :t"),
+        {"d": deleted_id, "t": str(tenant_id)},
+    )
+
+    # 6. Return surviving payload
+    new_surviving = (
+        db.session.execute(
+            _sa_text(
+                "SELECT id, tenant_id, name, normalized_name, domain, status, "
+                "owner_id, notes FROM companies WHERE id = :s"
+            ),
+            {"s": surviving_id},
+        )
+        .mappings()
+        .fetchone()
+    )
+    return dict(new_surviving) if new_surviving else {}

@@ -8,6 +8,7 @@ HTTP framework objects.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from typing import Any
@@ -56,6 +57,7 @@ def write_field_change(
     new_value: Any,
     changed_by: str | None,
     source: str = "user_patch",
+    metadata: dict | None = None,
 ) -> None:
     """Append an audit row to `contact_field_changes`.
 
@@ -63,6 +65,11 @@ def write_field_change(
     insert is intentionally written via raw SQL so the function is identical
     on PostgreSQL and the SQLite test backend (which patches `gen_random_uuid`
     out via the `_uuid_default` shim in `tests/conftest.py`).
+
+    The optional ``metadata`` kwarg (BL-1203 / migration 074) is JSON-encoded
+    and persisted in the ``metadata`` JSONB column. On SQLite (test backend)
+    the column is mapped to TEXT, so we pass a JSON string in both dialects;
+    Postgres implicitly casts a string literal to JSONB on insert.
     """
 
     def _coerce(v: Any) -> str | None:
@@ -77,10 +84,10 @@ def write_field_change(
             """
             INSERT INTO contact_field_changes
                 (id, tenant_id, entity_type, entity_id, field_name,
-                 old_value, new_value, changed_by, source)
+                 old_value, new_value, changed_by, source, metadata)
             VALUES
                 (:id, :tenant_id, :entity_type, :entity_id, :field_name,
-                 :old_value, :new_value, :changed_by, :source)
+                 :old_value, :new_value, :changed_by, :source, :metadata)
             """
         ),
         {
@@ -93,5 +100,6 @@ def write_field_change(
             "new_value": _coerce(new_value),
             "changed_by": changed_by,
             "source": source,
+            "metadata": json.dumps(metadata or {}),
         },
     )
