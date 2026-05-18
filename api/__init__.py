@@ -1,3 +1,4 @@
+import re
 import traceback
 
 from flask import Flask, jsonify
@@ -7,12 +8,23 @@ from .config import Config
 from .models import db
 from .routes import register_blueprints
 
+# Chrome extension origin regex. Always allowed regardless of CORS_ORIGINS env
+# config so the LinkedIn Sales Navigator extension (BL-1208) cannot be locked
+# out by a stricter prod allowlist. Chrome assigns extension IDs as 32-char
+# lowercase strings (a-p in stable production; a-z0-9 tolerated here for
+# unpacked/dev builds). Anchored at both ends to prevent prefix abuse.
+_CHROME_EXTENSION_ORIGIN_RE = re.compile(r"^chrome-extension://[a-z0-9]{32}$")
+
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    CORS(app, origins=app.config["CORS_ORIGINS"])
+    # Combine env-configured origins with the always-on extension regex so
+    # production environments cannot accidentally block the extension by
+    # narrowing CORS_ORIGINS (see BL-1208).
+    cors_origins = list(app.config["CORS_ORIGINS"]) + [_CHROME_EXTENSION_ORIGIN_RE]
+    CORS(app, origins=cors_origins)
     db.init_app(app)
 
     # BL-1203 / Phase 12: keep companies.normalized_name in sync with
