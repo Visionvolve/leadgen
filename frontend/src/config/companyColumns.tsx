@@ -55,29 +55,57 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
     label: 'Name',
     sortKey: 'name',
     minWidth: '140px',
-    // BL-1203: primary editable name column. Non-editing state still renders
-    // as a click-to-navigate link to the detail page.
+    // BL-1205 (hot-fix of BL-1203): clicking the name TEXT enters edit mode
+    // (consistent with every other editable cell — domain/tier/status/etc).
+    // Navigation to the detail page now happens via the hover-revealed
+    // arrow icon on the right side of the cell. Cmd/Ctrl/middle-click on
+    // the arrow opens the detail page in a new tab (it is a real `<a>`).
     defaultVisible: true,
     editable: true,
     editType: 'text',
     editField: 'name',
     render: (c) => {
       const ns = window.location.pathname.split('/')[1]
+      const href = `/${ns}/companies/${c.id}`
       return (
-        <a
-          href={`/${ns}/companies/${c.id}`}
-          onClick={(e) => {
-            e.preventDefault()
-            window.dispatchEvent(
-              new CustomEvent('leadgen:navigate', {
-                detail: `/${ns}/companies/${c.id}`,
-              }),
-            )
-          }}
-          className="text-accent-cyan hover:underline cursor-pointer truncate block"
-        >
-          {c.name || '-'}
-        </a>
+        <span className="inline-flex items-center gap-1 min-w-0 w-full">
+          <span className="truncate flex-1">{c.name || '-'}</span>
+          <a
+            href={href}
+            onClick={(e) => {
+              // Stop the parent cell-div onClick (which would enter edit mode).
+              e.stopPropagation()
+              // Allow native new-tab semantics: Cmd/Ctrl/middle-click → browser
+              // handles target/href naturally. Plain left-click stays inside the
+              // SPA via the custom navigation event.
+              if (e.metaKey || e.ctrlKey || e.button === 1) return
+              e.preventDefault()
+              window.dispatchEvent(
+                new CustomEvent('leadgen:navigate', {
+                  detail: href,
+                }),
+              )
+            }}
+            aria-label={`Open ${c.name || 'company'} detail`}
+            title="Open detail page"
+            className="flex-shrink-0 opacity-0 group-hover/edit:opacity-60 hover:!opacity-100 transition-opacity text-text-muted hover:text-accent-cyan"
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4.5 2.5h-2v7h7v-2" />
+              <path d="M7 2.5h2.5V5" />
+              <path d="M5.5 6.5L9.5 2.5" />
+            </svg>
+          </a>
+        </span>
       )
     },
   },
