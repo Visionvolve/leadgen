@@ -1,11 +1,11 @@
 # Roadmap — Milestone v25: LCC Client Requests
 
-**Milestone goal:** Ship the 17 asks captured from LCC (Losers Cirque Company / United Arts) on 2026-05-11 — 1 already done, 11 phases covering 16 remaining items + 1 user-reported bug. Cross-repo: 3 phases execute in `ua-microsite`, 8 in `leadgen-pipeline`, 1 spans both.
+**Milestone goal:** Ship the 17 asks captured from LCC (Losers Cirque Company / United Arts) on 2026-05-11 — 1 already done, 11 phases covering 16 remaining items + 1 user-reported bug. Cross-repo: 3 phases execute in `ua-microsite`, 8 in `leadgen-pipeline`, 1 spans both. Phase 12 was added 2026-05-14 (editable company name + duplicate detection, BL-1117 — leadgen-pipeline only).
 
-**Granularity:** standard (11 phases).
-**Coverage:** 17/17 v25 backlog items mapped (BL-1100 is already Done — audit-trail only).
+**Granularity:** standard (12 phases).
+**Coverage:** 18/18 v25 backlog items mapped (BL-1100 is already Done — audit-trail only; BL-1117 added 2026-05-14 for Phase 12).
 **Backlog sprint:** `Sprint 25 — LCC client requests` (backlog.visionvolve.com).
-**Cross-repo:** Phases 1, 7, 8 execute in `/Users/michal/git/ua-microsite`. All other phases in `/Users/michal/git/leadgen-pipeline`.
+**Cross-repo:** Phases 1, 7, 8 execute in `/Users/michal/git/ua-microsite`. All other phases (including Phase 12) in `/Users/michal/git/leadgen-pipeline`.
 
 ## Parallelization
 
@@ -17,6 +17,7 @@ Wave 2 (parallel):  Phase 3  |  Phase 5  |  Phase 8
 Wave 3 (sequential dependents on Wave 2):  Phase 6  →  Phase 7
 Wave 4 (sequential dependents on Wave 3):  Phase 9
 Wave 5 (sequential dependents on Wave 3 + 4):  Phase 10  →  Phase 11
+Phase 12 is independent — can run in any wave alongside Phases 5, 6, 9, 10, 11 (no dependency on the inline-edit foundation since useInlineEdit already exists for contact-email; verified 2026-05-14).
 ```
 
 Rationale:
@@ -24,6 +25,7 @@ Rationale:
 - Phase 5 (inline edit) is a Must-Have foundation for Phases 6, 7, 9, 10. Phase 6 must follow 5; Phase 7 must follow 5; Phase 10 must follow 5+6+9.
 - Phase 8 (partner admin in ua-microsite) is independent of the leadgen-side work and can run alongside Phases 5+6.
 - Phase 11 needs Phase 6 (categorization) to do per-category breakdowns; ideally Phase 10's draft campaigns too, but the reach widget can ship without them.
+- Phase 12 (editable company name) is added post-bootstrap; the useInlineEdit hook already exists for contact email so Phase 12 has no real dependency on Phase 5.
 
 ## Phases
 
@@ -38,6 +40,7 @@ Rationale:
 - [ ] **Phase 9: Multilingual Mailing Foundation** — CZ default, EN auto when `contact.language='en'`
 - [ ] **Phase 10: Campaign Database Foundations** — Three audience-ready draft campaigns (CZ agencies / autumn-winter orgs / DACH agencies)
 - [ ] **Phase 11: Campaign Reach Reporting** — Per-campaign + 30/60/90-day unique-reach widget
+- [ ] **Phase 12: Editable Company Name + Duplicate Detection** — Inline edit company name with server-side normalize + duplicate-resolution modal (merge / use existing / keep both / cancel)
 
 ## Phase Details
 
@@ -259,6 +262,37 @@ Plans:
 
 ---
 
+### Phase 12: Editable Company Name + Duplicate Detection
+**Goal:** Let operators rename a company from two entry points — inline in the Companies table and from the Company detail page — with server-side duplicate detection after normalization (trim + lowercase + NFKD diacritic strip + Czech/DE/EN legal-suffix strip). On collision in the same tenant, prompt the user with a resolution modal offering per-match "Use this one" / "Merge into this one" and footer "Keep both as separate" / "Cancel". Merge re-points all FKs into the surviving record and hard-deletes the loser inside one Postgres transaction.
+**Executes in:** `/Users/michal/git/leadgen-pipeline`
+**Depends on:** None technically (the useInlineEdit hook already exists for contact email per the CONTEXT discovery — Phase 12 is independent of Phase 5).
+**Parallel with:** Phases 5, 6, 9, 10, 11 (any wave)
+**Backlog items:** BL-1117 (created during Plan 12-01)
+**Success Criteria** (what must be TRUE):
+  1. `companies.normalized_name TEXT` column exists with a non-unique index on `(tenant_id, normalized_name)`; backfill populates every non-NULL `name` row.
+  2. `api/services/name_normalize.py` exports `normalize_company_name()`, a pure function unit-tested against CZ legal suffixes (s.r.o., a.s., spol. s r.o., v.o.s., k.s.), DE (GmbH, AG, mbH, KG), EN (Ltd, LLC, Inc, Corp, Co, Company), diacritics, punctuation, and mid-string-suffix non-stripping.
+  3. PATCH `/api/companies/<id>` returns 409 with `{code:"duplicate_company_name", matches:[...]}` when the new name collides with an existing same-tenant company. `?confirm_duplicate=keep_both` overrides and writes an annotated audit row.
+  4. POST `/api/companies/<id>/merge?into=<surviving_id>` re-points 14 FK tables in one transaction with `SELECT ... FOR UPDATE` locking; writes one audit row with a JSON snapshot of the deleted row; hard-deletes the duplicate.
+  5. Companies table renders an inline-editable name column by default (`name_edit` flipped on); the read-only `name` column is hidden by default.
+  6. CompanyDetail.tsx renders the company name header as an `EditableText` component (Esc cancels, Enter saves).
+  7. `DuplicateCompanyModal` opens on 409 from either entry point and offers all 4 actions; default focus is "Use this one" of the first match; ESC cancels.
+  8. Tenant isolation enforced: a collision in tenant B never triggers a 409 for tenant A.
+  9. Manual sprint test script `docs/testing/sprint-25-manual-tests.md` Phase 12 section (T12.1..T12.10) all PASS on staging root before BL-1117 → Done.
+**Plans:** 9 plans (12-01..12-09), 7 waves.
+
+Plans:
+- [ ] 12-01: Setup + Backlog + Spec doc — claim BL-1117, create worktree off staging, write `docs/specs/editable-company-name.md`
+- [ ] 12-02: Backend foundation — migrations 073 + 074, `name_normalize.py`, `find_name_collisions`, backfill script
+- [ ] 12-03: PATCH duplicate gate — extend update_company() with 409 + keep-both flow
+- [ ] 12-04: Merge endpoint — POST /api/companies/<id>/merge with transactional FK re-pointing across 14 tables
+- [ ] 12-05: Inline-edit on Companies table — flip name_edit column on; useInlineEdit recognizes new 409; useCompanyDuplicateGate hook
+- [ ] 12-06: Detail-page edit — EditableText component on CompanyDetail header
+- [ ] 12-07: DuplicateCompanyModal — full UI with merge / use existing / keep both / cancel
+- [ ] 12-08: Tests + manual sprint script — full-flow integration + Playwright + T12.1..T12.10
+- [ ] 12-09: PR + staging validation — PR to staging, migration dispatch, human sign-off, BL-1117 → Done
+
+---
+
 ## Progress
 
 **Execution Order:**
@@ -277,10 +311,11 @@ Phases execute in numeric order with parallelism per the Wave plan above. Lead a
 | 9. Multilingual Mailing Foundation | 0/1 | Not started | - |
 | 10. Campaign Database Foundations | 0/1 | Not started | - |
 | 11. Campaign Reach Reporting | 0/1 | Not started | - |
+| 12. Editable Company Name + Duplicate Detection | 0/9 | Planned (2026-05-14) | - |
 
 ## Backlog ↔ Phase Coverage
 
-17 backlog items → 11 phases. BL-1100 is an audit-trail entry (already Done) and is not mapped to a phase.
+18 backlog items → 12 phases. BL-1100 is an audit-trail entry (already Done) and is not mapped to a phase. BL-1117 was added 2026-05-14 for Phase 12.
 
 | Phase | Backlog items |
 |-------|---------------|
@@ -295,8 +330,9 @@ Phases execute in numeric order with parallelism per the Wave plan above. Lead a
 | 9 | BL-1110 |
 | 10 | BL-1111, BL-1112, BL-1113 |
 | 11 | BL-1114 |
+| 12 | BL-1117 (created during Plan 12-01) |
 
 No orphans. No duplicates. Mapping is also stored in the backlog service under directive `gsd-phase-mapping` for runtime discovery.
 
 ---
-*Created: 2026-05-11 during GSD bootstrap for Milestone v25 (LCC Client Requests).*
+*Created: 2026-05-11 during GSD bootstrap for Milestone v25 (LCC Client Requests). Phase 12 added 2026-05-14 — finalized via `/gsd-plan-phase 12` with 9 plans across 7 waves.*

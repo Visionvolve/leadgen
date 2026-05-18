@@ -26,10 +26,13 @@ const STAGE_DOT: Record<string, { dot: string; label: string }> = {
 export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
   {
     key: 'name',
-    label: 'Name',
+    label: 'Name (read-only)',
     sortKey: 'name',
     minWidth: '140px',
-    defaultVisible: true,
+    // BL-1203: hidden by default. The inline-editable `name_edit` column
+    // (next entry) replaces this as the primary surface; users can still
+    // re-enable this read-only column via the column picker.
+    defaultVisible: false,
     render: (c) => {
       const ns = window.location.pathname.split('/')[1]
       return (
@@ -49,14 +52,34 @@ export const COMPANY_COLUMNS = defineColumns<CompanyListItem>([
   },
   {
     key: 'name_edit',
-    label: 'Name (editable)',
+    label: 'Name',
     sortKey: 'name',
     minWidth: '140px',
-    defaultVisible: false,
+    // BL-1203: primary editable name column. Non-editing state still renders
+    // as a click-to-navigate link to the detail page.
+    defaultVisible: true,
     editable: true,
     editType: 'text',
     editField: 'name',
-    render: (c) => c.name || '-',
+    render: (c) => {
+      const ns = window.location.pathname.split('/')[1]
+      return (
+        <a
+          href={`/${ns}/companies/${c.id}`}
+          onClick={(e) => {
+            e.preventDefault()
+            window.dispatchEvent(
+              new CustomEvent('leadgen:navigate', {
+                detail: `/${ns}/companies/${c.id}`,
+              }),
+            )
+          }}
+          className="text-accent-cyan hover:underline cursor-pointer truncate block"
+        >
+          {c.name || '-'}
+        </a>
+      )
+    },
   },
   {
     key: 'domain',

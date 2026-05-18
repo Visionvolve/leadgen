@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: planning
+stopped_at: Phase 12 context gathered (auto-decided)
+last_updated: "2026-05-14T19:25:49.068Z"
+last_activity: 2026-05-11 — GSD `.planning/` bootstrap completed; 17 backlog items created in Sprint 25; phase mapping directive set in backlog service.
+progress:
+  total_phases: 14
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+---
+
 # Project State
 
 ## Project Reference
@@ -19,6 +35,7 @@ Progress: [░░░░░░░░░░] 0% (0 / 11 phases complete)
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: —
 - Total execution time: 0.0 hours
@@ -40,6 +57,7 @@ Progress: [░░░░░░░░░░] 0% (0 / 11 phases complete)
 | 11 | — | — | — |
 
 **Recent Trend:**
+
 - Last 5 plans: —
 - Trend: — (no data yet)
 
@@ -67,11 +85,17 @@ Full decision log lives in PROJECT.md "Key Decisions" table. Decisions affecting
 - **Phase 7 is the only true two-repo phase.** It needs two coordinated PRs sharing one backlog item (BL-1104). Track both PR URLs in the BL-1104 metadata when they open.
 - **No production deploys this milestone.** Every v25 phase merges to `staging`. Production cutover is a separate post-milestone activity gated on user sign-off.
 
+### Roadmap Evolution
+
+- 2026-05-14: Phase 12 added — Editable company names (inline + detail page) with normalization (trim/lowercase/diacritics) and duplicate detection. On duplicate match, prompt user to merge or pick one. Validate on staging and ship to prod.
+- 2026-05-14: Phase 13 added — LinkedIn Sales Nav Contact Loader via Chrome extension push; batch tagging on import; capture contact location to `contacts.location`; production deploy.
+- 2026-05-14: Phase 14 added — LinkedIn Multi-Step Outreach via our Chrome extension; campaign-driven invite → message sequence; first-degree connections skip invite and receive a different message variant. Depends on Phase 13 for contact ingestion + tagging.
+
 ## Session Continuity
 
-Last session: 2026-05-11 (overnight bootstrap)
-Stopped at: GSD `.planning/` files created, 17 backlog items intaken, sprint + directives configured, awaiting `/gsd-plan-phase 1` for Phase 1 (Microsite Quick Fixes).
-Resume file: None — start from ROADMAP.md Phase 1 details.
+Last session: 2026-05-14T19:25:49.064Z
+Stopped at: Phase 12 context gathered (auto-decided)
+Resume file: .planning/phases/12-allow-edit-company-name-both-inline-and-from-company-detail-/12-CONTEXT.md
 
 ### Next Action
 
@@ -86,6 +110,7 @@ Open the wave-1 phases in parallel — these have no inter-dependencies:
 Or run the full milestone autonomously: `/gsd-autonomous` (reads ROADMAP.md, executes phases in dependency order).
 
 Before any phase executor starts coding, they MUST:
+
 1. Read this STATE.md
 2. Read PROJECT.md (Key Decisions + Constraints)
 3. Read the `gsd-phase-mapping` directive in the backlog service
@@ -99,16 +124,19 @@ Cross-repo phases (1, 7, 8) must also `cd` to `/Users/michal/git/ua-microsite` b
 ## Milestone v25 — LCC Client Requests — COMPLETED 2026-05-12
 
 All 17 backlog items shipped to production:
+
 - Leadgen-pipeline: BL-1102, 1103, 1104, 1105, 1106, 1107, 1108, 1110, 1111, 1112, 1113, 1114, 1116 (13 items via PR #182, merge sha c584142b)
 - ua-microsite: BL-1101, 1109 (PR #2 + hotfix #5, merge e6d4397), BL-1104 microsite half (PR #3, 88d8e61), BL-1115 (PR #4, 5aa9a50)
 - BL-1100 already done at intake (CSV item #1 — universal catalog promo link)
 
 ### Incidents handled overnight
+
 - Schema drift (BL-1117): both staging and prod DBs missing 13 migrations 060-072. Manually applied via prod-VPS jump host (additive zero-downtime).
 - Prod .env regression (BL-1118): LEADGEN_DATABASE_URL dropped from prod .env on May 7. Caused initial v25 deploy to crash; recovered via .env restore + re-deploy.
 - Endpoint anti-pattern (PRs #175 + #179): naive db.session.get on URL params returned 500 on bad input; hardened 14 endpoints + added api/utils/safe_lookup helper + 41 new tests.
 
 ### Sprint follow-ups (Spec'd, not assigned to a sprint)
+
 - BL-1117 — Fix migrate-staging.yml + migrate-prod.yml DB target
 - BL-1118 — Prod .env regression investigation + preflight check
 - BL-1119 — Update 13 stale tests for hardening behavior
@@ -117,6 +145,7 @@ All 17 backlog items shipped to production:
 - BL-1122 — Fix booking.losers.cz reverse proxy
 
 ### Stats
+
 - 12 phase PRs to leadgen-pipeline (PRs #168, #169, #170, #171, #172, #173, #174, #175, #176, #177, #178, #179) → squash-merged to staging, then PR #182 staging→main to prod
 - 4 PRs to ua-microsite (#2, #3, #4, #5) merged to main
 - 5 PG migrations created via phase work (065-072), 13 migrations backfilled (060-072) directly to RDS

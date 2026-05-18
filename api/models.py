@@ -153,6 +153,9 @@ class Company(db.Model):
         UUID(as_uuid=False), db.ForeignKey("tenants.id"), nullable=False
     )
     name = db.Column(db.Text, nullable=False)
+    # BL-1203: app-computed via api.services.name_normalize. SQLAlchemy
+    # before_insert/before_update listeners keep this synced from `name`.
+    normalized_name = db.Column(db.Text, nullable=True)
     domain = db.Column(db.Text)
     tag_id = db.Column(UUID(as_uuid=False), db.ForeignKey("tags.id"))
     owner_id = db.Column(UUID(as_uuid=False), db.ForeignKey("owners.id"))
@@ -762,6 +765,12 @@ class ContactFieldChange(db.Model):
     changed_by = db.Column(UUID(as_uuid=False))  # users.id; nullable for system writes
     changed_at = db.Column(db.DateTime(timezone=True), server_default=db.text("now()"))
     source = db.Column(db.Text, nullable=False, default="user_patch")
+    # BL-1203 (migration 074): per-row JSON snapshot used by the merge
+    # endpoint (deleted_snapshot) and the keep-both PATCH path
+    # (duplicate_kept_intentionally note).
+    metadata_json = db.Column(
+        "metadata", JSONB, nullable=False, server_default=db.text("'{}'::jsonb")
+    )
 
 
 class ImportJob(db.Model):

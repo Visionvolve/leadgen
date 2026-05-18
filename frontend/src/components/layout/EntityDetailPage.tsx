@@ -8,9 +8,15 @@ interface EntityDetailPageProps {
   subtitle?: string
   isLoading?: boolean
   children: ReactNode
+  /**
+   * BL-1203 / Phase 12: when supplied, replaces the static `<h2>{title}</h2>`
+   * heading with this slot — used by CompanyDetailPage to render an
+   * inline-editable name.
+   */
+  titleSlot?: ReactNode
 }
 
-export function EntityDetailPage({ closeTo, title, subtitle, isLoading, children }: EntityDetailPageProps) {
+export function EntityDetailPage({ closeTo, title, subtitle, isLoading, children, titleSlot }: EntityDetailPageProps) {
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -44,7 +50,11 @@ export function EntityDetailPage({ closeTo, title, subtitle, isLoading, children
 
         {/* Title */}
         <div className="flex-1 min-w-0">
-          <h2 className="text-lg font-semibold font-title text-text truncate">{title}</h2>
+          {titleSlot ? (
+            titleSlot
+          ) : (
+            <h2 className="text-lg font-semibold font-title text-text truncate">{title}</h2>
+          )}
           {subtitle && <p className="text-sm text-text-muted truncate">{subtitle}</p>}
         </div>
 

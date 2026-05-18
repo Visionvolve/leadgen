@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useInlineEdit } from '../../hooks/useInlineEdit'
+import { useCompanyDuplicateGate } from '../../hooks/useCompanyDuplicateGate'
+import { DuplicateCompanyModal } from '../../components/companies/DuplicateCompanyModal'
 import { useParams, useNavigate } from 'react-router'
 import { withRev } from '../../lib/revision'
 import { useCompanies, useDeleteCompany, type CompanyFilters, type CompanyListItem } from '../../api/queries/useCompanies'
@@ -53,6 +55,8 @@ export function CompaniesPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const qc = useQueryClient()
+  // BL-1203 / Phase 12: duplicate-name resolution modal state.
+  const { pendingDuplicate } = useCompanyDuplicateGate()
 
   // Advanced filters (persisted to localStorage)
   const {
@@ -507,6 +511,11 @@ export function CompaniesPage() {
             toast('Company created', 'success')
           }}
         />
+      )}
+
+      {/* BL-1203 / Phase 12: duplicate-name resolution modal. */}
+      {pendingDuplicate && (
+        <DuplicateCompanyModal ctx={pendingDuplicate} currentOwnerId={null} />
       )}
     </div>
   )

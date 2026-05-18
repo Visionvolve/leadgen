@@ -57,7 +57,14 @@ export function useInlineEdit(entityType: 'contact' | 'company') {
       finish('saved')
     } catch (err) {
       // Duplicate-email gate: ask the user to confirm and retry once.
-      const apiErr = err as { status?: number; code?: string; details?: { existing_name?: string } }
+      const apiErr = err as {
+        status?: number
+        code?: string
+        details?: {
+          existing_name?: string
+          matches?: Array<Record<string, unknown>>
+        }
+      }
       if (
         entityType === 'contact'
         && field === 'email_address'
@@ -80,6 +87,46 @@ export function useInlineEdit(entityType: 'contact' | 'company') {
         }
         finish('error')
         throw new Error('Cancelled')
+      }
+      // BL-1203 / Phase 12: company-name duplicate gate. Dispatch a window
+      // event to the shared useCompanyDuplicateGate hook (which owns the
+      // modal). The Promise resolves when the modal callback fires.
+      if (
+        entityType === 'company'
+        && field === 'name'
+        && apiErr?.status === 409
+        && apiErr.code === 'duplicate_company_name'
+      ) {
+        const matches = apiErr.details?.matches ?? []
+        return await new Promise<void>((resolve, reject) => {
+          window.dispatchEvent(
+            new CustomEvent('leadgen:company-duplicate', {
+              detail: {
+                editedCompanyId: id,
+                attemptedName: value,
+                matches,
+                retryWithKeepBoth: async () => {
+                  try {
+                    await submit({ confirm_duplicate: 'keep_both' })
+                    finish('saved')
+                    resolve()
+                  } catch (e) {
+                    finish('error')
+                    reject(e instanceof Error ? e : new Error('Save failed'))
+                  }
+                },
+                revertInput: () => {
+                  finish('error')
+                  reject(new Error('Cancelled'))
+                },
+                afterMerge: () => {
+                  finish('saved')
+                  resolve()
+                },
+              },
+            }),
+          )
+        })
       }
       finish('error')
       throw new Error('Save failed')
