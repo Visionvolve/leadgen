@@ -699,9 +699,11 @@ def merge_companies(
     if len(rows) != 2:
         raise MergeError("Both companies must exist in caller's tenant")
 
-    by_id = {r["id"]: dict(r) for r in rows}
-    deleted = by_id[deleted_id]
-    surviving = by_id[surviving_id]
+    # Cast row id (PostgreSQL UUID or SQLite str) to str for keying so
+    # the lookup matches the str ids passed in via URL params.
+    by_id = {str(r["id"]): dict(r) for r in rows}
+    deleted = by_id[str(deleted_id)]
+    surviving = by_id[str(surviving_id)]
 
     # Snapshot for the audit row BEFORE mutation
     snapshot: dict = {}
