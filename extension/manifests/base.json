@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "permissions": ["activeTab", "scripting", "storage", "alarms", "tabs", "sidePanel"],
   "host_permissions": [
     "https://www.linkedin.com/*"

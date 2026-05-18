@@ -6,6 +6,9 @@
     "48": "icons/staging/48.png",
     "128": "icons/staging/128.png"
   },
+  "action": {
+    "default_title": "VisionVolve Leads (staging)"
+  },
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://leadgen-staging.visionvolve.com/*"
