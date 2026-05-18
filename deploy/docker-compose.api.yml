@@ -15,6 +15,13 @@ services:
       - GOOGLE_REDIRECT_URI=https://leadgen.visionvolve.com/api/oauth/google/callback
       - OAUTH_ENCRYPTION_KEY=${OAUTH_ENCRYPTION_KEY}
       - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      # BL-1212: Hunter.io contact enrichment. Consumed by
+      # api.services.hunter_enrichment.HunterEnrichmentService and the
+      # scripts/hunter_enrichment_run.py batch runner. Provisioned to the
+      # VPS .env via the visionvolve-vps deploy-prod-infra.yml upsert
+      # (PROD_HUNTER_API_KEY -> HUNTER_API_KEY). Falls back to empty so
+      # services that do not call Hunter still start.
+      - HUNTER_API_KEY=${HUNTER_API_KEY:-}
       - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
       - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-leadgen-pipeline}
