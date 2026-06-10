@@ -2,7 +2,7 @@
 # Usage: docker compose -f docker-compose.yml ... -f docker-compose.api.yml up -d
 services:
   leadgen-api:
-    image: ghcr.io/michallicko/leadgen-pipeline:latest
+    image: ghcr.io/visionvolve/leadgen-pipeline:latest
     container_name: leadgen-api
     environment:
       - DATABASE_URL=${LEADGEN_DATABASE_URL}
